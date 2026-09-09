@@ -1,0 +1,115 @@
+{
+  "access": {
+    "bytes": 10720,
+    "candidates": [
+      "commons:File:Microsoft_Access_2013-2019_logo.svg",
+      "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/microsoftaccess/microsoftaccess-original.svg"
+    ],
+    "mark": "Office Access 应用图标",
+    "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/f8/Microsoft_Access_2013-2019_logo.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "trademark_owner": "Microsoft Corporation",
+    "viewBox": "0 0 165.36159 156.44981"
+  },
+  "mariadb": {
+    "bytes": 1831,
+    "candidates": [
+      "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/mariadb/mariadb-original.svg",
+      "https://cdn.simpleicons.org/mariadb"
+    ],
+    "mark": "海狮",
+    "source_url": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/mariadb/mariadb-original.svg",
+    "trademark_owner": "MariaDB plc",
+    "viewBox": "0 0 128 128"
+  },
+  "mongodb": {
+    "bytes": 5611,
+    "candidates": [
+      "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/mongodb/mongodb-original.svg",
+      "https://cdn.simpleicons.org/mongodb"
+    ],
+    "mark": "绿叶",
+    "source_url": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/mongodb/mongodb-original.svg",
+    "trademark_owner": "MongoDB, Inc.",
+    "viewBox": "0 0 128 128"
+  },
+  "mysql": {
+    "bytes": 2765,
+    "candidates": [
+      "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/mysql/mysql-original.svg",
+      "https://cdn.simpleicons.org/mysql"
+    ],
+    "mark": "sakila 海豚",
+    "source_url": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/mysql/mysql-original.svg",
+    "trademark_owner": "Oracle America, Inc.",
+    "viewBox": "0 0 128 128"
+  },
+  "oracle": {
+    "bytes": 1244,
+    "candidates": [
+      "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/oracle/oracle-original.svg",
+      "https://cdn.simpleicons.org/oracle"
+    ],
+    "mark": "红色字标",
+    "source_url": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/oracle/oracle-original.svg",
+    "trademark_owner": "Oracle Corporation",
+    "viewBox": "0 0 128 128"
+  },
+  "postgresql": {
+    "bytes": 9178,
+    "candidates": [
+      "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/postgresql/postgresql-original.svg",
+      "https://cdn.simpleicons.org/postgresql"
+    ],
+    "mark": "Slonik 象头",
+    "source_url": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/postgresql/postgresql-original.svg",
+    "trademark_owner": "PostgreSQL Global Development Group",
+    "viewBox": "0 0 128 128"
+  },
+  "redis": {
+    "bytes": 1728,
+    "candidates": [
+      "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/redis/redis-original.svg",
+      "https://cdn.simpleicons.org/redis"
+    ],
+    "mark": "堆叠砖层",
+    "source_url": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/redis/redis-original.svg",
+    "trademark_owner": "Redis Ltd.",
+    "viewBox": "0 0 128 128"
+  },
+  "snowflake": {
+    "bytes": 2474,
+    "candidates": [
+      "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/snowflake/snowflake-original.svg",
+      "https://cdn.simpleicons.org/snowflake"
+    ],
+    "failed": [
+      "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/snowflake/snowflake-original.svg: HTTPError 403"
+    ],
+    "mark": "六角雪花",
+    "source_url": "https://cdn.simpleicons.org/snowflake",
+    "trademark_owner": "Snowflake Inc.",
+    "viewBox": "0 0 24 24"
+  },
+  "sqlite": {
+    "bytes": 2422,
+    "candidates": [
+      "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/sqlite/sqlite-original.svg",
+      "https://cdn.simpleicons.org/sqlite"
+    ],
+    "mark": "蓝色瓦片 + 羽毛笔",
+    "source_url": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/sqlite/sqlite-original.svg",
+    "trademark_owner": "D. Richard Hipp / SQLite project",
+    "viewBox": "0 0 128 128"
+  },
+  "sqlserver": {
+    "bytes": 4491,
+    "candidates": [
+      "commons:File:Microsoft_SQL_Server_2025_icon.svg",
+      "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/microsoftsqlserver/microsoftsqlserver-original.svg"
+    ],
+    "mark": "2025 蓝色缎带 S",
+    "source_url": "https://upload.wikimedia.org/wikipedia/commons/4/41/Microsoft_SQL_Server_2025_icon.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "trademark_owner": "Microsoft Corporation",
+    "viewBox": "0 0 48 48"
+  }
+}

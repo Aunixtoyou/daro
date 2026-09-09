@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <clipPath id="card"><rect x="2" y="2.6" width="20" height="18.8" rx="2.8"/></clipPath>
+  <g clip-path="url(#card)">
+    <rect x="2" y="2.6" width="20" height="18.8" fill="#eaf6ff"/>
+    <rect x="2" y="2.6" width="20" height="4.9" fill="#1678c8"/>
+    <rect x="2" y="7.5" width="6.67" height="4.63" fill="#c2e0f8"/>
+    <rect x="15.33" y="7.5" width="6.67" height="4.63" fill="#a5d3f2"/>
+    <rect x="8.67" y="12.13" width="6.66" height="4.63" fill="#a5d3f2"/>
+    <rect x="15.33" y="12.13" width="6.67" height="4.63" fill="#c2e0f8"/>
+    <rect x="2" y="16.76" width="6.67" height="4.64" fill="#a5d3f2"/>
+    <rect x="8.67" y="16.76" width="6.66" height="4.64" fill="#c2e0f8"/>
+  </g>
+  <circle cx="16.2" cy="15.8" r="3.3" fill="#ffffff" opacity=".62"/>
+  <path d="M19.1 18.7l1.9 1.9" stroke="#1678c8" stroke-width="3.2" stroke-linecap="round"/>
+  <circle cx="16.2" cy="15.8" r="4.2" fill="none" stroke="#1678c8" stroke-width="2.8"/>
+  <circle cx="14.7" cy="14.3" r="1" fill="#ffffff" opacity=".85"/>
+</svg>

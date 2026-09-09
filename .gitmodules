@@ -1,0 +1,3 @@
+[submodule "base-ui-flutter"]
+	path = base-ui-flutter
+	url = https://github.com/SpringHgui/base-ui-flutter.git

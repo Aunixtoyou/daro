@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <linearGradient id="steelA" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c9d2db"/><stop offset="1" stop-color="#8a97a4"/>
+    </linearGradient>
+  </defs>
+  <g transform="rotate(-45 12 12)">
+    <path d="M2.6 12h5" stroke="#4a90c8" stroke-width="4.4" stroke-linecap="round"/>
+    <rect x="6.9" y="8.1" width="2.6" height="7.8" rx="1.3" fill="#4a90c8"/>
+    <rect x="8.6" y="5.2" width="8.6" height="13.6" rx="3.2" fill="url(#steelA)"/>
+    <rect x="10" y="6.5" width="5.8" height="3.1" rx="1.55" fill="#ffffff" opacity=".32"/>
+    <rect x="16.4" y="7.3" width="5" height="3" rx="1.5" fill="#5d6b78"/>
+    <rect x="16.4" y="13.7" width="5" height="3" rx="1.5" fill="#5d6b78"/>
+  </g>
+</svg>

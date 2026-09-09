@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <clipPath id="back"><rect x="7.4" y="2.2" width="14.4" height="12.8" rx="2.2"/></clipPath>
+    <clipPath id="front"><rect x="2.2" y="9" width="14.4" height="12.8" rx="2.2"/></clipPath>
+  </defs>
+  <g clip-path="url(#back)">
+    <rect x="7.4" y="2.2" width="14.4" height="12.8" fill="#fff6f1"/>
+    <rect x="7.4" y="2.2" width="14.4" height="3.6" fill="#e2622c"/>
+    <rect x="7.4" y="5.8" width="4.8" height="4.6" fill="#fbd9c9"/>
+    <rect x="17" y="5.8" width="4.8" height="4.6" fill="#f7c0a4"/>
+    <rect x="12.2" y="10.4" width="4.8" height="4.6" fill="#f7c0a4"/>
+    <rect x="17" y="10.4" width="4.8" height="4.6" fill="#fbd9c9"/>
+  </g>
+  <g clip-path="url(#front)">
+    <rect x="2.2" y="9" width="14.4" height="12.8" fill="#eaf6ff"/>
+    <rect x="2.2" y="9" width="14.4" height="3.6" fill="#1678c8"/>
+    <rect x="2.2" y="12.6" width="4.8" height="4.6" fill="#c2e0f8"/>
+    <rect x="11.8" y="12.6" width="4.8" height="4.6" fill="#a5d3f2"/>
+    <rect x="7" y="17.2" width="4.8" height="4.6" fill="#a5d3f2"/>
+    <rect x="11.8" y="17.2" width="4.8" height="4.6" fill="#c2e0f8"/>
+  </g>
+  <rect x="2.2" y="9" width="14.4" height="12.8" rx="2.2" fill="none" stroke="#ffffff" stroke-width="1.2" opacity=".9"/>
+</svg>

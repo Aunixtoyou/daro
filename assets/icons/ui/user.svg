@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <linearGradient id="skin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fce7d3"/><stop offset="1" stop-color="#efc09a"/>
+    </linearGradient>
+    <linearGradient id="shirt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f9c74f"/><stop offset="1" stop-color="#e8973a"/>
+    </linearGradient>
+    <linearGradient id="hair" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a5713a"/><stop offset="1" stop-color="#77451b"/>
+    </linearGradient>
+  </defs>
+  <path d="M2.4 22.4c0-5.4 4.3-8.6 9.6-8.6s9.6 3.2 9.6 8.6v.2c0 .5-.4.9-.9.9H3.3c-.5 0-.9-.4-.9-.9Z" fill="url(#shirt)"/>
+  <circle cx="12" cy="7.4" r="5.7" fill="url(#hair)"/>
+  <circle cx="6.2" cy="9.3" r="1.5" fill="#f3cba6"/>
+  <circle cx="17.8" cy="9.3" r="1.5" fill="#f3cba6"/>
+  <circle cx="12" cy="8.8" r="5.2" fill="url(#skin)"/>
+</svg>
