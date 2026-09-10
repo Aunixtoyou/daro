@@ -1055,21 +1055,24 @@ class _TableDataPageState extends State<TableDataPage> {
           Expanded(
             child: () {
               if (_loading) {
-                return _centerHint(
-                  t,
-                  const Spinner(size: 18),
-                  '正在加载 ${widget.table} ...',
+                return Empty(
+                  icon: const Spinner(size: 20),
+                  title: '正在加载 ${widget.table} ...',
+                  compact: true,
+                  maxWidth: 520,
                 );
               }
               if (_error != null) {
-                return _centerHint(
-                  t,
-                  Icon(Icons.error_outline, size: 18, color: t.mutedForeground),
-                  '加载失败: $_error',
+                return Empty(
+                  icon: const Icon(Icons.error_outline),
+                  title: '读取 ${widget.table} 失败',
+                  description: _error,
                   action: Button(
                     text: '重试',
                     onPressed: _load,
                   ),
+                  compact: true,
+                  maxWidth: 520,
                 );
               }
               if (_pageData == null || _columns == null) {
@@ -1187,32 +1190,6 @@ class _TableDataPageState extends State<TableDataPage> {
           ],
         ),
       ],
-    );
-  }
-
-  /// 居中提示(加载 / 错误 / 空数据)
-  Widget _centerHint(
-    AppPalette t,
-    Widget icon,
-    String message, {
-    Widget? action,
-  }) {
-    return Center(
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          icon,
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              message,
-              style: TextStyle(fontSize: 12.5, color: t.mutedForeground),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (action != null) ...[const SizedBox(width: 12), action],
-        ],
-      ),
     );
   }
 

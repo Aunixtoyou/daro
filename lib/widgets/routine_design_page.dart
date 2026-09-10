@@ -610,11 +610,13 @@ class _RoutineDesignPageState extends State<RoutineDesignPage> {
   /// 定义标签:re_editor 代码编辑器(行号 + SQL 高亮 + 查找 + 换行)
   Widget _definitionTab(AppPalette t) {
     if (_controller.text.isEmpty && !widget.isNew && _error != null) {
-      return _centerHint(
-        t,
-        Icon(Icons.error_outline, size: 18, color: t.mutedForeground),
-        '加载失败: $_error',
+      return Empty(
+        icon: const Icon(Icons.error_outline),
+        title: '读取 ${widget.name} 定义失败',
+        description: _error,
         action: Button(text: '重试', onPressed: _load),
+        compact: true,
+        maxWidth: 520,
       );
     }
     return _sqlEditor(t, controller: _controller, findBuilder: _buildFind);
@@ -847,26 +849,6 @@ class _RoutineDesignPageState extends State<RoutineDesignPage> {
       ),
     );
   }
-
-  Widget _centerHint(AppPalette t, Widget icon, String message,
-          {Widget? action}) =>
-      Center(
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            icon,
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                message,
-                style: TextStyle(fontSize: 12.5, color: t.mutedForeground),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (action != null) ...[const SizedBox(width: 12), action],
-          ],
-        ),
-      );
 
   Widget _divider(AppPalette t) => SizedBox(
         width: 6,
