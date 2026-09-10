@@ -15,6 +15,8 @@ name: Release
 #   - dart_odbc / mysql_client / sqlite3 为运行期加载系统库，编译期跨平台无碍；
 #     目标机需自行安装 ODBC / MySQL 客户端库才能用对应引擎（与 README 描述一致）。
 #   - macOS 未做开发者证书签名与公证，产物仅 ad-hoc 签名，用户首启需右键“打开”。
+#   - Release 正文（提交清单 + 关联 PR + Full Changelog）由 tool/gen_release_notes.py
+#     生成，本地可用 `python tool/gen_release_notes.py --tag v0.3.1 --no-pr` 预览。
 
 on:
   workflow_dispatch:
@@ -184,6 +186,25 @@ jobs:
     needs: [meta, build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
     steps:
+      # 生成变更说明要读「上一个 tag → 当前 tag」的完整提交历史，浅克隆拿不到。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Release 正文由脚本生成：全部提交（按 Conventional Commits 分类）+ 关联 PR
+      # + Full Changelog 链接。不再用 action 的 generate_release_notes——它只统计
+      # 经 PR 合入的变更，本仓库直接推 master 的提交全会漏掉。
+      - name: 生成 Release 正文（提交 + PR）
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 tool/gen_release_notes.py \
+            --tag "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --output release_body.md
+          echo "----- release_body.md -----"
+          cat release_body.md
+
       - name: 下载全部平台的产物
         uses: actions/download-artifact@v4
         with:
@@ -199,7 +220,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: daro ${{ needs.meta.outputs.version }}
+          body_path: release_body.md
           draft: true
           prerelease: false
-          generate_release_notes: true
           files: artifacts/*
