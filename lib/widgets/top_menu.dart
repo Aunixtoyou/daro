@@ -9,6 +9,8 @@ import '../app/version.g.dart';
 import '../data/db_data.dart';
 import '../pages/connection_dialog_page.dart';
 import '../theme/app_theme.dart';
+import 'navicat_export_dialog.dart';
+import 'navicat_import_dialog.dart';
 import 'theme_customize_dialog.dart';
 
 /// 与 windows/runner/flutter_window.cpp 通信,接收窗口按钮 hover 状态。
@@ -258,6 +260,11 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
         MenuItem(
             text: '新建连接...', onPressed: () => _openConnectionWindow(context)),
         MenuItem(text: '新建查询', onPressed: app.newQuery),
+        const MenuSeparator(),
+        MenuItem(
+            text: '导入连接', onPressed: () => _importFromNavicat(context)),
+        MenuItem(
+            text: '导出连接', onPressed: () => _exportToNavicat(context)),
         // const MenuItem(text: '打开文件...', enabled: false),
         const MenuSeparator(),
         MenuItem(text: '退出', onPressed: windowManager.close),
@@ -323,6 +330,53 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
     if (result != null) {
       context.read<AppState>().addConnection(result);
     }
+  }
+
+  /// 点击「导入连接」:解析 .ncx、解密保存的密码、勾选后写入连接树
+  /// 都在向导内完成,这里只把结果(含需要补填密码的条数)汇总告知。
+  Future<void> _importFromNavicat(BuildContext context) async {
+    final result = await showNavicatImportDialog(
+        context, app: context.read<AppState>());
+    if (result == null || !context.mounted) return;
+    final manual = result.needsManualPassword;
+    final extra = manual == 0
+        ? ''
+        : '\n其中 $manual 条没能带过密码(Navicat 端未保存,或用了旧版加密方式),'
+            '右键该连接 →「编辑连接」补填后即可正常连接。';
+    MessageBox.show(
+      context,
+      title: '导入完成',
+      message: '已导入 ${result.imported.length} 条连接,可在左侧连接树查看。$extra',
+      buttons: MessageBoxButtons.ok,
+      tokens: Tokens.read(context).toDesktopTokens(),
+    );
+  }
+
+  /// 点击「导出连接」:勾选连接、选目标文件、写出 Navicat 可直接导入的
+  /// .ncx 都在向导内完成,这里只汇总结果与被跳过的连接。
+  Future<void> _exportToNavicat(BuildContext context) async {
+    final result = await showNavicatExportDialog(
+        context, app: context.read<AppState>());
+    if (result == null || !context.mounted) return;
+    var extra = '';
+    if (result.skipped.isNotEmpty) {
+      final names = result.skipped
+          .take(3)
+          .map((s) => '${s.$1}(${s.$2})')
+          .join('、');
+      final more = result.skipped.length > 3
+          ? ' 等 ${result.skipped.length} 条'
+          : '';
+      extra = '\nNavicat 没有对应类型的连接未导出:$names$more。';
+    }
+    MessageBox.show(
+      context,
+      title: '导出完成',
+      message: '已把 ${result.exported} 条连接导出到\n${result.path.path}$extra\n'
+          '在 Navicat 里用「文件 → 导入连接设置…」选择该文件即可。',
+      buttons: MessageBoxButtons.ok,
+      tokens: Tokens.read(context).toDesktopTokens(),
+    );
   }
 
   /// 点击"视图 → 主题定制...":以模态弹窗(base-ui `DialogBox`)弹出主题定制窗口,

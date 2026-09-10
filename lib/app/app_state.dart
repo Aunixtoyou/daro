@@ -261,6 +261,19 @@ class AppState extends ChangeNotifier {
     _persist();
   }
 
+  /// 批量添加连接(Navicat 导入这类一次带来上百条的场景)。
+  /// 逐条沿用同名自动改名规则,但只落盘一次:connections.json 是全量覆写,
+  /// 按 [addConnection] 逐条调用会写出上百份同样的文件。
+  void addConnections(List<ConnectionInfo> conns) {
+    if (conns.isEmpty) return;
+    for (final conn in conns) {
+      _connections.add(_uniqueNamed(conn));
+    }
+    _connectionsView = List.unmodifiable(_connections);
+    notifyListeners();
+    _persist();
+  }
+
   /// 删除一条连接并断开其驱动;
   /// 若该连接正被中部对象页浏览,同步清空对象上下文
   Future<void> removeConnection(ConnectionInfo conn) async {
@@ -370,12 +383,20 @@ class AppState extends ChangeNotifier {
   /// addConnection 均已落盘,重载后与内存状态一致
   Future<void> reloadConnections() => _loadPersisted();
 
-  /// 启动时从本地加载已保存的连接
+  /// 启动时从本地加载已保存的连接。
+  ///
+  /// 不能简单 `clear()` 后整体替换:加载是异步的,期间可能已经有连接加进来
+  /// (刚启动就完成一次导入 / 自动化用例),整体替换会把这些尚未落盘的改动抹掉,
+  /// 随后 [_persist] 又会把空列表写回磁盘。因此只补齐「磁盘有、内存没有」的条目,
+  /// 常规启动路径下内存为空,结果与整体替换完全一致。
   Future<void> _loadPersisted() async {
     final saved = await _store.load();
+    final pending =
+        _connections.where((m) => saved.every((s) => s.name != m.name)).toList();
     _connections
       ..clear()
-      ..addAll(saved);
+      ..addAll(saved)
+      ..addAll(pending);
     _connectionsView = List.unmodifiable(_connections);
     notifyListeners();
   }

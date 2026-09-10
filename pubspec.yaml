@@ -27,6 +27,10 @@ dependencies:
   window_manager: ^0.5.2
   # 锁定 0.5.42：0.6.0+ 是 EOL 占位包，不再捆绑 sqlite3.dll，勿升级
   sqlite3_flutter_libs: 0.5.42
+  # Navicat 连接导入:解密导出文件里保存的连接密码(AES-128-CBC + PKCS#7)
+  pointycastle: ^4.0.0
+  # Navicat 连接导入:解析 .ncx(此前仅作为 flutter_svg 的传递依赖,现显式声明)
+  xml: ^7.0.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
