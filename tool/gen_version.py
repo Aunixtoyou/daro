@@ -14,6 +14,17 @@ import os
 import re
 import sys
 
+# stdout/stderr 被重定向(CI 的 `>nul`、管道、日志文件)时,Python 会退回系统 ANSI
+# 代码页编码 —— 英文版 Windows(含 GitHub windows-latest)是 cp1252,打印中文会
+# 抛 UnicodeEncodeError 并以退出码 1 结束,build_installer.bat 就会报成
+# "gen_version.py failed - check the version: line in pubspec.yaml"(误导)。
+# 放宽编码错误,保证"中文日志"永远不能拖垮生成逻辑本身。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="backslashreplace")
+    except (AttributeError, OSError, ValueError):
+        pass
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PUBSPEC = os.path.join(REPO, "pubspec.yaml")
 DART_OUT = os.path.join(REPO, "lib", "app", "version.g.dart")

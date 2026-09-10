@@ -11,3 +11,8 @@
 # shell 脚本若带 CRLF，会在 Linux/macOS runner 上因 "$'\r'" 报错；GitHub Actions YAML 亦按 LF 存放。
 *.sh text eol=lf
 /.github/workflows/*.yml text eol=lf
+
+# Windows 批处理：必须是 CRLF。
+# cmd.exe 按 CRLF 计算行边界，LF-only 的 .bat 会被解析器切碎（同一份脚本在 CRLF 下
+# 完整跑通、在 LF 下报出一堆 "不是内部或外部命令" 的碎片），且 linux/macOS runner 不会用到。
+*.bat text eol=crlf

@@ -4,10 +4,10 @@
 // 一致性由 test/app_version_test.dart 守护(漂移会让 CI 失败)。
 
 /// 语义版本号(不含 build 号),例如 `0.1.0`。
-const String kAppVersion = '0.2.0';
+const String kAppVersion = '0.3.0';
 
 /// pubspec.yaml 里 `+` 后面的构建号,例如 `1`。
-const String kAppBuild = '2';
+const String kAppBuild = '3';
 
 /// 完整版本串,例如 `0.1.0+1`。
-const String kAppVersionFull = '0.2.0+2';
+const String kAppVersionFull = '0.3.0+3';

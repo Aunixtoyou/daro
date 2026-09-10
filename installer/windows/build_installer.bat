@@ -57,11 +57,27 @@ if not defined PYEXE (
     py -c "import sys" >nul 2>nul && set "PYEXE=py"
 )
 if not defined PYEXE goto :version_verify
-"%PYEXE%" "%PROJECT_ROOT%\tool\gen_version.py" >nul 2>nul
+rem Python 3.x encodes stdout with the system ANSI code page (cp1252 on an
+rem English Windows / GitHub windows-latest) whenever the stream is redirected.
+rem gen_version.py prints Chinese, which then raises UnicodeEncodeError and exits
+rem with code 1 - that is what made CI abort with a misleading "version:" error.
+rem Force UTF-8, and keep the output in a log file so a failure shows the real
+rem traceback instead of being swallowed by a silent >nul 2>nul.
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+set "GV_LOG=%TEMP%\daro-gen-version.log"
+if not defined TEMP set "GV_LOG=%SCRIPT_DIR%daro-gen-version.log"
+"%PYEXE%" "%PROJECT_ROOT%\tool\gen_version.py" >"%GV_LOG%" 2>&1
 if errorlevel 1 (
     echo ERROR: tool\gen_version.py failed - check the "version:" line in pubspec.yaml.
+    if exist "%GV_LOG%" (
+        echo ---- gen_version.py output ----
+        type "%GV_LOG%"
+        echo -----------------------------
+    )
     goto :die
 )
+if exist "%GV_LOG%" del "%GV_LOG%" >nul 2>nul
 
 :version_verify
 set "APP_VERSION="
