@@ -1222,6 +1222,19 @@ class _DatabaseTreeState extends State<DatabaseTree> {
           ),
         ),
       );
+      // 分类级降级:该分组单独读取失败(如「角色」无 mysql.user / pg_roles
+      // 读取权限),在分组下给出可点击重试的提示行,而不是显示成空分组
+      if (objState.categoryErrorOf(group.category) != null) {
+        rows.add(_hintNode(
+          context,
+          depth: groupDepth + 1,
+          text: '读取失败',
+          isAction: true,
+          onTap: () => schema == null
+              ? manager.retryExpandDatabase(conn, database)
+              : manager.retryExpandSchema(conn, database, schema),
+        ));
+      }
       // 仅展开时渲染子项
       if (isExpanded) {
         for (final name in groupItems) {

@@ -670,31 +670,41 @@ class _ObjectPanelState extends State<ObjectPanel> {
     switch (state.status) {
       case LoadStatus.idle:
       case LoadStatus.loading:
-        return _centerHint(
+        return _stateView(
           t,
-          const Spinner(size: 18),
-          '正在加载 $database 的对象列表 ...',
+          icon: const Spinner(size: 20),
+          title: '正在加载 $database 的对象列表 ...',
         );
       case LoadStatus.error:
-        return _centerHint(
+        return _stateView(
           t,
-          Icon(Icons.error_outline, size: 18, color: t.mutedForeground),
-          '加载失败: ${state.error}',
+          icon: const Icon(Icons.error_outline),
+          title: '打开 $database 失败',
+          description: state.error,
           action: Button(
             text: '重试',
-            onPressed: () {
-              final connInfo = _connOf(app, connection);
-              if (schema == null) {
-                app.connectionManager.retryExpandDatabase(connInfo, database);
-              } else {
-                app.connectionManager
-                    .retryExpandSchema(connInfo, database, schema);
-              }
-            },
+            onPressed: () => _retryAll(app, connection, database, schema),
           ),
         );
       case LoadStatus.loaded:
         break;
+    }
+
+    // 分类级降级:某一类对象单独读取失败(典型如「角色」要读 mysql.user /
+    // pg_roles,生产只读账号普遍无权限),表与视图仍可用 —— 只在本分类内
+    // 提示原因并可重试,不再让整个库显示为加载失败
+    final categoryError = state.categoryErrorOf(category);
+    if (categoryError != null) {
+      return _stateView(
+        t,
+        icon: const Icon(Icons.error_outline),
+        title: '${category.label}列表读取失败',
+        description: categoryError,
+        action: Button(
+          text: '重试',
+          onPressed: () => _retryAll(app, connection, database, schema),
+        ),
+      );
     }
 
     // 当前分类的子项列表(查询分类已在上方提前返回,不会走到这里);
@@ -836,33 +846,39 @@ class _ObjectPanelState extends State<ObjectPanel> {
     );
   }
 
-  /// 居中提示(加载 / 错误)
-  Widget _centerHint(
-    AppPalette t,
-    Widget icon,
-    String message, {
+  /// 内容区状态视图(加载中 / 错误):复用 base-ui 的 [Empty]。
+  /// 手绘 `Row(mainAxisSize.min)` + `Flexible(Text)` 会把整行撑到容器全宽,
+  /// 长错误文本被挤成一行省略号、重试按钮贴到右缘甚至被裁掉;[Empty] 的
+  /// `maxWidth` 让文本在固定宽度内换行居中,按钮紧随其下。
+  Widget _stateView(
+    AppPalette t, {
+    required Widget icon,
+    required String title,
+    String? description,
     Widget? action,
   }) {
     return Container(
       color: t.background,
-      child: Center(
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            icon,
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                message,
-                style: TextStyle(fontSize: 12.5, color: t.mutedForeground),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (action != null) ...[const SizedBox(width: 12), action],
-          ],
-        ),
+      child: Empty(
+        icon: icon,
+        title: title,
+        description: description,
+        action: action,
+        compact: true,
+        maxWidth: 520,
       ),
     );
+  }
+
+  /// 重新拉取当前库 / 模式的全部对象列表(整体失败与单分类降级共用入口)
+  void _retryAll(
+      AppState app, String connection, String database, String? schema) {
+    final connInfo = _connOf(app, connection);
+    if (schema == null) {
+      app.connectionManager.retryExpandDatabase(connInfo, database);
+    } else {
+      app.connectionManager.retryExpandSchema(connInfo, database, schema);
+    }
   }
 
   /// 空白内容区:无数据时直接留白,不展示任何数据或空态提示

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../data/db_data.dart';
 import '../data/drivers/db_driver.dart';
+import 'app_state.dart';
 
 /// 元数据加载状态
 enum LoadStatus { idle, loading, loaded, error }
@@ -36,6 +37,7 @@ class TableListState {
     this.functions = const [],
     this.procedures = const [],
     this.users = const [],
+    this.categoryErrors,
     this.error,
   });
   LoadStatus status;
@@ -45,7 +47,19 @@ class TableListState {
   List<String>? functions;
   List<String>? procedures;
   List<String>? users;
+
+  /// 整体加载失败(会话无法定位 / 表列表都拉不到)时的错误;
+  /// 为 null 表示库可正常打开
   String? error;
+
+  /// 分类级降级:某一类对象列表单独读取失败时记录的原因(键 = 分类)。
+  /// 典型场景是「角色」——MySQL 读 mysql.user、PG 读 pg_roles,生产只读账号
+  /// 普遍无该权限(1142 SELECT command denied),但表 / 视图完全可用。
+  /// 可空字段:热重载后旧实例上为 null,读取处一律用 `?[category]` 兑底。
+  Map<ObjectCategory, String>? categoryErrors;
+
+  /// 取某分类的降级错误(无错误返回 null)
+  String? categoryErrorOf(ObjectCategory category) => categoryErrors?[category];
 }
 
 /// 连接管理器:维护每个连接的驱动实例与元数据加载状态。
@@ -96,6 +110,13 @@ class ConnectionManager extends ChangeNotifier {
     await fresh.connect();
     _drivers[conn.name] = fresh;
     return fresh;
+  }
+
+  /// 测试注入:预先挂一个「已连接」的驱动,使 [_driverFor] 直接复用,
+  /// 从而在无真实数据库的情况下验证元数据加载 / 降级逻辑(仅单测使用)。
+  @visibleForTesting
+  void attachDriverForTest(String connection, DatabaseDriver driver) {
+    _drivers[connection] = driver;
   }
 
   /// 连接向导「测试连接」:连上即断,不保留长连接
@@ -200,6 +221,7 @@ class ConnectionManager extends ChangeNotifier {
     }
     state
       ..status = LoadStatus.loading
+      ..categoryErrors = null
       ..error = null;
     notifyListeners();
 
@@ -216,29 +238,81 @@ class ConnectionManager extends ChangeNotifier {
           ..schemas = await driver.listSchemas(database)
           ..status = LoadStatus.loaded;
       }
-      // 同一连接非并发安全,对象列表顺序拉取
-      final tables = await driver.listTables(database);
-      final views = await driver.listViews(database);
-      final materializedViews = await driver.listMaterializedViews(database);
-      final functions = await driver.listFunctions(database);
-      final procedures = await driver.listProcedures(database);
-      final users = await driver.listUsers(database);
+      await _loadObjectLists(state, driver, database);
       state
-        ..tables = tables
-        ..views = views
-        ..materializedViews = materializedViews
-        ..functions = functions
-        ..procedures = procedures
-        ..users = users
+        ..error = null
         ..status = LoadStatus.loaded;
     } catch (e) {
       await _drivers.remove(conn.name)?.close();
       state
         ..status = LoadStatus.error
+        ..categoryErrors = null
         ..error = e.toString();
     }
     notifyListeners();
   }
+
+  /// 逐分类拉取对象列表并写入 [state](同一会话顺序执行,连接非并发安全)。
+  ///
+  /// 「表」是核心分类:失败意味着该库整体不可访问(或连接已断),异常向上抛出,
+  /// 由调用方把整个状态置错并丢弃驱动。其余分类**独立降级**:单类失败只记入
+  /// [TableListState.categoryErrors] 并把该分类置空,不影响已成功的分类——
+  /// 生产只读账号普遍无 mysql.user / pg_roles 的读取权限(1142 SELECT command
+  /// denied),若一并抛出就会出现「能列出所有库、却打不开库看表」。
+  Future<void> _loadObjectLists(
+    TableListState state,
+    DatabaseDriver driver,
+    String database, {
+    String? schema,
+  }) async {
+    final errors = <ObjectCategory, String>{};
+    // 单类拉取:失败降级为 null(该分类在 UI 上显示错误 + 重试,而非假装为空)
+    Future<List<String>?> load(ObjectCategory category) async {
+      try {
+        return await _listByCategory(driver, category, database, schema: schema);
+      } catch (e) {
+        errors[category] = e.toString();
+        return null;
+      }
+    }
+
+    final tables = await driver.listTables(database, schema: schema);
+    final views = await load(ObjectCategory.view);
+    final materializedViews = await load(ObjectCategory.materializedView);
+    final functions = await load(ObjectCategory.function);
+    final procedures = await load(ObjectCategory.procedure);
+    final users = await load(ObjectCategory.user);
+    state
+      ..tables = tables
+      ..views = views
+      ..materializedViews = materializedViews
+      ..functions = functions
+      ..procedures = procedures
+      ..users = users
+      ..categoryErrors = errors;
+  }
+
+  /// 分类 → 驱动元数据查询的**唯一**映射(新增分类时只改这里)。
+  /// 「表」由 [_loadObjectLists] 直接调用以便异常上抛,此处的 table 分支
+  /// 只为枚举穷尽保留。
+  Future<List<String>> _listByCategory(DatabaseDriver driver,
+      ObjectCategory category, String database,
+      {String? schema}) =>
+      switch (category) {
+        ObjectCategory.table =>
+          driver.listTables(database, schema: schema),
+        ObjectCategory.view => driver.listViews(database, schema: schema),
+        ObjectCategory.materializedView =>
+          driver.listMaterializedViews(database, schema: schema),
+        ObjectCategory.function =>
+          driver.listFunctions(database, schema: schema),
+        ObjectCategory.procedure =>
+          driver.listProcedures(database, schema: schema),
+        ObjectCategory.user => driver.listUsers(database),
+        // 查询 / 备份来自本地保存的 SQL,不经驱动
+        ObjectCategory.query || ObjectCategory.backup =>
+          Future.value(const <String>[]),
+      };
 
   /// 重试加载库级对象列表(树里点击错误节点触发)
   Future<void> retryExpandDatabase(ConnectionInfo conn, String database) async {
@@ -258,34 +332,22 @@ class ConnectionManager extends ChangeNotifier {
     }
     state
       ..status = LoadStatus.loading
+      ..categoryErrors = null
       ..error = null;
     notifyListeners();
 
     try {
       final driver = await _driverFor(conn);
       await driver.useDatabase(database);
-      // 同一连接非并发安全,对象列表顺序拉取
-      final tables = await driver.listTables(database, schema: schema);
-      final views = await driver.listViews(database, schema: schema);
-      final materializedViews =
-          await driver.listMaterializedViews(database, schema: schema);
-      final functions = await driver.listFunctions(database, schema: schema);
-      final procedures =
-          await driver.listProcedures(database, schema: schema);
-      // 用户/角色是库级概念(PG: pg_roles),随模式状态一并缓存展示
-      final users = await driver.listUsers(database);
+      await _loadObjectLists(state, driver, database, schema: schema);
       state
-        ..tables = tables
-        ..views = views
-        ..materializedViews = materializedViews
-        ..functions = functions
-        ..procedures = procedures
-        ..users = users
+        ..error = null
         ..status = LoadStatus.loaded;
     } catch (e) {
       await _drivers.remove(conn.name)?.close();
       state
         ..status = LoadStatus.error
+        ..categoryErrors = null
         ..error = e.toString();
     }
     notifyListeners();
@@ -516,6 +578,7 @@ class ConnectionManager extends ChangeNotifier {
       ..functions = null
       ..procedures = null
       ..users = null
+      ..categoryErrors = null
       ..error = null;
     notifyListeners();
     if (schema == null) {
