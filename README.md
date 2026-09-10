@@ -75,7 +75,7 @@ GitHub Actions，一次触发并行产出三平台安装包：
 
 | 平台 | Runner | 产物 |
 |---|---|---|
-| Windows | `windows-latest` | `daro-Setup-<ver>-x64.exe`（Inno Setup，复用 `installer/windows`） |
+| Windows | `windows-latest` | `daro-<ver>-windows-x64.exe`（Inno Setup，复用 `installer/windows`） |
 | macOS | `macos-14` | `daro-<ver>-macos-universal.dmg` / `.zip`（x86_64 + arm64 通用） |
 | Linux | `ubuntu-22.04` | `daro-<ver>-linux-amd64.deb` 与 `daro-<ver>-linux-x64.tar.xz` |
 

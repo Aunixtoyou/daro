@@ -58,7 +58,9 @@ PrivilegesRequiredOverridesAllowed=dialog
 ShowLanguageDialog=yes
 ; OutputDir 相对本 .iss 文件 -> 项目根目录下 dist\
 OutputDir=..\..\dist
-OutputBaseFilename={#MyAppName}-Setup-{#MyAppVersion}-{#ArchTarget}
+; 命名与其他平台产物对齐：daro-<版本>-<平台>-<架构>（macOS 为 daro-<版本>-macos-universal.dmg，
+; Linux 为 daro-<版本>-linux-<架构>.deb/.tar.xz），不再使用早期的 daro-Setup-<版本>-<架构>
+OutputBaseFilename={#MyAppName}-{#MyAppVersion}-windows-{#ArchTarget}
 SetupIconFile=..\..\windows\runner\resources\app_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max

@@ -13,7 +13,7 @@ rem            --release" there, copy build\windows\arm64\... here, then package
 rem            -SkipBuild -Arch all.
 rem          -SkipBuild   skip "flutter build windows --release" (package what is there)
 rem          -NoPause     do not wait for a key press on exit (for CI / scripts)
-rem          Output: dist\daro-Setup-<version>-<arch>.exe (one file per architecture)
+rem          Output: dist\daro-<version>-windows-<arch>.exe (one file per architecture)
 rem Note:    set ISCC_PATH=<full path of ISCC.exe> if installed at a custom location.
 
 set "SCRIPT_DIR=%~dp0"
@@ -166,7 +166,7 @@ goto :die
 :pkg_done
 echo.
 echo Done. Wrote !N_PKG! installer(s) to %PROJECT_ROOT%\dist
-dir /b "%PROJECT_ROOT%\dist\daro-Setup-*.exe"
+dir /b "%PROJECT_ROOT%\dist\daro-*windows-*.exe"
 call :maybe_pause
 endlocal
 exit /b 0

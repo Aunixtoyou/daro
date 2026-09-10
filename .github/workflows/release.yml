@@ -78,14 +78,14 @@ jobs:
       - name: 校验产物
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path dist -Filter "daro-Setup-*.exe" -ErrorAction SilentlyContinue
-          if (-not $exe) { Write-Error "dist 下未找到 daro-Setup-*.exe"; exit 1 }
+          $exe = Get-ChildItem -Path dist -Filter "daro-*windows-*.exe" -ErrorAction SilentlyContinue
+          if (-not $exe) { Write-Error "dist 下未找到 daro-<ver>-windows-<arch>.exe"; exit 1 }
           $exe | ForEach-Object { "打包完成: $($_.Name) ($([math]::Round($_.Length/1MB,1)) MB)" }
 
       - uses: actions/upload-artifact@v4
         with:
           name: daro-windows-x64
-          path: dist/daro-Setup-*.exe
+          path: dist/daro-*windows-*.exe
           if-no-files-found: error
 
   build-macos:
