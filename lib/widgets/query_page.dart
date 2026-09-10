@@ -556,6 +556,9 @@ class _QueryPageState extends State<QueryPage> {
             width: 230,
             padding: const EdgeInsets.symmetric(vertical: 4),
             gap: 3,
+            // 连接可能多达数十个:超高时面板内滚动,而不是溢出屏幕
+            scrollable: true,
+            maxHeight: 360,
             // 开合由外层 Popover 的 Listener 处理,按钮仅提供视觉态
             trigger: ToolbarButton(
               iconWidget: _typeIcon(conn?.typeId, t),
@@ -575,6 +578,9 @@ class _QueryPageState extends State<QueryPage> {
             width: 200,
             padding: const EdgeInsets.symmetric(vertical: 4),
             gap: 3,
+            // 库列表同样可能很长(SQL Server 实例):超高时面板内滚动
+            scrollable: true,
+            maxHeight: 320,
             onOpenChanged: _onDbMenuOpen,
             trigger: ToolbarButton(
               iconWidget: Icon(Icons.storage, size: 14, color: c.iconSuccess),
@@ -596,6 +602,8 @@ class _QueryPageState extends State<QueryPage> {
               width: 200,
               padding: const EdgeInsets.symmetric(vertical: 4),
               gap: 3,
+              scrollable: true,
+              maxHeight: 320,
               onOpenChanged: _onSchemaMenuOpen,
               trigger: ToolbarButton(
                 iconWidget:
@@ -1356,10 +1364,12 @@ class _ResultGridState extends State<_ResultGrid> {
   Widget _grid(AppPalette t) {
     final columns = widget.result.columns;
     final rows = _displayRows;
-    if (rows.isEmpty) {
-      // 0 行结果:内容区留白,不展示空态提示
+    if (columns.isEmpty) {
+      // 无列元数据(非 SELECT):内容区留白,不展示空态提示
       return Container(color: t.background);
     }
+    // 0 行结果照常渲染网格:列头必须可见(仅数据区留白),
+    // 与表数据页「空表仅渲染表头」保持一致
     // 首次渲染或列数变化时初始化列宽
     if (_columnWidths == null || _columnWidths!.length != columns.length) {
       _columnWidths = List.filled(columns.length, _colWidth);
