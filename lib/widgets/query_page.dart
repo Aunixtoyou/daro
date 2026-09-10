@@ -9,14 +9,19 @@ import '../app/connection_manager.dart';
 import '../data/db_data.dart';
 import '../data/db_types.dart';
 import '../data/drivers/db_driver.dart';
+import '../data/result_grid_layout.dart';
 import '../data/sql_completions.dart';
 import '../data/sql_split.dart';
 import '../theme/app_theme.dart';
 import 'result_export_dialog.dart';
 
-/// 结果网格行高 / 列宽(与表数据页一致)
+/// 结果网格行高(与表数据页一致)
 const double _rowHeight = 26.0;
-const double _colWidth = 150.0;
+
+/// 结果网格数据单元格的字号与左右内边距
+/// (自适应列宽要按同一套数值测量,否则量出来的宽度和实际渲染对不上)
+const double _cellFontSize = 12.5;
+const double _cellPaddingX = 8.0;
 
 /// 行号列宽
 const double _numberColWidth = 44.0;
@@ -1189,6 +1194,13 @@ class _ResultGridState extends State<_ResultGrid> {
   /// 结果网格列宽(拖拽列头边框调整后持久化;新结果集时重置)
   List<double>? _columnWidths;
 
+  /// 各列「放下最长内容」所需宽度:按结果集测量一次后复用,
+  /// 窗口宽度变化只重算「空余宽度补给最后一列」,不重复测量
+  List<double>? _contentWidths;
+
+  /// 用户拖过列头边框:本次结果集内尊重用户设的列宽,不再自动适配
+  bool _manualColumnWidths = false;
+
   /// 结果网格多选单元格集合
   Set<(int, int)> _selectedCells = {};
 
@@ -1212,12 +1224,15 @@ class _ResultGridState extends State<_ResultGrid> {
   void didUpdateWidget(covariant _ResultGrid oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.result != widget.result) {
-      // 新结果集:上一份的本地排序与选中都不再适用
+      // 新结果集:上一份的本地排序与选中都不再适用;列宽重新按内容适配
       _sortCol = null;
       _sortAsc = true;
       _selectedCells = {};
       _anchorCell = null;
       _displayRows = widget.result.rows;
+      _columnWidths = null;
+      _contentWidths = null;
+      _manualColumnWidths = false;
     }
   }
 
@@ -1360,7 +1375,7 @@ class _ResultGridState extends State<_ResultGrid> {
   }
 
   // 结果网格:列头 + 行号列 + 数据行,横向滚动 + 纵向懒加载,
-  // 双向滚动条 + 列头拖边框变宽 + 拖列头标题本地排序
+  // 双向滚动条 + 列宽按内容自适应 + 列头拖边框变宽 + 拖列头标题本地排序
   Widget _grid(AppPalette t) {
     final columns = widget.result.columns;
     final rows = _displayRows;
@@ -1370,75 +1385,160 @@ class _ResultGridState extends State<_ResultGrid> {
     }
     // 0 行结果照常渲染网格:列头必须可见(仅数据区留白),
     // 与表数据页「空表仅渲染表头」保持一致
-    // 首次渲染或列数变化时初始化列宽
-    if (_columnWidths == null || _columnWidths!.length != columns.length) {
-      _columnWidths = List.filled(columns.length, _colWidth);
-    }
-    final totalWidth =
-        _numberColWidth + _columnWidths!.fold<double>(0, (a, b) => a + b);
-    return ScrollBar(
-      controller: _hScrollController,
-      orientation: ScrollBarOrientation.horizontal,
-      thumbVisibility: true,
-      child: SingleChildScrollView(
-        controller: _hScrollController,
-        scrollDirection: Axis.horizontal,
-        child: SizedBox(
-          width: totalWidth,
-          child: ScrollBar(
-            controller: _vScrollController,
-            child: DataGridView(
-              columns: [
-                for (final column in columns)
-                  DataGridViewColumn(title: column),
-              ],
-              columnWidths: _columnWidths,
-              onColumnResize: (index, newWidth) {
-                setState(() {
-                  _columnWidths![index] = newWidth;
-                });
-              },
-              sortColumn: _sortCol,
-              sortAscending: _sortAsc,
-              onHeaderSort: _sortBy,
-              selectedCells: _selectedCells,
-              anchorCell: _anchorCell,
-              onCellContext: _showCellMenu,
-              onCellsSelected: (cells) {
-                setState(() {
-                  _selectedCells = cells;
-                  // 更新锚点:单选或 Ctrl+click 时取最后点击的单元格
-                  if (cells.length == 1) {
-                    _anchorCell = cells.first;
-                  }
-                });
-                // 选中后焦点移入结果面板,使 Ctrl+C/Ctrl+A 生效;
-                // 点击 SQL 编辑器时焦点自然切走,快捷键回归编辑器
-                _focusNode.requestFocus();
-              },
-              rowCount: rows.length,
-              cellBuilder: (row, col) => Text(
-                rows[row][col],
-                style: const TextStyle(fontSize: 12.5),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 列宽要按面板宽度决定「是否补满」,故在拿到约束后再算
+        _syncColumnWidths(context, columns, rows, constraints.maxWidth);
+        final widths = _columnWidths!;
+        final totalWidth =
+            _numberColWidth + widths.fold<double>(0, (a, b) => a + b);
+        return ScrollBar(
+          controller: _hScrollController,
+          orientation: ScrollBarOrientation.horizontal,
+          thumbVisibility: true,
+          child: SingleChildScrollView(
+            controller: _hScrollController,
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: totalWidth,
+              child: ScrollBar(
+                controller: _vScrollController,
+                child: DataGridView(
+                  columns: [
+                    for (final column in columns)
+                      DataGridViewColumn(title: column),
+                  ],
+                  columnWidths: widths,
+                  onColumnResize: (index, newWidth) {
+                    setState(() {
+                      // 用户手动定过列宽:本次结果集内不再自动适配
+                      _manualColumnWidths = true;
+                      widths[index] = newWidth;
+                    });
+                  },
+                  sortColumn: _sortCol,
+                  sortAscending: _sortAsc,
+                  onHeaderSort: _sortBy,
+                  selectedCells: _selectedCells,
+                  anchorCell: _anchorCell,
+                  onCellContext: _showCellMenu,
+                  onCellsSelected: (cells) {
+                    setState(() {
+                      _selectedCells = cells;
+                      // 更新锚点:单选或 Ctrl+click 时取最后点击的单元格
+                      if (cells.length == 1) {
+                        _anchorCell = cells.first;
+                      }
+                    });
+                    // 选中后焦点移入结果面板,使 Ctrl+C/Ctrl+A 生效;
+                    // 点击 SQL 编辑器时焦点自然切走,快捷键回归编辑器
+                    _focusNode.requestFocus();
+                  },
+                  rowCount: rows.length,
+                  cellBuilder: (row, col) => Text(
+                    rows[row][col],
+                    style: const TextStyle(fontSize: _cellFontSize),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                  rowHeight: _rowHeight,
+                  showRowNumbers: true,
+                  rowNumberWidth: _numberColWidth,
+                  headerColor: t.secondary,
+                  gridLineColor: t.gridLine,
+                  cellPaddingX: _cellPaddingX,
+                  rowHoverColor: Color.alphaBlend(
+                    t.foreground.withValues(alpha: 0.06),
+                    t.background,
+                  ),
+                  verticalScrollController: _vScrollController,
+                ),
               ),
-              rowHeight: _rowHeight,
-              showRowNumbers: true,
-              rowNumberWidth: _numberColWidth,
-              headerColor: t.secondary,
-              gridLineColor: t.gridLine,
-              cellPaddingX: 8,
-              rowHoverColor: Color.alphaBlend(
-                t.foreground.withValues(alpha: 0.06),
-                t.background,
-              ),
-              verticalScrollController: _vScrollController,
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
+  }
+
+  /// 结果网格列宽自适应(构建期赋值,同旧版初始化列宽的做法,不额外 setState)。
+  ///
+  /// 起因:PostgreSQL 的 `EXPLAIN` 每行都是一条计划文本(列名 QUERY PLAN),
+  /// 固定 150px 列宽会把计划截成「Index Scan using p...」「Index Cond: ((id > ...」,
+  /// 而右侧还空着一大片 —— 计划完全读不出来。这里改成按内容测宽,
+  /// 并把面板空余宽度补给最后一列,长文本能整行显示、面板也不留缺口。
+  void _syncColumnWidths(
+    BuildContext context,
+    List<String> columns,
+    List<List<String>> rows,
+    double viewportWidth,
+  ) {
+    var content = _contentWidths;
+    if (content == null || content.length != columns.length) {
+      content = _contentWidths = _measureColumnWidths(context, columns, rows);
+    }
+    // 用户手动拖过列宽:只保证长度对齐,不再覆盖用户的选择
+    if (_manualColumnWidths) {
+      final current = _columnWidths;
+      if (current == null || current.length != content.length) {
+        _columnWidths = List<double>.of(content);
+      }
+      return;
+    }
+    final fitted = fillPanelWidth(
+      content,
+      viewportWidth: viewportWidth,
+      leadingWidth: _numberColWidth,
+    );
+    final current = _columnWidths;
+    if (current == null || !_sameWidths(current, fitted)) {
+      _columnWidths = fitted;
+    }
+  }
+
+  /// 按内容测量列宽:数据单元格跟随实际继承的文本样式(只有字号由结果网格指定),
+  /// 列头是 base-ui 自绘、不继承应用文本样式,字体来自 DesktopTokens
+  List<double> _measureColumnWidths(
+    BuildContext context,
+    List<String> columns,
+    List<List<String>> rows,
+  ) {
+    final textDirection = Directionality.of(context);
+    // 系统文本缩放会同时放大单元格与列头,测量必须跟着放大,否则量出来的宽度偏窄
+    final textScaler = MediaQuery.textScalerOf(context);
+    final cellStyle =
+        DefaultTextStyle.of(context).style.copyWith(fontSize: _cellFontSize);
+    final tokens = TokenScope.maybeOf(context);
+    final headerStyle = TextStyle(
+      fontFamily: tokens?.fontFamily,
+      fontSize: tokens?.fontSize,
+      fontWeight: FontWeight.w600,
+      decoration: TextDecoration.none,
+    );
+    double measure(String text, bool isHeader) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: isHeader ? headerStyle : cellStyle),
+        maxLines: 1,
+        textDirection: textDirection,
+        textScaler: textScaler,
+      )..layout();
+      return painter.width;
+    }
+
+    return autoColumnWidths(
+      columns: columns,
+      rows: rows,
+      measureText: measure,
+      paddingX: _cellPaddingX,
+    );
+  }
+
+  static bool _sameWidths(List<double> a, List<double> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 }
 
