@@ -56,3 +56,6 @@ pubspec.lock
 
 # 本地临时区(临时诊断测试脚本、安装包备份等,不入库)
 /.trash
+
+# 本地诊断输出(如 flutter analyze 重定向到根目录的日志,不入库)
+/analyze_out.txt
