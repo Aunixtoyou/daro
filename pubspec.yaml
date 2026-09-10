@@ -20,6 +20,8 @@ dependencies:
   sqlite3: ^2.7.6
   path_provider: ^2.1.6
   provider: ^6.1.2
+  # 用系统默认浏览器打开外部链接(帮助 → 问题反馈 → GitHub Issues)
+  url_launcher: ^6.3.0
   # SQL 编辑器:语法高亮(re_highlight)+行号+补全框架(CodeAutocomplete),自绘实现零动画
   re_editor: ^0.10.0
   # re_editor 传递依赖,查询页直接引用其 langSql 语法规则,显式声明
@@ -36,6 +38,8 @@ dev_dependencies:
     sdk: flutter
   integration_test:
     sdk: flutter
+  # 测试里注入假 UrlLauncherPlatform,断言「问题反馈」请求打开的 URL
+  url_launcher_platform_interface: ^2.3.2
 
 flutter:
   uses-material-design: true

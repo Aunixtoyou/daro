@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 import '../app/app_state.dart';
 import '../app/version.g.dart';
@@ -314,6 +315,8 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
       //   MenuItem(text: '上一个窗口', enabled: false),
       // ]),
       MenuItem(text: '帮助', children: [
+        MenuItem(
+            text: '问题反馈', onPressed: () => _openIssueTracker(context)),
         const MenuSeparator(),
         MenuItem(text: '关于...', onPressed: () => _showAbout(context)),
       ]),
@@ -385,6 +388,29 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
     await showDialog<void>(
       context: context,
       builder: (_) => const ThemeCustomizeDialog(),
+    );
+  }
+
+  /// 点击"问题反馈":用系统默认浏览器打开 daro 的 GitHub Issues 页面。
+  /// 启动失败时(无默认浏览器 / http 协议未注册)退化为弹窗展示链接,
+  /// 让用户至少能手动复制,而不是点击后毫无反馈。
+  Future<void> _openIssueTracker(BuildContext context) async {
+    const url = 'https://github.com/SpringHgui/daro/issues';
+    var opened = false;
+    try {
+      opened = await launchUrl(Uri.parse(url),
+          mode: LaunchMode.externalApplication);
+    } catch (e) {
+      debugPrint('[top_menu] launchUrl failed: $e');
+      opened = false;
+    }
+    if (opened || !context.mounted) return;
+    MessageBox.show(
+      context,
+      title: '问题反馈',
+      message: '无法自动打开浏览器,请在浏览器中访问:\n$url',
+      buttons: MessageBoxButtons.ok,
+      tokens: Tokens.read(context).toDesktopTokens(),
     );
   }
 

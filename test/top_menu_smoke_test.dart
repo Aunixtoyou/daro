@@ -4,6 +4,28 @@ import 'package:daro/widgets/top_menu.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher_platform_interface/link.dart';
+import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
+
+/// 记录 launch 调用的假实现:测试进程里没有 url_launcher 的原生插件,
+/// 直接调用会 MissingPluginException,必须替换平台实例才能验证接线。
+class _RecordingUrlLauncher extends UrlLauncherPlatform {
+  String? lastUrl;
+  LaunchOptions? lastOptions;
+
+  @override
+  LinkDelegate? get linkDelegate => null;
+
+  @override
+  Future<bool> launchUrl(String url, LaunchOptions options) async {
+    lastUrl = url;
+    lastOptions = options;
+    return true;
+  }
+
+  @override
+  Future<bool> supportsMode(PreferredLaunchMode mode) async => true;
+}
 
 /// Provider 必须在 MaterialApp 之上(与 main.dart 一致):showDialog 的弹层路由
 /// 挂在 Navigator 上,拿不到 home 里的 Provider,取色时会直接抛异常。
@@ -34,5 +56,25 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(NavicatImportDialog), findsOneWidget);
     expect(find.text('请先选择 Navicat 导出的 .ncx 文件。'), findsOneWidget);
+  });
+
+  testWidgets('帮助菜单里的「问题反馈」打开 GitHub Issues',
+      (tester) async {
+    final fake = _RecordingUrlLauncher();
+    final original = UrlLauncherPlatform.instance;
+    UrlLauncherPlatform.instance = fake;
+    addTearDown(() => UrlLauncherPlatform.instance = original);
+
+    await tester.pumpWidget(harness(AppState()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('帮助'));
+    await tester.pumpAndSettle();
+    expect(find.text('问题反馈'), findsOneWidget);
+
+    await tester.tap(find.text('问题反馈'));
+    await tester.pumpAndSettle();
+    expect(fake.lastUrl, 'https://github.com/SpringHgui/daro/issues');
+    // 外部应用模式:交给系统默认浏览器,而不是应用内 webview。
+    expect(fake.lastOptions?.mode, PreferredLaunchMode.externalApplication);
   });
 }
