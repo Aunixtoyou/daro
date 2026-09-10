@@ -1,0 +1,205 @@
+name: Release
+
+# 自动为 daro 构建 Windows / macOS / Linux 安装包并（打 tag 时）发布到 GitHub Releases。
+#
+# 触发方式：
+#   1) 打 tag `v*`（如 v0.2.0）→ 构建三平台安装包 + 建一个 Draft Release 并上传产物
+#   2) 手动 workflow_dispatch → 只构建并上传 artifacts（不发 Release），用于试跑
+#
+# 版本号的唯一数据源仍是 pubspec.yaml 的 `version:`（与本地打包脚本一致）。
+# 安装包文件名里的 x.y.z 从 pubspec 读取；tag 只用于决定是否发布 Release。
+#
+# 说明：
+#   - base-ui-flutter 是 git submodule，所有 job 用 `submodules: recursive` 拉取。
+#   - pubspec.lock 未纳入版本控制，CI 每次 `flutter pub get` 现解析。
+#   - dart_odbc / mysql_client / sqlite3 为运行期加载系统库，编译期跨平台无碍；
+#     目标机需自行安装 ODBC / MySQL 客户端库才能用对应引擎（与 README 描述一致）。
+#   - macOS 未做开发者证书签名与公证，产物仅 ad-hoc 签名，用户首启需右键“打开”。
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 与本机 .metadata 记录的 stable 版本对齐，避免 CI 与本地行为漂移。
+  FLUTTER_VERSION: "3.47.0"
+
+jobs:
+  meta:
+    name: 解析版本号
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        run: |
+          v="$(grep -E '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*//' | cut -d'+' -f1 | tr -d '[:space:]')"
+          if [ -z "$v" ]; then echo "pubspec.yaml 未找到 version:"; exit 1; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "解析到版本号: $v"
+
+  build-windows:
+    name: Windows x64 安装包
+    needs: meta
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: false
+
+      - name: 依赖解析
+        run: flutter pub get
+
+      - name: 构建 Windows Release
+        run: flutter build windows --release
+
+      - name: Inno Setup 打包（复用本地脚本）
+        shell: cmd
+        run: installer\windows\build_installer.bat -SkipBuild -Arch x64 -NoPause
+
+      - name: 校验产物
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path dist -Filter "daro-Setup-*.exe" -ErrorAction SilentlyContinue
+          if (-not $exe) { Write-Error "dist 下未找到 daro-Setup-*.exe"; exit 1 }
+          $exe | ForEach-Object { "打包完成: $($_.Name) ($([math]::Round($_.Length/1MB,1)) MB)" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daro-windows-x64
+          path: dist/daro-Setup-*.exe
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS universal 安装包
+    needs: meta
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: false
+
+      - name: 依赖解析
+        run: flutter pub get
+
+      # 先做一次标准构建：完成 CocoaPods 安装 + 生成 Flutter ephemeral 配置。
+      # 之后再用 xcodebuild 追加多架构，避免 --config-only 漏装 Pods 导致链接失败。
+      - name: 初始化 macOS 构建（pod install + Flutter 配置）
+        run: flutter build macos --release
+
+      - name: 构建 universal（x86_64 + arm64）
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -workspace macos/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk macosx \
+            -derivedDataPath build/macos/dd \
+            ARCHS="x86_64 arm64" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: 打包 dmg + zip
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+        run: bash installer/macos/make_dmg.sh "$VER"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daro-macos-universal
+          path: release/daro-*macos*
+          if-no-files-found: error
+
+  build-linux:
+    name: Linux x64 安装包
+    needs: meta
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: 安装系统依赖（GTK / 打包工具 / 图标转换）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libgtk-3-dev pkg-config \
+            imagemagick libsqlite3-0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: false
+
+      - name: 启用 Linux 桌面
+        run: |
+          flutter config --enable-linux-desktop
+          flutter --version
+
+      - name: 依赖解析
+        run: flutter pub get
+
+      - name: 构建 Linux Release
+        run: flutter build linux --release
+
+      - name: 打包 deb + tar.xz
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+        run: bash installer/linux/package_linux.sh "$VER"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daro-linux-x64
+          path: release/daro-*linux*
+          if-no-files-found: error
+
+  release:
+    name: 发布 GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [meta, build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载全部平台的产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: daro-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: 列出待上传文件
+        run: ls -R artifacts
+
+      - name: 创建 Draft Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: daro ${{ needs.meta.outputs.version }}
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          files: artifacts/*

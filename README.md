@@ -64,6 +64,46 @@ flutter run -d windows
 
 ---
 
+## 📦 发布与安装包（GitHub Actions 自动打包）
+
+本机（Windows）只能打 Windows 包，macOS / Linux 需在各自平台构建——因此打包交给
+GitHub Actions，一次触发并行产出三平台安装包：
+
+| 平台 | Runner | 产物 |
+|---|---|---|
+| Windows | `windows-latest` | `daro-Setup-<ver>-x64.exe`（Inno Setup，复用 `installer/windows`） |
+| macOS | `macos-14` | `daro-<ver>-macos-universal.dmg` / `.zip`（x86_64 + arm64 通用） |
+| Linux | `ubuntu-22.04` | `daro-<ver>-linux-amd64.deb` 与 `daro-<ver>-linux-x64.tar.xz` |
+
+工作流：`.github/workflows/release.yml`。版本号唯一来源仍是 `pubspec.yaml` 的
+`version:`，打包脚本（`installer/linux/package_linux.sh`、`installer/macos/make_dmg.sh`
+及既有 `installer/windows/build_installer.bat`）都从中取值。
+
+**发布流程**：
+
+```bash
+# 1) 确认版本号已在 pubspec.yaml 里更新，并同步生成的常量文件
+python tool/gen_version.py
+# 2) 打 tag 推送 → Actions 自动构建三平台产物并发布 Draft Release
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+- 打 `v*` tag：构建三平台 → 汇总成一个 **Draft Release**（预填变更说明，人工确认后手动
+  Publish，避免误发）。
+- 只想试跑：在 Actions 页面手动 `Run workflow`（`workflow_dispatch`），产物以 artifacts
+  形式保留，不建 Release。
+
+**已知限制 / 需自行处理**：
+
+- macOS 包仅做 ad-hoc 签名、未做开发者证书签名与公证，用户首次打开需右键“打开”绕过
+  Gatekeeper。要正式分发需在 Secrets 里配置签名证书并加公证步骤。
+- Linux arm64、Windows arm64 未纳入默认矩阵（x64 runner 无法可靠交叉编译）；如需要，
+  用对应架构的原生 runner 追加 job 即可。
+- 目标机使用 SQL Server / Access（ODBC）与 MySQL 仍需自行安装对应系统驱动，与打包无关。
+
+---
+
 ## 🔗 相关链接
 
 - 组件库：[base-ui-flutter](https://github.com/SpringHgui/base-ui-flutter)
