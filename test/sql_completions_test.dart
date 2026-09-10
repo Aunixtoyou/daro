@@ -184,6 +184,143 @@ void main() {
     expect(_buildAt(ctx, builder, 'SELECT nobody.', 13), isNull);
   });
 
+  group('表别名解析(FROM / JOIN / UPDATE)', () {
+    test('识别 AS / 省略 AS / JOIN / 多表 / schema 限定 / UPDATE', () {
+      expect(parseTableAliases('SELECT * FROM tag AS b WHERE b.id = 1'),
+          {'b': 'tag'});
+      expect(parseTableAliases('SELECT * FROM tag b'), {'b': 'tag'});
+      expect(parseTableAliases('SELECT * FROM a JOIN b AS x ON x.id = 1'),
+          {'x': 'b'});
+      expect(parseTableAliases('SELECT * FROM a t1, b t2'),
+          {'t1': 'a', 't2': 'b'});
+      expect(parseTableAliases('SELECT * FROM public.tag AS b'), {'b': 'tag'});
+      expect(parseTableAliases('UPDATE tag t SET t.name = 1'), {'t': 'tag'});
+      // 大小写不敏感,键统一小写
+      expect(parseTableAliases('select * from TAG as B'), {'b': 'TAG'});
+    });
+
+    test('保留字 / 字符串 / 注释不产生别名', () {
+      expect(parseTableAliases('SELECT * FROM tag WHERE id = 1'), isEmpty);
+      expect(parseTableAliases('SELECT * FROM tag ORDER BY id'), isEmpty);
+      expect(parseTableAliases('SELECT * FROM a JOIN b ON a.id = b.id'),
+          isEmpty);
+      expect(parseTableAliases("SELECT 'from tag as b'"), isEmpty);
+      expect(parseTableAliases('-- from tag as b'), isEmpty);
+      expect(parseTableAliases('/* from tag as b */ SELECT 1'), isEmpty);
+    });
+  });
+
+  testWidgets('别名「b.」列补全:别名声明在其他行也能解析', (tester) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(builder: (context) {
+        ctx = context;
+        return const SizedBox();
+      }),
+    ));
+
+    final manager = _managerWithSchema(tables: ['tag']);
+    final builder = SqlPromptsBuilder(
+      describeTableImpl: (manager, conn, db, table) async {
+        expect(table, 'tag');
+        return [
+          const ColumnDef(name: 'id', type: 'int'),
+          const ColumnDef(name: 'name', type: 'varchar'),
+        ];
+      },
+    );
+    builder.updateContext(manager, _conn, 'db');
+    // 整篇 SQL:别名在 FROM 行,光标在 WHERE 行(美化后多行的典型形态)
+    builder.sqlTextOf = () => 'SELECT *\nFROM tag AS b\nWHERE b.';
+
+    // 首次触发:异步加载列尚未完成,无提示
+    expect(_buildAt(ctx, builder, 'WHERE b.', 8), isNull);
+    await tester.pump();
+
+    final value = _buildAt(ctx, builder, 'WHERE b.', 8);
+    expect(value, isNotNull);
+    expect(value!.input, '');
+    expect(_words(value), containsAll(['id', 'name']));
+    final prompt = value.prompts.first as SqlPrompt;
+    expect(prompt.kind, SqlPromptKind.column);
+    expect(prompt.detail, 'int');
+
+    // 别名输入列前缀:按前缀过滤
+    final filtered = _buildAt(ctx, builder, 'WHERE b.i', 9);
+    expect(filtered, isNotNull);
+    expect(_words(filtered!), ['id']);
+  });
+
+  testWidgets('别名列结构预热:键入「b.」即刻出提示', (tester) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(builder: (context) {
+        ctx = context;
+        return const SizedBox();
+      }),
+    ));
+
+    final manager = _managerWithSchema(tables: ['tag']);
+    final builder = SqlPromptsBuilder(
+      describeTableImpl: (manager, conn, db, table) async => [
+        const ColumnDef(name: 'id', type: 'int'),
+        const ColumnDef(name: 'name', type: 'varchar'),
+      ],
+    );
+    builder.updateContext(manager, _conn, 'db');
+
+    // 只写到 FROM 子句(别名已声明):预热在后台启动,此时还没打「b.」
+    builder.sqlTextOf = () => 'SELECT *\nFROM tag AS b\nWHERE ';
+    _buildAt(ctx, builder, 'WHERE ', 6);
+    await tester.pump();
+
+    // 键入「b.」的瞬间即拿到列,不需要再多敲一个字符
+    builder.sqlTextOf = () => 'SELECT *\nFROM tag AS b\nWHERE b.';
+    final value = _buildAt(ctx, builder, 'WHERE b.', 8);
+    expect(value, isNotNull);
+    expect(_words(value!), containsAll(['id', 'name']));
+  });
+
+  testWidgets('未设置整篇 SQL 时,退化为当前行内的别名', (tester) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(builder: (context) {
+        ctx = context;
+        return const SizedBox();
+      }),
+    ));
+
+    final manager = _managerWithSchema(tables: ['tag']);
+    final builder = SqlPromptsBuilder(
+      describeTableImpl: (manager, conn, db, table) async => [
+        const ColumnDef(name: 'id', type: 'int'),
+      ],
+    );
+    builder.updateContext(manager, _conn, 'db');
+
+    const sql = 'SELECT * FROM tag as b WHERE b.';
+    expect(_buildAt(ctx, builder, sql, sql.length), isNull);
+    await tester.pump();
+    expect(_words(_buildAt(ctx, builder, sql, sql.length)!), ['id']);
+  });
+
+  testWidgets('别名指向不存在的表时不提示', (tester) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(builder: (context) {
+        ctx = context;
+        return const SizedBox();
+      }),
+    ));
+
+    final manager = _managerWithSchema(tables: ['users']);
+    final builder = SqlPromptsBuilder();
+    builder.updateContext(manager, _conn, 'db');
+    builder.sqlTextOf = () => 'SELECT * FROM no_such_table AS b WHERE b.';
+
+    expect(_buildAt(ctx, builder, 'WHERE b.', 8), isNull);
+  });
+
   testWidgets('运行上下文切换后列缓存清空', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(

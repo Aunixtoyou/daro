@@ -178,10 +178,123 @@ bool _matchWord(String word, String input) {
   return w != i && w.startsWith(i);
 }
 
+// ────────────────────────────────────────────────────────────
+// 表别名解析(FROM / JOIN / UPDATE 的 `AS` 别名 → 实际表名)
+// ────────────────────────────────────────────────────────────
+
+/// 限定名:schema.table,可作为表引用
+final RegExp _sqlQualifiedName =
+    RegExp(r'^[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*$');
+
+/// 裸标识符(不含 `.`):可作为别名
+final RegExp _sqlPlainName = RegExp(r'^[A-Za-z_][A-Za-z0-9_$]*$');
+
+/// 词法切分 token:限定名 / 数字 / 单个符号(空白自动跳过)
+final RegExp _sqlToken =
+    RegExp(r'[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*|\d+|\S');
+
+/// 解析 SQL 中的「表别名 → 实际表名」映射(键为小写别名)。
+///
+/// 识别 `FROM` / `JOIN` / `UPDATE` 之后的表引用,支持:
+/// - 带 `AS`(`FROM tag AS b`)与省略 `AS`(`FROM tag b`)两种写法
+/// - schema 限定表名(`FROM public.tag AS b` → `b` 映射到 `tag`)
+/// - 逗号分隔的多表(`FROM a t1, b t2`)
+///
+/// 字符串字面量 / 注释先剥离,SQL 保留字(WHERE、ORDER 等)不会被误判为别名。
+Map<String, String> parseTableAliases(String sql) {
+  final aliases = <String, String>{};
+  final tokens = [
+    for (final match in _sqlToken.allMatches(_stripSqlLiterals(sql)))
+      match.group(0)!,
+  ];
+  for (var i = 0; i < tokens.length; i++) {
+    final head = tokens[i].toUpperCase();
+    if (head != 'FROM' && head != 'JOIN' && head != 'UPDATE') continue;
+    var j = i + 1;
+    var first = true;
+    while (j < tokens.length) {
+      // FROM 之后允许逗号分隔的多表:`FROM a, b`
+      if (!first) {
+        if (tokens[j] != ',') break;
+        j++;
+      }
+      first = false;
+      if (j >= tokens.length || !_sqlQualifiedName.hasMatch(tokens[j])) break;
+      final table = _unqualified(tokens[j]);
+      j++;
+      // 可选 `AS`;省略时下一个非保留标识符即别名
+      if (j < tokens.length && tokens[j].toUpperCase() == 'AS') j++;
+      if (j < tokens.length &&
+          _sqlPlainName.hasMatch(tokens[j]) &&
+          !kSqlKeywords.contains(tokens[j].toUpperCase())) {
+        aliases.putIfAbsent(tokens[j].toLowerCase(), () => table);
+        j++;
+      }
+    }
+  }
+  return aliases;
+}
+
+/// 剥离字符串字面量与注释(替换为空白,便于后续词法切分)
+String _stripSqlLiterals(String sql) {
+  final buffer = StringBuffer();
+  var i = 0;
+  while (i < sql.length) {
+    final ch = sql[i];
+    if (ch == '-' && i + 1 < sql.length && sql[i + 1] == '-') {
+      // 行注释:吃到行尾
+      while (i < sql.length && sql[i] != '\n') {
+        buffer.write(' ');
+        i++;
+      }
+    } else if (ch == '/' && i + 1 < sql.length && sql[i + 1] == '*') {
+      // 块注释:吃到 `*/`
+      while (i < sql.length) {
+        if (sql[i] == '*' && i + 1 < sql.length && sql[i + 1] == '/') {
+          buffer.write('  ');
+          i += 2;
+          break;
+        }
+        buffer.write(' ');
+        i++;
+      }
+    } else if (ch == "'" || ch == '"' || ch == '`') {
+      // 字符串字面量 / 引号标识符:整体剥离
+      buffer.write(' ');
+      i++;
+      while (i < sql.length) {
+        if (sql[i] == ch) {
+          // 成对单引号转义(`''`)仍属字面量内部
+          if (ch == "'" && i + 1 < sql.length && sql[i + 1] == "'") {
+            buffer.write('  ');
+            i += 2;
+            continue;
+          }
+          buffer.write(' ');
+          i++;
+          break;
+        }
+        buffer.write(' ');
+        i++;
+      }
+    } else {
+      buffer.write(ch);
+      i++;
+    }
+  }
+  return buffer.toString();
+}
+
+/// 取限定名的最后一段(`public.tag` → `tag`)
+String _unqualified(String name) {
+  final dot = name.lastIndexOf('.');
+  return dot < 0 ? name : name.substring(dot + 1);
+}
+
 /// schema 感知的 SQL 自动补全构建器(查询编辑页使用)。
 ///
 /// - 普通输入:SQL 关键字 + 内置函数 + 当前运行上下文库的表 / 视图 / 函数
-/// - 「表名.」后:该表的列名(懒加载,走 [ConnectionManager.describeTable])
+/// - 「表名.」/「别名.」后:该表的列名(懒加载,走 [ConnectionManager.describeTable])
 /// - 引号字符串内不提示
 ///
 /// schema 数据复用连接树已缓存的 [TableListState];未加载时异步触发
@@ -194,7 +307,14 @@ class SqlPromptsBuilder implements CodeAutocompletePromptsBuilder {
       String database,
       String table,
     )? describeTableImpl,
+    this.sqlTextOf,
   }) : _describeTableImpl = describeTableImpl;
+
+  /// 完整 SQL 文本提供者(解析 `FROM ... AS 别名` 用)。
+  ///
+  /// 别名可能声明在光标所在行之外(如美化为多行后),故需整篇文本;
+  /// 未设置时退化为仅解析当前行。查询页在 initState 接入编辑控制器。
+  String Function()? sqlTextOf;
 
   /// 列结构加载钩子(测试注入 mock;缺省走 [ConnectionManager.describeTable])
   final Future<List<ColumnDef>> Function(
@@ -214,6 +334,10 @@ class SqlPromptsBuilder implements CodeAutocompletePromptsBuilder {
 
   /// 正在加载列的缓存 key(防止重复请求)
   final Set<String> _loadingColumns = {};
+
+  /// 别名映射缓存:按整篇 SQL 文本缓存,避免每次按键重复解析
+  String? _aliasCacheKey;
+  Map<String, String> _aliasCache = const {};
 
   /// 查询页运行上下文(连接/库/模式)变化时刷新数据源并清列缓存
   void updateContext(ConnectionManager? manager, ConnectionInfo? conn,
@@ -238,6 +362,10 @@ class SqlPromptsBuilder implements CodeAutocompletePromptsBuilder {
     CodeLine codeLine,
     CodeLineSelection selection,
   ) {
+    // 预热别名指向的表结构:键入「别名.」时列已就绪,提示无需等待懒加载
+    final documentSql = sqlTextOf?.call();
+    if (documentSql != null) _prewarmAliasedColumns(documentSql);
+
     final text = codeLine.text;
     final extent = selection.extentOffset.clamp(0, text.length);
     if (extent == 0) return null;
@@ -258,8 +386,9 @@ class SqlPromptsBuilder implements CodeAutocompletePromptsBuilder {
     // 行内引号未闭合(光标在字符串字面量内)不提示
     if (_insideStringLiteral(before)) return null;
 
-    final prompts =
-        owner != null ? _columnPromptsOf(owner, input) : _wordPrompts(input);
+    final prompts = owner != null
+        ? _columnPromptsOf(owner, input, codeLine)
+        : _wordPrompts(input);
     if (prompts.isEmpty) return null;
     return CodeAutocompleteEditingValue(
       input: input,
@@ -283,17 +412,57 @@ class SqlPromptsBuilder implements CodeAutocompletePromptsBuilder {
     return quote || charQuote;
   }
 
-  /// 「表名.」列补全:表名大小写不敏感解析,列懒加载
-  List<SqlPrompt> _columnPromptsOf(String owner, String input) {
-    final table = _resolveTable(owner);
+  /// 「表名.」/「别名.」列补全:大小写不敏感解析,列懒加载
+  List<SqlPrompt> _columnPromptsOf(
+      String owner, String input, CodeLine codeLine) {
+    final table = _tableOfOwner(owner, codeLine);
     if (table == null) return const [];
-    final key = '${_conn?.name}|$_database|$_schema|$table';
+    final key = _columnCacheKey(table);
     final cached = _columnCache[key];
     if (cached == null) {
       _loadColumns(table, key);
       return const [];
     }
     return _filter(cached, input);
+  }
+
+  /// 解析「限定名」对应的实际表:先按表 / 视图名匹配,
+  /// 未命中再按 `FROM / JOIN / UPDATE` 的表别名解析(`FROM tag AS b` 中的 `b`)。
+  String? _tableOfOwner(String owner, CodeLine codeLine) {
+    final direct = _resolveTable(owner);
+    if (direct != null) return direct;
+    final sql = sqlTextOf?.call() ?? codeLine.text;
+    if (sql.isEmpty) return null;
+    final aliased = _aliasesOf(sql)[owner.toLowerCase()];
+    return aliased == null ? null : _resolveTable(aliased);
+  }
+
+  /// 别名映射(按整篇 SQL 文本缓存,避免每次按键重复解析)
+  Map<String, String> _aliasesOf(String sql) {
+    if (_aliasCacheKey != sql) {
+      _aliasCacheKey = sql;
+      _aliasCache = parseTableAliases(sql);
+    }
+    return _aliasCache;
+  }
+
+  /// 列缓存的 key:"连接|库|模式|表"
+  String _columnCacheKey(String table) =>
+      '${_conn?.name}|$_database|$_schema|$table';
+
+  /// 预热整篇 SQL 中别名指向的表结构:键入「别名.」的瞬间列已就绪,
+  /// 无需等待第一次懒加载(失败的表会在缓存中留空,不重复请求)
+  void _prewarmAliasedColumns(String sql) {
+    if (sql.isEmpty) return;
+    final aliases = _aliasesOf(sql);
+    if (aliases.isEmpty) return;
+    for (final table in aliases.values.toSet()) {
+      final canonical = _resolveTable(table);
+      if (canonical == null) continue;
+      final key = _columnCacheKey(canonical);
+      if (_columnCache.containsKey(key)) continue;
+      _loadColumns(canonical, key);
+    }
   }
 
   /// 在当前库的表 / 视图中解析表名(大小写不敏感),返回规范名

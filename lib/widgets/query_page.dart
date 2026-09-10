@@ -147,6 +147,8 @@ class _QueryPageState extends State<QueryPage> {
     _schema = widget.schema;
     _controller.text = context.read<AppState>().queryTextFor(_tabKey);
     _controller.addListener(_onEditorChanged);
+    // 补全构建器读取整篇 SQL:解析 `FROM ... AS 别名`(别名可能在其他行)
+    _promptsBuilder.sqlTextOf = () => _controller.text;
     _syncPromptContext();
   }
 
