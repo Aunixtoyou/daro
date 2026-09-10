@@ -1,6 +1,7 @@
 import 'package:sqlite3/sqlite3.dart';
 
 import '../db_data.dart';
+import '../sql_row_cap.dart';
 import 'db_driver.dart';
 
 /// SQLite 驱动(基于 sqlite3 FFI)。
@@ -167,9 +168,12 @@ class SqliteDriver implements DatabaseDriver {
   @override
   Future<QueryResult> executeQuery(String sql, {int limit = 1000}) {
     final db = _get();
+    // 封顶必须下推到服务端:sqlite3 的 select() 返回已物化的 ResultSet,
+    // 在调用方 break 救不回来(详见 sql_row_cap.dart)
+    final capped = capSelectSql(sql, maxRows: limit + 1);
     // select() 对任何返回行的语句都适用(含 RETURNING);
     // 纯写语句经 select() 得到空结果集,再用 updatedRows 补受影响行数
-    final result = db.select(sql);
+    final result = db.select(capped ?? sql);
 
     final columns = result.columnNames.toList();
     final rows = <List<String>>[];
@@ -185,6 +189,8 @@ class SqliteDriver implements DatabaseDriver {
       rows: rows,
       affectedRows: columns.isEmpty ? db.updatedRows : 0,
       limit: limit,
+      // 服务端只被允许返回 limit + 1 行,多出的那行即「还有更多」的确证
+      moreRows: capped != null && result.length > limit,
     ));
   }
 

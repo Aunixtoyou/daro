@@ -4,6 +4,7 @@ import 'package:dart_odbc/dart_odbc.dart';
 
 import '../db_data.dart';
 import 'db_driver.dart';
+import 'odbc_query.dart';
 
 /// SQL Server 驱动,单一后端:系统 ODBC(dart_odbc)。
 ///
@@ -300,16 +301,17 @@ class SqlServerDriver implements DatabaseDriver {
 
   @override
   Future<QueryResult> executeQuery(String sql, {int limit = 1000}) async {
-    final r = await _runSql(sql);
-
-    final rows = <List<String>>[];
-    for (final row in r.rows) {
-      if (rows.length >= limit) break;
-      rows.add([
-        for (final col in r.columns) row[col]?.toString() ?? 'NULL',
-      ]);
-    }
-    return QueryResult(columns: r.columns, rows: rows, limit: limit);
+    // 走封顶流式,不能用 _runSql:dart_odbc 的 execute 会把整棵结果集在
+    // ODBC isolate 里抽干后整体拷回,`SELECT * FROM 大表` 会把进程内存
+    // 顶到数 GB(实测 5.3 GB)并报 HY001「Memory allocation failure」,
+    // 且要等全表读完才出结果。详见 odbcQueryCapped。
+    final r = await odbcQueryCapped(_get(), sql, limit: limit);
+    return QueryResult(
+      columns: r.columns,
+      rows: r.rows,
+      limit: limit,
+      moreRows: r.moreRows,
+    );
   }
 
   @override

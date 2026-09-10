@@ -1,6 +1,7 @@
 import 'package:postgres/postgres.dart' hide ConnectionInfo;
 
 import '../db_data.dart';
+import '../sql_row_cap.dart';
 import 'db_driver.dart';
 
 /// PostgreSQL 驱动(纯 Dart 实现,基于 postgres 包)。
@@ -275,7 +276,10 @@ class PgsqlDriver implements DatabaseDriver {
   @override
   Future<QueryResult> executeQuery(String sql, {int limit = 1000}) async {
     final conn = _get();
-    final result = await conn.execute(sql);
+    // 封顶必须下推到服务端:postgres 包的 Result 是已物化的 List<ResultRow>,
+    // 在调用方 break 救不回来(详见 sql_row_cap.dart)
+    final capped = capSelectSql(sql, maxRows: limit + 1);
+    final result = await conn.execute(capped ?? sql);
 
     final columns = [
       for (final col in result.schema.columns)
@@ -299,7 +303,13 @@ class PgsqlDriver implements DatabaseDriver {
         for (var i = 0; i < columns.length; i++) row[i]?.toString() ?? 'NULL',
       ]);
     }
-    return QueryResult(columns: columns, rows: rows, limit: limit);
+    return QueryResult(
+      columns: columns,
+      rows: rows,
+      limit: limit,
+      // 服务端只被允许返回 limit + 1 行,多出的那行即「还有更多」的确证
+      moreRows: capped != null && result.length > limit,
+    );
   }
 
   @override

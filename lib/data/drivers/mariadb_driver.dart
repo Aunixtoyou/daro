@@ -1,6 +1,7 @@
 import 'package:mysql_client/mysql_client.dart';
 
 import '../db_data.dart';
+import '../sql_row_cap.dart';
 import 'db_driver.dart';
 
 /// MariaDB 驱动(纯 Dart 实现,基于 mysql_client)。
@@ -206,7 +207,10 @@ class MariadbDriver implements DatabaseDriver {
   @override
   Future<QueryResult> executeQuery(String sql, {int limit = 1000}) async {
     final conn = await _get();
-    final rs = await conn.execute(sql);
+    // 封顶必须下推到服务端:mysql_client 会把整棵结果集读进内存才交回,
+    // 在调用方 break 救不回来(详见 sql_row_cap.dart)
+    final capped = capSelectSql(sql, maxRows: limit + 1);
+    final rs = await conn.execute(capped ?? sql);
 
     final columns = [for (final col in rs.cols) col.name];
     if (columns.isEmpty) {
@@ -226,7 +230,13 @@ class MariadbDriver implements DatabaseDriver {
         for (var i = 0; i < columns.length; i++) row.colAt(i) ?? 'NULL',
       ]);
     }
-    return QueryResult(columns: columns, rows: rows, limit: limit);
+    return QueryResult(
+      columns: columns,
+      rows: rows,
+      limit: limit,
+      // 服务端只被允许返回 limit + 1 行,多出的那行即「还有更多」的确证
+      moreRows: capped != null && rs.rows.length > limit,
+    );
   }
 
   @override

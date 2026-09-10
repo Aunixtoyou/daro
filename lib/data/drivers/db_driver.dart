@@ -52,6 +52,7 @@ class QueryResult {
     required this.rows,
     this.affectedRows = 0,
     this.limit = 1000,
+    this.moreRows = false,
   });
 
   /// 列名(仅 SELECT 有值;空列表表示语句无结果集)
@@ -69,8 +70,12 @@ class QueryResult {
   /// 是否返回了结果集
   bool get isSelect => columns.isNotEmpty;
 
+  /// 驱动精确上报的「还有更多行未取回」:封顶流式取数(见 `odbcQueryCapped`)
+  /// 靠多读的那一行判定;一次性取数的驱动无从得知,保持默认 false
+  final bool moreRows;
+
   /// 是否达到上限(可能还有更多行)
-  bool get truncated => isSelect && rows.length >= limit;
+  bool get truncated => isSelect && (moreRows || rows.length >= limit);
 }
 
 /// 表字段(列)定义:「设计表」视图展示的结构信息。

@@ -2,6 +2,7 @@ import 'package:dart_odbc/dart_odbc.dart';
 
 import '../db_data.dart';
 import 'db_driver.dart';
+import 'odbc_query.dart';
 
 /// Microsoft Access 驱动(基于 dart_odbc,通过 Windows ODBC 访问 .mdb/.accdb)。
 ///
@@ -204,27 +205,15 @@ class AccessDriver implements DatabaseDriver {
 
   @override
   Future<QueryResult> executeQuery(String sql, {int limit = 1000}) async {
-    final odbc = _get();
-    final rows = await odbc.execute(sql);
-
-    if (rows.isEmpty) {
-      // 写操作(INSERT/UPDATE/DELETE)无结果集
-      return QueryResult(
-        columns: const [],
-        rows: const [],
-        limit: limit,
-      );
-    }
-    final columns = rows.first.keys.toList();
-    final resultRows = <List<String>>[];
-    for (final row in rows) {
-      if (resultRows.length >= limit) break;
-      resultRows.add([
-        for (final col in columns)
-          row[col]?.toString() ?? 'NULL',
-      ]);
-    }
-    return QueryResult(columns: columns, rows: resultRows, limit: limit);
+    // 与 SQL Server 驱动共用封顶流式取数:odbc.execute 会把整棵结果集
+    // 一次性抽干拷回,大表 SELECT * 会顶爆内存(详见 odbcQueryCapped)
+    final r = await odbcQueryCapped(_get(), sql, limit: limit);
+    return QueryResult(
+      columns: r.columns,
+      rows: r.rows,
+      limit: limit,
+      moreRows: r.moreRows,
+    );
   }
 
   @override
