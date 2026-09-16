@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../data/db_data.dart';
 import '../data/drivers/db_driver.dart';
+import '../data/table_design.dart';
 import 'app_state.dart';
 
 /// 元数据加载状态
@@ -523,6 +524,38 @@ class ConnectionManager extends ChangeNotifier {
       await fresh.useDatabase(database);
       return fresh.describeTable(database, table, schema: schema);
     }
+  }
+
+  /// 反查已有表的完整设计信息,供「设计表」以编辑模式回填设计器。
+  /// 返回 `null` = 该类型不支持结构编辑(界面转只读展示),抛异常 = 读取失败;
+  /// 驱动实例获取与失效重连一次的处理与 [describeTable] 一致。
+  Future<DesignTable?> readTableDesign(
+    ConnectionInfo conn,
+    String database,
+    String table, {
+    String? schema,
+  }) async {
+    final driver = await _driverFor(conn);
+    try {
+      await driver.useDatabase(database);
+      return await driver.readTableDesign(database, table, schema: schema);
+    } catch (e) {
+      // 可能是连接被服务端断开:丢弃驱动,重连后重试一次
+      await _drivers.remove(conn.name)?.close();
+      final fresh = await _driverFor(conn);
+      await fresh.useDatabase(database);
+      return fresh.readTableDesign(database, table, schema: schema);
+    }
+  }
+
+  /// 读取设计器下拉候选(排序规则 / 运算符类别 / 表空间)。
+  /// 无对应系统目录的驱动返回空集(界面退化为手输),不当作错误;
+  /// 连接异常仍向上抛出,由调用方静默兜底。
+  Future<DesignCandidates> readDesignCandidates(
+      ConnectionInfo conn, String database) async {
+    final driver = await _driverFor(conn);
+    await driver.useDatabase(database);
+    return driver.readDesignCandidates(database);
   }
 
   /// 获取视图 / 函数的定义(CREATE 语句文本),供「设计视图 / 设计函数」展示与重写。

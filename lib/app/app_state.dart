@@ -96,10 +96,17 @@ class TableColumnSpec {
 
 /// DDL 操作结果:ok 为是否成功,error 携带失败原因(成功时为空)
 class DdlOutcome {
-  const DdlOutcome(this.ok, [this.error]);
+  const DdlOutcome(this.ok, [this.error, this.failedAt = 0, this.rolledBack = false]);
 
   final bool ok;
   final String? error;
+
+  /// 批量语句中失败发生在第几条(1 基;0 = 非批量或未执行到语句)
+  final int failedAt;
+
+  /// 失败时是否已事务回滚(仅事务化执行的方言为 true;
+  /// 否则之前的语句已生效)
+  final bool rolledBack;
 }
 
 /// 连接树 / 对象面板中可选中的节点种类
@@ -770,7 +777,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 设计表:打开该表的结构设计页(只读展示字段结构)。
+  /// 设计表:打开该表的结构设计页(以编辑模式回填已有结构)。
   /// [connection] + [database] + [schema] 指明表所属上下文,据此走真实驱动查询。
   void designTable(
     String name, {
@@ -942,6 +949,30 @@ class AppState extends ChangeNotifier {
         if (activeTab == oldTitle) activeTab = newTitle;
         break;
       }
+    }
+  }
+
+  /// 标签重命名(「设计表」保存后表被重命名时同步标题)。
+  /// 标题在 [OpenTab] 中是 final,故原位重建实例;激活项同步。
+  void renameTab(String oldTitle, String newTitle) {
+    if (oldTitle == newTitle) return;
+    for (var i = 0; i < tabs.length; i++) {
+      final tab = tabs[i];
+      if (tab.title != oldTitle) continue;
+      tabs[i] = OpenTab(
+        tab.type,
+        newTitle,
+        tab.typeId,
+        tab.connection,
+        tab.database,
+        tab.schema,
+        tab.routineCategory,
+        tab.routineParams,
+        tab.routineComment,
+      );
+      if (activeTab == oldTitle) activeTab = newTitle;
+      notifyListeners();
+      return;
     }
   }
 
@@ -1433,6 +1464,46 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// 顺序执行设计器生成的 DDL 语句集(新建表与「设计表」保存共用)。
+  ///
+  /// [useTx] 为 true 时整体包在 BEGIN / COMMIT 中(仅 PostgreSQL 家族支持
+  /// 事务化 DDL),失败自动 ROLLBACK 并在结果里标记已回滚;其余类型 DDL
+  /// 自带提交或不可回滚,失败时之前的语句已生效。成功后刷新对象列表。
+  Future<DdlOutcome> _runDesignStatements(
+    List<String> stmts, {
+    required ConnectionInfo conn,
+    required String database,
+    required bool useTx,
+    String? schema,
+  }) async {
+    var attempted = 0;
+    try {
+      if (useTx) {
+        await connectionManager.runQuery(conn, 'BEGIN', database: database, limit: 1);
+      }
+      for (final sql in stmts) {
+        attempted++;
+        await connectionManager.runQuery(conn, sql, database: database, limit: 1);
+      }
+      if (useTx) {
+        await connectionManager.runQuery(conn, 'COMMIT', database: database, limit: 1);
+      }
+    } catch (e) {
+      var rolledBack = false;
+      if (useTx) {
+        // 回滚失败不覆盖原始错误
+        try {
+          await connectionManager.runQuery(conn, 'ROLLBACK',
+              database: database, limit: 1);
+          rolledBack = true;
+        } catch (_) {}
+      }
+      return DdlOutcome(false, e.toString(), attempted, rolledBack);
+    }
+    await connectionManager.refreshDatabase(conn, database, schema: schema);
+    return DdlOutcome(true);
+  }
+
   /// 新建表设计器「保存」:将 [design] 生成的目标方言 DDL 逐条执行。
   ///
   /// PostgreSQL 家族在事务中执行(失败回滚,不留下半成品表);
@@ -1456,29 +1527,48 @@ class AppState extends ChangeNotifier {
     final stmts = DdlBuilder.buildStatements(design, conn.typeId);
     final useTx =
         isPg && stmts.length > 1 && !design.indexes.any((i) => i.concurrent);
+    return _runDesignStatements(
+      stmts,
+      conn: conn,
+      database: database,
+      useTx: useTx,
+      schema: schema,
+    );
+  }
 
-    try {
-      if (useTx) {
-        await connectionManager.runQuery(conn, 'BEGIN', database: database, limit: 1);
-      }
-      for (final sql in stmts) {
-        await connectionManager.runQuery(conn, sql, database: database, limit: 1);
-      }
-      if (useTx) {
-        await connectionManager.runQuery(conn, 'COMMIT', database: database, limit: 1);
-      }
-    } catch (e) {
-      if (useTx) {
-        // 回滚失败不覆盖原始错误
-        try {
-          await connectionManager.runQuery(conn, 'ROLLBACK',
-              database: database, limit: 1);
-        } catch (_) {}
-      }
-      return DdlOutcome(false, e.toString());
-    }
-    await connectionManager.refreshDatabase(conn, database, schema: schema);
-    return DdlOutcome(true);
+  /// 「设计表」保存:比较 [target](界面当前值)与 [original](打开时的反查快照),
+  /// 只执行差异生成的 ALTER 语句;无变更时直接成功返回(不碰库)。
+  ///
+  /// 不能由 ALTER 表达的变更(触发器 / 规则 / 排除约束 / 存储参数 /
+  /// PG 与 SQL Server 的列序调整等)由 [DdlBuilder.alterUnsupported] 阻断并
+  /// 说明原因——宁可拒于执行前,也不静默丢弃用户的修改。
+  Future<DdlOutcome> saveTableDesignEdit(
+    DesignTable target,
+    DesignTable original, {
+    required String connection,
+    required String database,
+    String? schema,
+  }) async {
+    final conn = connectionByName(connection);
+    if (conn == null) return DdlOutcome(false, '连接 "$connection" 不存在');
+    target.schema = schema;
+
+    final check = DdlBuilder.validate(target);
+    if (!check.ok) return DdlOutcome(false, check.error ?? '设计数据不完整');
+    final blocked = DdlBuilder.alterUnsupported(target, original, conn.typeId);
+    if (blocked != null) return DdlOutcome(false, blocked);
+
+    final stmts = DdlBuilder.buildAlterStatements(target, original, conn.typeId);
+    if (stmts.isEmpty) return DdlOutcome(true);
+    return _runDesignStatements(
+      stmts,
+      conn: conn,
+      database: database,
+      // ALTER 集合不含 CONCURRENTLY 索引(索引新增走普通 CREATE INDEX),
+      // PostgreSQL 可整体事务化
+      useTx: DdlBuilder.isPgLike(conn.typeId),
+      schema: schema,
+    );
   }
 
   /// 执行任意 DDL(新建视图 / 函数等),成功后刷新对象列表。

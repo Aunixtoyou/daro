@@ -289,6 +289,7 @@ cd base-ui-flutter && flutter analyze
 | 进度条 | `ProgressBar` | misc |
 | 弹出层 | `Popover` | overlay |
 | 对话框 | `MessageBox` | overlay |
+| 多选候选弹窗 | `ListPickerDialog` | dialogs |
 | 提示 | `Toast` | overlay |
 | 头像 | `Avatar` | misc |
 | 面包屑 | `Breadcrumb` | misc |

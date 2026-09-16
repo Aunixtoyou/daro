@@ -1,6 +1,7 @@
 import 'package:dart_odbc/dart_odbc.dart';
 
 import '../db_data.dart';
+import '../table_design.dart';
 import 'db_driver.dart';
 import 'odbc_query.dart';
 
@@ -252,6 +253,18 @@ class AccessDriver implements DatabaseDriver {
         ColumnDef(name: col, type: '—'),
     ];
   }
+
+  /// 「设计表」不支持编辑:ACE ODBC 的元数据能力不足以反查约束 / 索引,
+  /// 且 JET SQL 无 ALTER COLUMN。返回 null 使界面转为只读展示。
+  @override
+  Future<DesignTable?> readTableDesign(String database, String table,
+          {String? schema}) async =>
+      null;
+
+  /// 设计器下拉候选:ACE ODBC 无排序规则 / 表空间目录,返回空集退化为手输。
+  @override
+  Future<DesignCandidates> readDesignCandidates(String database) async =>
+      DesignCandidates.empty;
 
   @override
   Future<String?> getDefinition(String database, String name, String kind,

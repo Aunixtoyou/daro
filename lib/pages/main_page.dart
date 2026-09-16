@@ -13,7 +13,6 @@ import '../widgets/status_bar.dart';
 import '../widgets/view_tabs.dart';
 import '../widgets/table_data_page.dart';
 import '../widgets/query_page.dart';
-import '../widgets/table_design_page.dart';
 import '../widgets/table_designer_page.dart';
 import '../widgets/routine_design_page.dart';
 
@@ -115,11 +114,14 @@ class _MainPageState extends State<MainPage> {
                                               tab.title.length -
                                                   suffixDesign.length)
                                           : tab.title;
-                                  return TableDesignPage(
-                                    table: tableName,
+                                  // 「设计表」与「新建表」共用同一设计器:
+                                  // existingTable 非空 = 编辑模式(反查结构 + 保存 ALTER)
+                                  return TableDesignerPage(
+                                    title: tab.title,
                                     connection: tab.connection!,
                                     database: tab.database!,
                                     schema: tab.schema,
+                                    existingTable: tableName,
                                   );
                                 }
                                 if (tab.type == TabType.query)
