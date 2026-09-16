@@ -2,7 +2,9 @@ import 'package:mysql_client/mysql_client.dart';
 
 import '../db_data.dart';
 import '../sql_row_cap.dart';
+import '../table_design.dart';
 import 'db_driver.dart';
+import 'mysql_driver.dart' show mysqlCollationNames, mysqlReadTableDesign;
 
 /// MariaDB 驱动(纯 Dart 实现,基于 mysql_client)。
 ///
@@ -57,6 +59,18 @@ class MariadbDriver implements DatabaseDriver {
 
   /// 单引号字符串字面量转义(库名作条件值时用)
   String _literal(String value) => value.replaceAll("'", "''");
+
+  /// 「设计表」反查:与 MySQL 共用同一套 `information_schema` 取数逻辑
+  /// (缺的 `MATCH_OPTION` / `CHECK_CONSTRAINTS` 已在其中降级)
+  @override
+  Future<DesignTable?> readTableDesign(String database, String table,
+          {String? schema}) async =>
+      mysqlReadTableDesign(await _get(), database, table, 'mariadb');
+
+  /// 设计器下拉候选:与 MySQL 同源(只有排序规则目录)。
+  @override
+  Future<DesignCandidates> readDesignCandidates(String database) async =>
+      DesignCandidates(collations: await mysqlCollationNames(await _get()));
 
   @override
   Future<List<String>> listDatabases() async {

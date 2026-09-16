@@ -2,6 +2,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import '../db_data.dart';
 import '../sql_row_cap.dart';
+import '../table_design.dart';
 import 'db_driver.dart';
 
 /// SQLite 驱动(基于 sqlite3 FFI)。
@@ -210,6 +211,19 @@ class SqliteDriver implements DatabaseDriver {
         ),
     ];
   }
+
+  /// 「设计表」不支持编辑:SQLite 没有改列类型 / 重建约束的 ALTER 语法,
+  /// 改列需重建表并搬数据(本次范围外)。返回 null 使界面转为只读展示。
+  @override
+  Future<DesignTable?> readTableDesign(String database, String table,
+          {String? schema}) async =>
+      null;
+
+  /// 设计器下拉候选:SQLite 无排序规则 / 表空间目录(COLLATE 名仅为声明式字段),
+  /// 返回空集使界面退化为手输。
+  @override
+  Future<DesignCandidates> readDesignCandidates(String database) async =>
+      DesignCandidates.empty;
 
   @override
   Future<String?> getDefinition(String database, String name, String kind,

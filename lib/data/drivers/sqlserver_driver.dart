@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:dart_odbc/dart_odbc.dart';
 
 import '../db_data.dart';
+import '../db_metadata.dart';
+import '../table_design.dart';
 import 'db_driver.dart';
 import 'odbc_query.dart';
 
@@ -336,6 +338,282 @@ class SqlServerDriver implements DatabaseDriver {
         ),
     ];
   }
+
+  /// 设计器下拉候选:SQL Server 只有排序规则目录(`sys.fn_helpcollations()`);
+  /// 文件组与运算符类别无可类比的目录。
+  @override
+  Future<DesignCandidates> readDesignCandidates(String database) async {
+    final r = await _runSql('SELECT name AS collname '
+        'FROM sys.fn_helpcollations() ORDER BY name');
+    return DesignCandidates(
+      collations: [
+        for (final row in r.rows) row['collname']?.toString() ?? '',
+      ].where((e) => e.isNotEmpty).toList(),
+    );
+  }
+
+  /// 「设计表」反查:列 / 主键 / 索引 / 外键 / 唯一键 / 检查 / 表注释。
+  ///
+  /// 一律走 `sys.*` 目录(`INFORMATION_SCHEMA` 拿不到 identity 种子、索引
+  /// fill_factor 与扩展属性);多列索引 / 约束在 Dart 端按序号聚合
+  /// (`STRING_AGG` 需 SQL Server 2017+,不为此引入降级分支)。
+  /// 计算列只展示基础类型与约性,其表达式无法由 ALTER COLUMN 回写:
+  /// 不改它就不会生成语句,改它则由服务端报错并原文回显。
+  @override
+  Future<DesignTable?> readTableDesign(String database, String table,
+      {String? schema}) async {
+    final design = DesignTable()
+      ..name = table
+      ..schema = schema;
+    final db = _quoted(database);
+    final sch = _literal(schema ?? 'dbo');
+    final tbl = _literal(table);
+    // OBJECT_ID 接受 '库.模式.表' 形式的名称串(与 getDefinition 一致约定)
+    final obj = "N'${_literal(database)}.${sch}.${tbl}'";
+
+    // ── 列 ─────────────────────────────────────────────────
+    final colRs = await _runSql(
+      'SELECT c.column_id AS ORD, c.name AS COL, LOWER(ty.name) AS TYP, '
+      'c.max_length AS MAXLEN, c.precision AS PREC, c.scale AS SCALE, '
+      'c.is_nullable AS NULLABLE, c.is_identity AS IDENT, '
+      'c.collation_name AS COLL, '
+      '(SELECT TOP 1 dc.definition FROM ${db}.sys.default_constraints dc '
+      'WHERE dc.parent_object_id = c.object_id '
+      'AND dc.parent_column_id = c.column_id) AS DEF, '
+      '(SELECT TOP 1 ic.seed_value FROM ${db}.sys.identity_columns ic '
+      'WHERE ic.object_id = c.object_id '
+      'AND ic.column_id = c.column_id) AS SEED, '
+      '(SELECT TOP 1 ic.increment_value FROM ${db}.sys.identity_columns ic '
+      'WHERE ic.object_id = c.object_id '
+      'AND ic.column_id = c.column_id) AS INCR, '
+      "(SELECT TOP 1 CAST(ep.value AS nvarchar(4000)) "
+      'FROM ${db}.sys.extended_properties ep '
+      'WHERE ep.major_id = c.object_id AND ep.minor_id = c.column_id '
+      "AND ep.name = 'MS_Description') AS CMT "
+      'FROM ${db}.sys.columns c '
+      'JOIN ${db}.sys.tables tb ON tb.object_id = c.object_id '
+      'JOIN ${db}.sys.schemas sc ON sc.schema_id = tb.schema_id '
+      'JOIN ${db}.sys.types ty ON ty.user_type_id = c.user_type_id '
+      "WHERE tb.name = '$tbl' AND sc.name = '$sch' ORDER BY c.column_id",
+    );
+    for (final row in colRs.rows) {
+      final base = (row['TYP']?.toString() ?? '');
+      final maxLen = _intOf(row['MAXLEN']);
+      final size = _ssColumnSize(base, maxLen, _intOf(row['PREC']), _intOf(row['SCALE']));
+      design.columns.add(
+        DesignColumn(
+          name: row['COL']?.toString() ?? '',
+          type: baseTypeOf(base, 'sqlserver'),
+          length: size.length,
+          decimal: size.decimal,
+          notNull: !_truthy(row['NULLABLE']),
+          defaultValue: normaliseDefault(row['DEF']?.toString(), 'sqlserver') ?? '',
+          comment: row['CMT']?.toString() ?? '',
+          collation: row['COLL']?.toString() ?? '',
+          // SQL Server 的 IDENTITY 只有 seed / increment 两项,其余序列选项无对应
+          identityMode: _truthy(row['IDENT']) ? 'ALWAYS' : '',
+          identityStart: _text(row['SEED']),
+          identityIncrement: _text(row['INCR']),
+        ),
+      );
+    }
+
+    // ── 主键 / 唯一约束(名称与列序取自 sys.key_constraints) ────
+    final keyRs = await _runSql(
+      'SELECT kc.name AS INAME, kc.type AS KTYPE, ic.key_ordinal AS ORD, '
+      'c.name AS COL '
+      'FROM ${db}.sys.key_constraints kc '
+      'JOIN ${db}.sys.indexes i ON i.object_id = kc.parent_object_id '
+      'AND i.index_id = kc.unique_index_id '
+      'JOIN ${db}.sys.index_columns ic ON ic.object_id = i.object_id '
+      'AND ic.index_id = i.index_id '
+      'JOIN ${db}.sys.columns c ON c.object_id = ic.object_id '
+      'AND c.column_id = ic.column_id '
+      'WHERE kc.parent_object_id = OBJECT_ID($obj) '
+      'ORDER BY kc.name, ic.key_ordinal',
+    );
+    final keyCols = <String, List<String>>{};
+    final keyKind = <String, String>{};
+    for (final row in keyRs.rows) {
+      final name = row['INAME']?.toString() ?? '';
+      if (name.isEmpty) continue;
+      (keyCols[name] ??= []).add(row['COL']?.toString() ?? '');
+      keyKind[name] = row['KTYPE']?.toString() ?? '';
+    }
+    final pkColumns = <String>{};
+    for (final e in keyCols.entries) {
+      final cols = e.value.where((c) => c.isNotEmpty).join(', ');
+      if (keyKind[e.key] == 'PRIMARY_KEY') {
+        design.pkName = e.key;
+        pkColumns.addAll(e.value);
+      } else {
+        design.uniqueKeys.add(DesignUniqueKey(name: e.key, columns: cols));
+      }
+    }
+    for (final c in design.columns) {
+      c.primaryKey = pkColumns.contains(c.name);
+    }
+
+    // ── 索引(排除主键与唯一约束支撑的索引) ────────────────
+    final idxRs = await _runSql(
+      'SELECT i.name AS INAME, i.is_unique AS UNIQ, i.fill_factor AS FF, '
+      'i.has_filter AS HASFILTER, '
+      'ic.key_ordinal AS ORD, c.name AS COL '
+      'FROM ${db}.sys.indexes i '
+      'JOIN ${db}.sys.tables tb ON tb.object_id = i.object_id '
+      'JOIN ${db}.sys.schemas sc ON sc.schema_id = tb.schema_id '
+      'JOIN ${db}.sys.index_columns ic ON ic.object_id = i.object_id '
+      'AND ic.index_id = i.index_id '
+      'JOIN ${db}.sys.columns c ON c.object_id = ic.object_id '
+      'AND c.column_id = ic.column_id '
+      "WHERE tb.name = '$tbl' AND sc.name = '$sch' "
+      'AND i.is_primary_key = 0 AND i.is_unique_constraint = 0 '
+      'ORDER BY i.name, ic.key_ordinal',
+    );
+    final idxCols = <String, List<String>>{};
+    final idxMeta = <String, List<String>>{};
+    for (final row in idxRs.rows) {
+      final name = row['INAME']?.toString() ?? '';
+      if (name.isEmpty) continue;
+      (idxCols[name] ??= []).add(row['COL']?.toString() ?? '');
+      final ff = _intOf(row['FF']) ?? 0;
+      // 筛选项索引(FILTERED)的谓词无法由 DesignIndex 回写,不纳入列表以免
+      // 保存时被当成「新增同名索引」而失败
+      idxMeta[name] = [
+        _truthy(row['UNIQ']) ? '1' : '',
+        ff <= 0 ? '' : '$ff',
+        _truthy(row['HASFILTER']) ? '1' : '',
+      ];
+    }
+    for (final e in idxCols.entries) {
+      if (idxMeta[e.key]![2] == '1') continue;
+      design.indexes.add(DesignIndex(
+        name: e.key,
+        columns: e.value.where((c) => c.isNotEmpty).join(', '),
+        unique: idxMeta[e.key]![0] == '1',
+        fillFactor: idxMeta[e.key]![1],
+      ));
+    }
+
+    // ── 外键 ────────────────────────────────────────────────
+    final fkRs = await _runSql(
+      'SELECT fk.name AS INAME, fk.delete_action_desc AS DELACT, '
+      'fk.update_action_desc AS UPACT, '
+      'OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS RSCH, '
+      'OBJECT_NAME(fk.referenced_object_id) AS RTBL, '
+      'fc.constraint_column_id AS ORD, '
+      'c.name AS COL, rc.name AS REFCOL '
+      'FROM ${db}.sys.foreign_keys fk '
+      'JOIN ${db}.sys.foreign_key_columns fc '
+      'ON fc.constraint_object_id = fk.object_id '
+      'JOIN ${db}.sys.columns c ON c.object_id = fk.parent_object_id '
+      'AND c.column_id = fc.parent_column_id '
+      'JOIN ${db}.sys.columns rc ON rc.object_id = fk.referenced_object_id '
+      'AND rc.column_id = fc.referenced_column_id '
+      'WHERE fk.parent_object_id = OBJECT_ID($obj) '
+      'ORDER BY fk.name, fc.constraint_column_id',
+    );
+    final fkCols = <String, List<String>>{};
+    final fkRefCols = <String, List<String>>{};
+    final fkMeta = <String, List<String>>{};
+    for (final row in fkRs.rows) {
+      final name = row['INAME']?.toString() ?? '';
+      if (name.isEmpty) continue;
+      (fkCols[name] ??= []).add(row['COL']?.toString() ?? '');
+      (fkRefCols[name] ??= []).add(row['REFCOL']?.toString() ?? '');
+      fkMeta[name] = [
+        row['RTBL']?.toString() ?? '',
+        row['RSCH']?.toString() ?? '',
+        (row['DELACT']?.toString() ?? 'NO_ACTION').replaceAll('_', ' '),
+        (row['UPACT']?.toString() ?? 'NO_ACTION').replaceAll('_', ' '),
+      ];
+    }
+    for (final name in fkCols.keys) {
+      final m = fkMeta[name]!;
+      design.foreignKeys.add(DesignForeignKey(
+        name: name,
+        columns: fkCols[name]!.join(', '),
+        refColumns: fkRefCols[name]!.join(', '),
+        refTable: m[0],
+        refSchema: m[1],
+        onDelete: m[2],
+        onUpdate: m[3],
+      ));
+    }
+
+    // ── 检查约束 ────────────────────────────────────────────
+    final ckRs = await _runSql(
+      'SELECT cc.name AS INAME, cc.definition AS EXPR '
+      'FROM ${db}.sys.check_constraints cc '
+      'WHERE cc.parent_object_id = OBJECT_ID($obj) ORDER BY cc.name',
+    );
+    for (final row in ckRs.rows) {
+      design.checks.add(DesignCheck(
+        name: row['INAME']?.toString() ?? '',
+        expression: stripRedundantParens(row['EXPR']?.toString() ?? ''),
+      ));
+    }
+
+    // ── 表注释(扩展属性 MS_Description,minor_id = 0) ────────
+    final cmtRs = await _runSql(
+      'SELECT CAST(ep.value AS nvarchar(4000)) AS V '
+      'FROM ${db}.sys.extended_properties ep '
+      'JOIN ${db}.sys.tables tb ON tb.object_id = ep.major_id '
+      'JOIN ${db}.sys.schemas sc ON sc.schema_id = tb.schema_id '
+      "WHERE ep.name = 'MS_Description' AND ep.minor_id = 0 "
+      "AND tb.name = '$tbl' AND sc.name = '$sch'",
+    );
+    if (cmtRs.rows.isNotEmpty) {
+      design.tableComment = cmtRs.rows.first['V']?.toString() ?? '';
+    }
+    return design;
+  }
+
+  /// SQL Server 列的长度 / 小数位折算。
+  ///
+  /// `sys.columns.max_length` 是字节数(nvarchar(50) 返 100)、-1 表示 `max`;
+  /// `decimal` / `numeric` 用 precision + scale;`datetime2` / `time` 的
+  /// `scale` 即括号里的精度;其余类型(含 int / bit / date / uniqueidentifier)
+  /// 无长度参数,不得把字节数当成长度写进 DDL。
+  static ({String length, String decimal}) _ssColumnSize(
+      String type, int? maxLen, int? prec, int? scale) {
+    switch (type) {
+      case 'decimal':
+      case 'numeric':
+        return (length: prec == null ? '' : '$prec', decimal: scale == null ? '' : '$scale');
+      case 'float':
+        return (length: prec == null ? '' : '$prec', decimal: '');
+      case 'datetime2':
+      case 'datetimeoffset':
+      case 'time':
+        return (length: scale == null ? '' : '$scale', decimal: '');
+      case 'char':
+      case 'varchar':
+      case 'nchar':
+      case 'nvarchar':
+      case 'binary':
+      case 'varbinary':
+        if (maxLen == null) return (length: '', decimal: '');
+        if (maxLen < 0) return (length: 'max', decimal: '');
+        final len = lengthFromBytes(maxLen, type) ?? maxLen;
+        return (length: '$len', decimal: '');
+      default:
+        return (length: '', decimal: '');
+    }
+  }
+
+  /// bit 列的 ODBC 回值形态不一(bool / 0-1 / 字符),统一成布尔
+  static bool _truthy(Object? v) {
+    if (v == null) return false;
+    if (v is bool) return v;
+    if (v is num) return v != 0;
+    final s = v.toString().toLowerCase();
+    return s == '1' || s == 't' || s == 'true' || s == 'yes';
+  }
+
+  static int? _intOf(Object? v) => v is int ? v : int.tryParse('${v ?? ''}');
+
+  static String _text(Object? v) => v?.toString() ?? '';
 
   @override
   Future<String?> getDefinition(String database, String name, String kind,

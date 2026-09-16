@@ -1,7 +1,9 @@
 import 'package:postgres/postgres.dart' hide ConnectionInfo;
 
 import '../db_data.dart';
+import '../db_metadata.dart';
 import '../sql_row_cap.dart';
+import '../table_design.dart';
 import 'db_driver.dart';
 
 /// PostgreSQL 驱动(纯 Dart 实现,基于 postgres 包)。
@@ -312,6 +314,10 @@ class PgsqlDriver implements DatabaseDriver {
     );
   }
 
+  /// 元数据归一化时使用的方言 id([kPgLikeTypes] 的任一成员即可,
+  /// 解析层只按方言族区分)
+  static const String _dialect = 'postgresql';
+
   @override
   Future<List<ColumnDef>> describeTable(String database, String table,
       {String? schema}) async {
@@ -332,6 +338,310 @@ class PgsqlDriver implements DatabaseDriver {
           defaultValue: row[3]?.toString(),
         ),
     ];
+  }
+
+  /// 「设计表」反查:列 / 主键 / 索引 / 外键 / 唯一键 / 检查 / 排除 / 注释 / 存储参数。
+  ///
+  /// 一律走 `pg_*` 系统目录:identity 序列选项、索引方法、约束真名都无法从
+  /// `information_schema` 取得。子查询均为单条语句,失败即抛出由界面展示错误。
+  @override
+  Future<DesignTable?> readTableDesign(String database, String table,
+      {String? schema}) async {
+    final conn = _get();
+    final sch = _lit(schema ?? _schemaOrPublic);
+    final tbl = _lit(table);
+    final design = DesignTable()
+      ..name = table
+      ..schema = schema;
+
+    // ── 列 ──────────────────────────────────────────────────
+    // 类型取 format_type 原文(含长度 / 精度 / 数组维度);默认值取
+    // pg_get_expr 原文(information_schema 会丢表达式细节);
+    // attidentity: a = ALWAYS、d = BY DEFAULT、空 = 非 identity。
+    final colResult = await conn.execute(
+      'SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, '
+      'pg_get_expr(d.adbin, d.adrelid), a.attidentity, '
+      'col_description(a.attrelid, a.attnum), '
+      '(SELECT collname FROM pg_collation WHERE oid = a.attcollation) '
+      'FROM pg_attribute a '
+      'JOIN pg_class cl ON cl.oid = a.attrelid '
+      'JOIN pg_namespace nc ON nc.oid = cl.relnamespace '
+      'LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum '
+      'WHERE nc.nspname = $sch AND cl.relname = $tbl '
+      'AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum',
+    );
+    for (final row in colResult) {
+      final rawType = row[1]?.toString() ?? '';
+      // 数组:格式为 `int4[]`,先剥维度标记再归一化类型名,维数单独回写
+      final scalarType = rawType.replaceAll('[]', '');
+      final dims = RegExp(r'\[\]').allMatches(rawType).length;
+      final split = splitColumnType(scalarType);
+      design.columns.add(
+        DesignColumn(
+          name: row[0]?.toString() ?? '',
+          type: baseTypeOf(scalarType, _dialect),
+          length: split.length,
+          decimal: split.decimal,
+          notNull: row[2] == true || row[2]?.toString() == 't',
+          comment: row[5]?.toString() ?? '',
+          // nextval / currval 默认值由 identity 建模承载,不重复写 DEFAULT
+          defaultValue: normaliseDefault(row[3]?.toString(), _dialect) ?? '',
+          dimension: dims == 0 ? '' : '$dims',
+          collation: _collationOf(row[6]?.toString()),
+          identityMode: switch (row[4]?.toString()) {
+            'a' => 'ALWAYS',
+            'd' => 'BY DEFAULT',
+            _ => '',
+          },
+        ),
+      );
+    }
+
+    // ── identity 序列选项 ────────────────────────────────────
+    // pg_sequence 需 PG 10+,且需序列的读权限;失败只影响序列选项目展示,
+    // 不能连带整个反查失败(退化为“仅不预填序列选项”)。
+    if (design.columns.any((c) => c.hasIdentity)) {
+      try {
+        final seqResult = await conn.execute(
+          'SELECT a.attname, q.seqincrement, q.seqstart, q.seqmin, q.seqmax, '
+          'q.seqcache, q.seqcycle '
+          'FROM pg_attribute a '
+          'JOIN pg_class cl ON cl.oid = a.attrelid '
+          'JOIN pg_namespace nc ON nc.oid = cl.relnamespace '
+          'JOIN pg_sequence q ON q.seqrelid = to_regclass('
+          "pg_get_serial_sequence(format('%I.%I', nc.nspname, cl.relname), "
+          'a.attname)) '
+          'WHERE nc.nspname = $sch AND cl.relname = $tbl '
+          "AND a.attnum > 0 AND a.attidentity <> ''",
+        );
+        for (final row in seqResult) {
+          final name = row[0]?.toString() ?? '';
+          for (final col in design.columns) {
+            if (col.name != name) continue;
+            col.identityIncrement = _text(row[1]);
+            col.identityStart = _text(row[2]);
+            col.identityMinValue = _text(row[3]);
+            col.identityMaxValue = _text(row[4]);
+            col.identityCache = _text(row[5]);
+            col.identityCycle = row[6] == true || row[6]?.toString() == 't';
+          }
+        }
+      } catch (_) {
+        // 序列选项读不到:保留 identity 模式,选项留空由服务端取默认
+      }
+    }
+
+    // ── 约束(主键 / 唯一 / 外键 / 检查 / 排除) ──────────────
+    final conResult = await conn.execute(
+      'SELECT con.conname, con.contype, '
+      "(SELECT string_agg(pa.attname, ',' ORDER BY k.ord) "
+      'FROM generate_subscripts(con.conkey, 1) AS k(ord) '
+      'JOIN pg_attribute pa ON pa.attrelid = con.conrelid '
+      'AND pa.attnum = con.conkey[k.ord]), '
+      "CASE WHEN con.contype = 'f' THEN "
+      "(SELECT string_agg(ra.attname, ',' ORDER BY k.ord) "
+      'FROM generate_subscripts(con.confkey, 1) AS k(ord) '
+      'JOIN pg_attribute ra ON ra.attrelid = con.confrelid '
+      'AND ra.attnum = con.confkey[k.ord]) END, '
+      "CASE WHEN con.contype = 'f' THEN "
+      '(SELECT rn.nspname FROM pg_class rc '
+      'JOIN pg_namespace rn ON rn.oid = rc.relnamespace '
+      'WHERE rc.oid = con.confrelid) END, '
+      "CASE WHEN con.contype = 'f' THEN "
+      '(SELECT rc.relname FROM pg_class rc WHERE rc.oid = con.confrelid) END, '
+      'con.confdeltype, con.confupdtype, con.confmatchtype, '
+      'con.condeferrable, con.condeferred, '
+      "CASE WHEN con.contype IN ('c', 'x') THEN pg_get_constraintdef(con.oid) "
+      'END, '
+      // 约束注释(`COMMENT ON CONSTRAINT`):设计表的外键「注释」列需回显
+      "shobj_description(con.oid, 'pg_constraint') "
+      'FROM pg_constraint con '
+      'JOIN pg_class cl ON cl.oid = con.conrelid '
+      'JOIN pg_namespace nc ON nc.oid = cl.relnamespace '
+      'WHERE nc.nspname = $sch AND cl.relname = $tbl ORDER BY con.conname',
+    );
+    final pkColumns = <String>{};
+    for (final row in conResult) {
+      final name = _text(row[0]);
+      final type = _text(row[1]);
+      final cols = _text(row[2]);
+      switch (type) {
+        case 'p':
+          design.pkName = name;
+          pkColumns.addAll(_nameList(cols));
+        case 'u':
+          design.uniqueKeys.add(DesignUniqueKey(
+              name: name, columns: cols, comment: _text(row[12])));
+        case 'f':
+          design.foreignKeys.add(DesignForeignKey(
+            name: name,
+            columns: cols,
+            refColumns: _text(row[3]),
+            refSchema: _text(row[4]),
+            refTable: _text(row[5]),
+            onDelete: _fkAction(row[6]),
+            onUpdate: _fkAction(row[7]),
+            // confmatchtype: f = MATCH FULL、p = PARTIAL、s = SIMPLE(默认)
+            matchAll: _text(row[8]) == 'f',
+            deferrable: _text(row[9]).isEmpty
+                ? ''
+                : (_text(row[9]) == 't' ? 'YES' : 'NO'),
+            deferred: _text(row[10]) == 't' ? 'YES' : 'NO',
+            comment: _text(row[12]),
+          ));
+        case 'c':
+          final def = _text(row[11]);
+          design.checks.add(
+            DesignCheck(
+                name: name,
+                expression: _checkExpr(def),
+                comment: _text(row[12])),
+          );
+        case 'x':
+          final def = _text(row[11]);
+          final m = RegExp(r'^EXCLUDE\s+USING\s+(\w+)\s*\((.*)\)$',
+                  caseSensitive: false)
+              .firstMatch(def);
+          design.excludes.add(DesignExclude(
+            name: name,
+            method: m?.group(1) ?? '',
+            columns: m?.group(2) ?? def,
+            comment: _text(row[12]),
+          ));
+      }
+    }
+    if (pkColumns.isNotEmpty) {
+      for (final col in design.columns) {
+        col.primaryKey = pkColumns.contains(col.name);
+      }
+    }
+
+    // ── 索引(排除约束支撑的索引已由上面作为约束展示) ────────
+    final idxResult = await conn.execute(
+      'SELECT c.relname, am.amname, '
+      "(SELECT string_agg(pg_get_indexdef(i.indexrelid, k.ord, true), ',' "
+      'ORDER BY k.ord) FROM generate_subscripts(i.indkey, 1) AS k(ord)), '
+      'i.indisunique, '
+      "(SELECT split_part(o, '=', 2) FROM unnest(c.reloptions) AS o "
+      "WHERE o LIKE 'fillfactor=%' LIMIT 1), "
+      '(SELECT t2.spcname FROM pg_tablespace t2 WHERE t2.oid = c.reltablespace), '
+      // 索引自己的注释(`COMMENT ON INDEX`)
+      "obj_description(c.oid, 'pg_class') "
+      'FROM pg_index i '
+      'JOIN pg_class c ON c.oid = i.indexrelid '
+      'JOIN pg_am am ON am.oid = c.relam '
+      'JOIN pg_class t ON t.oid = i.indrelid '
+      'JOIN pg_namespace nc ON nc.oid = t.relnamespace '
+      'WHERE nc.nspname = $sch AND t.relname = $tbl '
+      'AND NOT EXISTS (SELECT 1 FROM pg_constraint con '
+      'WHERE con.conindid = i.indexrelid) ORDER BY c.relname',
+    );
+    for (final row in idxResult) {
+      design.indexes.add(DesignIndex(
+        name: _text(row[0]),
+        method: _text(row[1]),
+        columns: _text(row[2]),
+        unique: row[3] == true || row[3]?.toString() == 't',
+        fillFactor: _text(row[4]),
+        tablespace: _text(row[5]),
+        comment: _text(row[6]),
+      ));
+    }
+
+    // ── 表注释与存储参数 ──────────────────────────────────
+    // 表选项(relpersistence / owner / inherits / cluster)在编辑模式不可改,仍得
+    // 回显:否则选项页看起来像“这张表没有所有者”。
+    final tableResult = await conn.execute(
+      'SELECT obj_description(c.oid), '
+      "(SELECT split_part(o, '=', 2) FROM unnest(c.reloptions) AS o "
+      "WHERE o LIKE 'fillfactor=%' LIMIT 1), "
+      '(SELECT ts.spcname FROM pg_tablespace ts WHERE ts.oid = c.reltablespace), '
+      "c.relpersistence, pg_get_userbyid(c.relowner), "
+      "(SELECT string_agg(pn.nspname || '.' || pc.relname, ', ') "
+      'FROM pg_inherits ih '
+      'JOIN pg_class pc ON pc.oid = ih.inhparent '
+      'JOIN pg_namespace pn ON pn.oid = pc.relnamespace '
+      'WHERE ih.inhrelid = c.oid), '
+      '(SELECT ic.relname FROM pg_index ci JOIN pg_class ic '
+      'ON ic.oid = ci.indexrelid WHERE ci.indrelid = c.oid '
+      'AND ci.indisclustered LIMIT 1) '
+      'FROM pg_class c '
+      'JOIN pg_namespace nc ON nc.oid = c.relnamespace '
+      "WHERE nc.nspname = $sch AND c.relname = $tbl "
+      "AND c.relkind IN ('r', 'p')",
+    );
+    if (tableResult.isNotEmpty) {
+      final row = tableResult.first;
+      design.tableComment = _text(row[0]);
+      design.fillFactor = _text(row[1]);
+      design.tablespace = _text(row[2]);
+      // relpersistence: u = UNLOGGED、p = PERMANENT、t = TEMPORARY
+      design.unlogged = _text(row[3]) == 'u';
+      design.owner = _text(row[4]);
+      design.inherits = _text(row[5]);
+      design.cluster = _text(row[6]);
+    }
+    return design;
+  }
+
+  /// 设计器下拉候选:排序规则 / 运算符类别 / 表空间均直读系统目录。
+  ///
+  /// 三者都是实例级对象(不按库过滤);名称去重后按字典序返回,候选可达
+  /// 上千行(ICU 排序规则),ComboBox 弹层为 `ListView.builder`,不致于卡顿。
+  @override
+  Future<DesignCandidates> readDesignCandidates(String database) async {
+    final conn = _get();
+    Future<List<String>> names(String sql) async {
+      final rows = await conn.execute(sql);
+      return [for (final row in rows) row[0]?.toString() ?? '']
+          .where((e) => e.isNotEmpty)
+          .toList();
+    }
+
+    return DesignCandidates(
+      collations:
+          await names('SELECT DISTINCT collname FROM pg_collation ORDER BY 1'),
+      opClasses:
+          await names('SELECT DISTINCT opcname FROM pg_opclass ORDER BY 1'),
+      tablespaces:
+          await names('SELECT spcname FROM pg_tablespace ORDER BY 1'),
+    );
+  }
+
+  /// 标量值 → 字符串(null / 空统一为空串,供设计器“留空 = 不输出子句”)
+  static String _text(Object? v) => v?.toString() ?? '';
+
+  /// 逗号分隔的列名串 → 列表(pg_get_indexdef 己按标识符规则加引号)
+  static List<String> _nameList(String s) => s
+      .split(',')
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .map((e) => e.replaceAll(RegExp(r'^"|"$'), '').replaceAll('""', '"'))
+      .toList();
+
+  /// 列使用了数据库默认排序规则时不回填(避免保存时多出 `COLLATE "default"`)
+  static String _collationOf(String? v) {
+    final s = v?.trim() ?? '';
+    return (s.isEmpty || s == 'default') ? '' : s;
+  }
+
+  /// confdeltype / confupdtype 字母码 → SQL 动作关键字
+  static String _fkAction(Object? v) => switch (_text(v)) {
+        'a' => 'NO ACTION',
+        'r' => 'RESTRICT',
+        'c' => 'CASCADE',
+        'n' => 'SET NULL',
+        'd' => 'SET DEFAULT',
+        _ => 'NO ACTION',
+      };
+
+  /// `CHECK ((expr))` → `expr`(保留内部的类型转换与括号)
+  static String _checkExpr(String def) {
+    var s = def.trim();
+    if (s.length > 6 && s.substring(0, 6).toUpperCase() == 'CHECK ') {
+      s = s.substring(6).trim();
+    }
+    return stripRedundantParens(s);
   }
 
   @override

@@ -1,7 +1,9 @@
 import 'package:mysql_client/mysql_client.dart';
 
 import '../db_data.dart';
+import '../db_metadata.dart';
 import '../sql_row_cap.dart';
+import '../table_design.dart';
 import 'db_driver.dart';
 
 /// MySQL 驱动(纯 Dart 实现,基于 mysql_client)。
@@ -56,6 +58,11 @@ class MysqlDriver implements DatabaseDriver {
 
   /// 单引号字符串字面量转义(库名作条件值时用)
   String _literal(String value) => value.replaceAll("'", "''");
+
+  @override
+  Future<DesignTable?> readTableDesign(String database, String table,
+          {String? schema}) async =>
+      mysqlReadTableDesign(await _get(), database, table, 'mysql');
 
   @override
   Future<List<String>> listDatabases() async {
@@ -261,6 +268,12 @@ class MysqlDriver implements DatabaseDriver {
     ];
   }
 
+  /// 设计器下拉候选:MySQL / MariaDB 只有排序规则目录(`information_schema.COLLATIONS`);
+  /// 运算符类别无此概念,表空间需存储引擎级对象(默认无可列举)。
+  @override
+  Future<DesignCandidates> readDesignCandidates(String database) async =>
+      DesignCandidates(collations: await mysqlCollationNames(await _get()));
+
   @override
   Future<String?> getDefinition(String database, String name, String kind,
       {String? schema}) async {
@@ -284,4 +297,228 @@ class MysqlDriver implements DatabaseDriver {
     if (idx < 0) return null;
     return row.colAt(idx);
   }
+}
+
+/// MySQL / MariaDB 共用的排序规则候选(`information_schema.COLLATIONS`)。
+///
+/// 不按库过滤:排序规则是实例级对象。行数可达数百,ComboBox 弹层为
+/// `ListView.builder`,懒渲染不致于卡顿。
+Future<List<String>> mysqlCollationNames(MySQLConnection conn) async {
+  final rs = await conn.execute('SELECT COLLATION_NAME '
+      'FROM information_schema.COLLATIONS ORDER BY 1');
+  return [
+    for (final row in rs.rows) row.colAt(0) ?? '',
+  ].where((e) => e.isNotEmpty).toList();
+}
+
+/// MySQL / MariaDB 共用的「设计表」反查(两者的 `information_schema` 结构一致)。
+///
+/// 抽为库级函数而非让 MariaDB 驱动依赖 [MysqlDriver] 实例:两者仅个别视图列
+/// 有别(`REFERENTIAL_CONSTRAINTS.MATCH_OPTION` 与 `CHECK_CONSTRAINTS` 在旧版
+/// MariaDB 不存在),取数与映射完全相同,那些差异就地降级处理。
+/// [dialect] 为调用方的连接类型 id,用于默认值 / 类型名归一化。
+///
+/// 未采集的信息(模型无对应字段,且不会生成 ALTER 而丢数据):
+/// 表达式索引的索引表达式、生成列定义、字符集(只保留排序规则)。
+Future<DesignTable?> mysqlReadTableDesign(MySQLConnection conn,
+    String database, String table, String dialect) async {
+  final db = "'${database.replaceAll("'", "''")}'";
+  final tbl = "'${table.replaceAll("'", "''")}'";
+  final design = DesignTable()..name = table;
+
+  // ── 列 ──────────────────────────────────────────────────────
+  // COLUMN_TYPE 带完整长度 / 精度 / unsigned,交共用的 splitColumnType 拆分
+  final colRs = await conn.execute(
+    'SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, '
+    'COLUMN_COMMENT, COLLATION_NAME, EXTRA FROM information_schema.COLUMNS '
+    "WHERE TABLE_SCHEMA = $db AND TABLE_NAME = $tbl "
+    'ORDER BY ORDINAL_POSITION',
+  );
+  for (final row in colRs.rows) {
+    final rawType = row.colAt(1) ?? '';
+    final split = splitColumnType(rawType);
+    final extra = (row.colAt(6) ?? '').toLowerCase();
+    var def = normaliseDefault(row.colAt(3), dialect) ?? '';
+    // `ON UPDATE CURRENT_TIMESTAMP` 在 EXTRA 里,模型无独立字段:随默认值一起
+    // 回写(`DEFAULT CURRENT_TIMESTAMP ON UPDATE ...` 为合法语法),否则改该列
+    // 会静默丢掉自动更新语义
+    final on = RegExp(r'on update (.+)$').firstMatch(extra);
+    if (on != null && def.isNotEmpty) def = '$def ON UPDATE ${on.group(1)}';
+    design.columns.add(
+      DesignColumn(
+        name: row.colAt(0) ?? '',
+        type: baseTypeOf(rawType, dialect),
+        length: split.length,
+        decimal: split.decimal,
+        notNull: (row.colAt(2) ?? 'YES') == 'NO',
+        defaultValue: def,
+        comment: row.colAt(4) ?? '',
+        collation: row.colAt(5) ?? '',
+        autoIncrement: extra.contains('auto_increment'),
+      ),
+    );
+  }
+
+  // ── 约束分类(主键 / 唯一 / 外键 / 检查的真名) ────────────
+  final conRs = await conn.execute(
+    'SELECT CONSTRAINT_NAME, CONSTRAINT_TYPE FROM information_schema.TABLE_CONSTRAINTS '
+    "WHERE TABLE_SCHEMA = $db AND TABLE_NAME = $tbl ORDER BY CONSTRAINT_NAME",
+  );
+  final uniqueNames = <String>{};
+  final fkNames = <String>[];
+  final checkNames = <String>{};
+  for (final row in conRs.rows) {
+    final name = row.colAt(0) ?? '';
+    switch (row.colAt(1) ?? '') {
+      case 'PRIMARY KEY':
+        design.pkName = name;
+      case 'UNIQUE':
+        uniqueNames.add(name);
+      case 'FOREIGN KEY':
+        fkNames.add(name);
+      case 'CHECK':
+        checkNames.add(name);
+    }
+  }
+
+  // ── 约束列(一条约束多列时按 ORDINAL_POSITION 定序) ────────
+  final keyCols = <String, List<String>>{};
+  final keyRefCols = <String, List<String>>{};
+  final kcuRs = await conn.execute(
+    'SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_COLUMN_NAME '
+    'FROM information_schema.KEY_COLUMN_USAGE '
+    "WHERE TABLE_SCHEMA = $db AND TABLE_NAME = $tbl "
+    'ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION',
+  );
+  for (final row in kcuRs.rows) {
+    final name = row.colAt(0) ?? '';
+    if (name.isEmpty) continue;
+    final col = row.colAt(1) ?? '';
+    final refCol = row.colAt(2) ?? '';
+    if (col.isNotEmpty) (keyCols[name] ??= []).add(col);
+    if (refCol.isNotEmpty) (keyRefCols[name] ??= []).add(refCol);
+  }
+  String colsOf(String name) => (keyCols[name] ?? const <String>[]).join(', ');
+  String refColsOf(String name) =>
+      (keyRefCols[name] ?? const <String>[]).join(', ');
+  for (final name in uniqueNames) {
+    design.uniqueKeys.add(DesignUniqueKey(name: name, columns: colsOf(name)));
+  }
+  // 主键列标记(字段页「键」列的 钥匙 + 序号 靠它)
+  final pkSet = (keyCols[design.pkName] ?? const <String>[]).toSet();
+  if (pkSet.isNotEmpty) {
+    for (final c in design.columns) {
+      c.primaryKey = pkSet.contains(c.name);
+    }
+  }
+
+  // ── 外键动作(MATCH_OPTION 为 MySQL 8 新增列,旧版 / MariaDB 降级) ──
+  if (fkNames.isNotEmpty) {
+    // 值形式: [引用表, ON DELETE, ON UPDATE, MATCH 选项]
+    final refMeta = <String, List<String>>{};
+    var hasMatchOption = true;
+    try {
+      final rs = await conn.execute(
+        'SELECT CONSTRAINT_NAME, REFERENCED_TABLE_NAME, DELETE_RULE, '
+        'UPDATE_RULE, MATCH_OPTION FROM information_schema.REFERENTIAL_CONSTRAINTS '
+        "WHERE CONSTRAINT_SCHEMA = $db AND TABLE_NAME = $tbl",
+      );
+      for (final row in rs.rows) {
+        refMeta[row.colAt(0) ?? ''] = [
+          row.colAt(1) ?? '',
+          row.colAt(2) ?? 'NO ACTION',
+          row.colAt(3) ?? 'NO ACTION',
+          row.colAt(4) ?? '',
+        ];
+      }
+    } catch (_) {
+      hasMatchOption = false;
+      refMeta.clear();
+      final rs = await conn.execute(
+        'SELECT CONSTRAINT_NAME, REFERENCED_TABLE_NAME, DELETE_RULE, '
+        'UPDATE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS '
+        "WHERE CONSTRAINT_SCHEMA = $db AND TABLE_NAME = $tbl",
+      );
+      for (final row in rs.rows) {
+        refMeta[row.colAt(0) ?? ''] = [
+          row.colAt(1) ?? '',
+          row.colAt(2) ?? 'NO ACTION',
+          row.colAt(3) ?? 'NO ACTION',
+          '',
+        ];
+      }
+    }
+    for (final name in fkNames) {
+      final m = refMeta[name] ?? const ['', 'NO ACTION', 'NO ACTION', ''];
+      design.foreignKeys.add(DesignForeignKey(
+        name: name,
+        columns: colsOf(name),
+        // MySQL / MariaDB 无独立模式层(库即模式),不填 refSchema,引用回当前库
+        refTable: m[0],
+        refColumns: refColsOf(name),
+        onDelete: m[1],
+        onUpdate: m[2],
+        matchAll: hasMatchOption && m[3].toUpperCase() == 'FULL',
+      ));
+    }
+  }
+
+  // ── 检查约束(旧版 MariaDB 无该视图:降级为不展示) ──────────
+  if (checkNames.isNotEmpty) {
+    try {
+      final rs = await conn.execute(
+        'SELECT CONSTRAINT_NAME, CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS '
+        "WHERE CONSTRAINT_SCHEMA = $db AND TABLE_NAME = $tbl "
+        'ORDER BY CONSTRAINT_NAME',
+      );
+      for (final row in rs.rows) {
+        design.checks.add(DesignCheck(
+          name: row.colAt(0) ?? '',
+          expression: stripRedundantParens(row.colAt(1) ?? ''),
+        ));
+      }
+    } catch (_) {
+      // 视图不存在(MySQL < 8.0.16 / 旧 MariaDB):检查约保持为空
+    }
+  }
+
+  // ── 索引(一条索引占多行,在 Dart 端按名聚合;STRING_AGG 两方言不对齐) ──
+  // 主键与唯一约束自带的索引不重复列入(已由 pkName / uniqueKeys 承载)
+  final idxRs = await conn.execute(
+    'SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, INDEX_TYPE '
+    'FROM information_schema.STATISTICS '
+    "WHERE TABLE_SCHEMA = $db AND TABLE_NAME = $tbl AND INDEX_NAME <> 'PRIMARY' "
+    'ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+  );
+  final byIndex = <String, List<String>>{};
+  for (final row in idxRs.rows) {
+    final name = row.colAt(0) ?? '';
+    if (name.isEmpty || uniqueNames.contains(name)) continue;
+    final entry = (byIndex[name] ??= ['', '', '']);
+    final col = row.colAt(1);
+    // 表达式索引的 COLUMN_NAME 为 NULL:无法安全回写,不纳入字段列表
+    if (col != null && col.isNotEmpty) {
+      entry[0] = entry[0].isEmpty ? col : '${entry[0]}, $col';
+    }
+    entry[1] = (row.colAt(2) ?? '1') == '0' ? '1' : entry[1];
+    entry[2] = (row.colAt(3) ?? '').toLowerCase();
+  }
+  for (final e in byIndex.entries) {
+    if (e.value[0].isEmpty) continue; // 纯表达式索引:跳过
+    design.indexes.add(DesignIndex(
+      name: e.key,
+      columns: e.value[0],
+      method: e.value[2],
+      unique: e.value[1] == '1',
+    ));
+  }
+
+  // ── 表注释 ─────────────────────────────────────────────────
+  final tabRs = await conn.execute(
+    'SELECT TABLE_COMMENT FROM information_schema.TABLES '
+    "WHERE TABLE_SCHEMA = $db AND TABLE_NAME = $tbl",
+  );
+  if (tabRs.rows.isNotEmpty) design.tableComment = tabRs.rows.first.colAt(0) ?? '';
+
+  return design;
 }

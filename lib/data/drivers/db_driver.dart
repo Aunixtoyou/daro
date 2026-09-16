@@ -1,4 +1,5 @@
 import '../db_data.dart';
+import '../table_design.dart';
 import 'access_driver.dart';
 import 'mariadb_driver.dart';
 import 'mysql_driver.dart';
@@ -191,6 +192,22 @@ abstract class DatabaseDriver {
   /// [schema] 非空时限定该模式下的表。
   Future<List<ColumnDef>> describeTable(String database, String table,
       {String? schema});
+
+  /// 反查已有表的完整设计信息(列 / 主键 / 索引 / 外键 / 唯一键 / 检查 /
+  /// 注释 / 存储参数),供「设计表」以编辑模式回填设计器。
+  ///
+  /// 返回 `null` 表示该类型暂不支持结构编辑(SQLite / Access:改列型需重建表、
+  /// 元数据能力不足),界面转为只读展示;与「读取失败」(抛异常)区分。
+  /// 返回的 [DesignTable.name] 为该表名,[schema] 为该表所属模式。
+  Future<DesignTable?> readTableDesign(String database, String table,
+      {String? schema});
+
+  /// 设计器下拉候选(排序规则 / 运算符类别 / 表空间)。
+  ///
+  /// 默认返回空集:没有对应系统目录(或不值得多发一次查询)的驱动无需实现,
+  /// 界面退化为纯输入框(仍可手输)。[database] 仅为上下文,候选本身库无关。
+  Future<DesignCandidates> readDesignCandidates(String database) async =>
+      DesignCandidates.empty;
 
   /// 获取视图 / 函数 / 过程的定义(CREATE 语句文本),供「设计视图 / 设计函数 /
   /// 设计过程」展示与重写。[kind] 为 'view' / 'function' / 'procedure';
