@@ -38,13 +38,15 @@ const Set<String> _blockers = {
 const Set<String> _capableHeads = {'SELECT', 'WITH'};
 
 /// 若 [sql] 是一条可安全追加封顶的只读 SELECT,返回改写后的语句
-/// (末尾追加 `\nLIMIT [maxRows]`);否则返回 null 表示**不要改写**。
+/// (末尾追加 `\nLIMIT [maxRows]`,或 offset>0 时 `\nLIMIT [maxRows] OFFSET [offset]`);
+/// 否则返回 null 表示**不要改写**。[offset] 用于「加载更多」分页续取
+/// (MySQL / PostgreSQL / SQLite 的 `LIMIT n OFFSET m` 语法一致)。
 ///
 /// 顶层判定按词法扫描:字符串 / 引用标识符 / 行注释 / 块注释(PG 嵌套)/
 /// 美元引号内部一律不算顶层,括号深度大于 0 的关键字也忽略 ——
 /// 所以 `SELECT * FROM (SELECT ... LIMIT 1) t` 仍可安全封顶。
 /// 扫描遇到顶层分号(多条语句)、括号不配对或未闭合的结构时直接放弃。
-String? capSelectSql(String sql, {required int maxRows}) {
+String? capSelectSql(String sql, {required int maxRows, int offset = 0}) {
   if (maxRows <= 0) return null;
   // 查询编辑页已按语句切分,这里再兜一层:去掉末尾分号
   var body = sql.trim();
@@ -60,7 +62,9 @@ String? capSelectSql(String sql, {required int maxRows}) {
     if (_blockers.contains(word)) return null;
   }
   // 以换行起始:语句若以 `-- 行注释` 收尾,用空格追加会被注释吞掉
-  return '$body\nLIMIT $maxRows';
+  final cap =
+      offset > 0 ? '\nLIMIT $maxRows OFFSET $offset' : '\nLIMIT $maxRows';
+  return '$body$cap';
 }
 
 /// 扫描 [sql] 的顶层关键字(大写)。

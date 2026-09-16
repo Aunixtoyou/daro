@@ -97,6 +97,22 @@ class AccessDriver implements DatabaseDriver {
     ];
   }
 
+  // Access 无表 / 视图 / 函数注释概念,补全侧无注释可展示
+  @override
+  Future<Map<String, String>> listTableComments(String database,
+          {String? schema}) async =>
+      const {};
+
+  @override
+  Future<Map<String, String>> listViewComments(String database,
+          {String? schema}) async =>
+      const {};
+
+  @override
+  Future<Map<String, String>> listFunctionComments(String database,
+          {String? schema}) async =>
+      const {};
+
   @override
   Future<List<String>> listMaterializedViews(String database,
           {String? schema}) async =>
@@ -204,16 +220,26 @@ class AccessDriver implements DatabaseDriver {
   }
 
   @override
-  Future<QueryResult> executeQuery(String sql, {int limit = 1000}) async {
+  Future<QueryResult> executeQuery(String sql,
+      {int limit = 1000, int offset = 0}) async {
     // 与 SQL Server 驱动共用封顶流式取数:odbc.execute 会把整棵结果集
     // 一次性抽干拷回,大表 SELECT * 会顶爆内存(详见 odbcQueryCapped)
-    final r = await odbcQueryCapped(_get(), sql, limit: limit);
+    final r = await odbcQueryCapped(_get(), sql, limit: limit, offset: offset);
     return QueryResult(
       columns: r.columns,
       rows: r.rows,
       limit: limit,
+      offset: offset,
       moreRows: r.moreRows,
     );
+  }
+
+  @override
+  Future<int?> serverSessionId() async => null;
+
+  @override
+  Future<void> killSession(int sessionId) async {
+    // Access 本地文件型,查询在进程内执行,无服务端会话可取消
   }
 
   @override

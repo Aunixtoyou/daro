@@ -136,6 +136,11 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 供 Del 键判断焦点是否在表数据页内(避免在左侧搜索框按 Del 误删)
   final FocusNode _pageFocusNode = FocusNode();
 
+  /// 数据网格双向滚动控制器:横向供外层 SingleChildScrollView 浏览宽表,
+  /// 纵向供 DataGridView 内部 ListView 浏览多行;二者各挂一条可见 ScrollBar
+  final ScrollController _hScrollController = ScrollController();
+  final ScrollController _vScrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
@@ -147,6 +152,8 @@ class _TableDataPageState extends State<TableDataPage> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onKey);
     _pageFocusNode.dispose();
+    _hScrollController.dispose();
+    _vScrollController.dispose();
     super.dispose();
   }
 
@@ -1265,6 +1272,7 @@ class _TableDataPageState extends State<TableDataPage> {
         t.background,
       ),
       tokens: t.toDesktopTokens(),
+      verticalScrollController: _vScrollController,
       // 网格行号即当前页内行号
       onRowSelected: _selectRow,
       onCellSelected: _selectCell,
@@ -1304,12 +1312,21 @@ class _TableDataPageState extends State<TableDataPage> {
     // 视口等于全页,整页单元格全部物化为真实 widget(500 行 × 30 列 ≈ 15 万
     // render object),是设置分页大小后内存暴涨的根因。列宽可由用户拖拽调整,
     // 超宽由水平滚动承接,超长由网格自身纵向滚动承接。
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SizedBox(
-        width: _numberColWidth +
-            widths.fold<double>(0, (a, b) => a + b),
-        child: grid,
+    return ScrollBar(
+      controller: _hScrollController,
+      orientation: ScrollBarOrientation.horizontal,
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        controller: _hScrollController,
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(
+          width: _numberColWidth +
+              widths.fold<double>(0, (a, b) => a + b),
+          child: ScrollBar(
+            controller: _vScrollController,
+            child: grid,
+          ),
+        ),
       ),
     );
   }

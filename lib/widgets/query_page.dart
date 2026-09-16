@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:base_ui_flutter/base_ui_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -45,8 +47,8 @@ class _StatementOutcome {
   /// 语句文本(消息 tab 回显用)
   final String sql;
 
-  /// 成功时的执行结果
-  final QueryResult? result;
+  /// 成功时的执行结果(「加载更多」续取后替换为累积更多行的新结果)
+  QueryResult? result;
 
   /// 失败时的错误信息
   final String? error;
@@ -107,6 +109,9 @@ class _QueryPageState extends State<QueryPage> {
   /// 结果面板当前活动 tab(0 = 消息,i+1 = 结果 i)
   int _panelTabIndex = 0;
 
+  /// 正在「加载更多」续取的结果 tab 索引(null = 无在途续取)
+  int? _loadingMoreIndex;
+
   /// 提示信息(运行前提示,如「请输入 SQL 语句」)
   String? _message;
 
@@ -118,6 +123,9 @@ class _QueryPageState extends State<QueryPage> {
 
   /// 执行代次:标签切换/停止时作废进行中的请求,防止旧结果覆盖新 tab
   int _runGeneration = 0;
+
+  /// 本次运行占用的服务端会话 id(取不到为 null);「停止」据此带外取消
+  int? _activeSessionId;
 
   /// 编辑区是否有选中文本(运行按钮据此切换「运行/运行已选择的」)
   bool _hasSelection = false;
@@ -363,16 +371,25 @@ class _QueryPageState extends State<QueryPage> {
     await _runSql(explained);
   }
 
-  /// 停止:作废后续语句(已完成的语句结果保留;服务端当前语句可能仍在执行)
+  /// 停止:作废后续语句,并向服务端带外下发取消(否则当前语句仍在库上跑完)
   void _onStop() {
     if (!_running) return;
     _runGeneration++;
     _elapsedMs = _runStopwatch.elapsedMilliseconds;
+    // 带外取消:主连接正被 executeQuery 占住,用第二条连接发 KILL / cancel;
+    // 权限不足或驱动不支持时静默,退化为「仅客户端停止」
+    final sid = _activeSessionId;
+    final conn = context.read<AppState>().connectionByName(_connection);
+    if (sid != null && conn != null) {
+      unawaited(
+        context.read<AppState>().connectionManager.killSession(conn, sid),
+      );
+    }
     setState(() {
       _running = false;
       _stopped = true;
       if (_outcomes.isEmpty) {
-        _message = '已停止等待结果(服务端可能仍在执行该语句)';
+        _message = '已停止(已请求取消服务端查询)';
       }
     });
   }
@@ -441,6 +458,18 @@ class _QueryPageState extends State<QueryPage> {
       _panelTabIndex = 0;
       _message = null;
     });
+    // 取当前会话的服务端 id,供「停止」带外取消(取不到则退化为仅客户端停止)
+    _activeSessionId = null;
+    try {
+      _activeSessionId = await app.connectionManager.serverSessionId(
+        conn,
+        database: _database,
+        schema: _schema,
+      );
+    } catch (_) {
+      _activeSessionId = null;
+    }
+    if (!mounted || generation != _runGeneration) return;
     _runStopwatch
       ..reset()
       ..start();
@@ -948,7 +977,8 @@ class _QueryPageState extends State<QueryPage> {
                 index: _panelTabIndex.clamp(0, _outcomes.length),
                 children: [
                   _messagesTab(t),
-                  for (final o in _outcomes) _outcomeTab(t, o),
+                  for (var i = 0; i < _outcomes.length; i++)
+                    _outcomeTab(t, _outcomes[i], i),
                 ],
               ),
             ),
@@ -1105,8 +1135,8 @@ class _QueryPageState extends State<QueryPage> {
   /// 语句文本折叠为单行(消息 tab 回显用)
   String _oneLine(String sql) => sql.replaceAll(RegExp(r'\s+'), ' ').trim();
 
-  /// 单条语句结果 tab:SELECT 网格 / 写操作执行信息 / 错误文本
-  Widget _outcomeTab(AppPalette t, _StatementOutcome o) {
+  /// 单条语句结果 tab:SELECT 网格(截断时带「加载更多」底栏)/ 写操作执行信息 / 错误文本
+  Widget _outcomeTab(AppPalette t, _StatementOutcome o, int index) {
     final error = o.error;
     if (error != null) {
       return Padding(
@@ -1133,7 +1163,14 @@ class _QueryPageState extends State<QueryPage> {
         ),
       );
     }
-    return _ResultGrid(result: result, onExport: _exportResultRows);
+    return Column(
+      children: [
+        Expanded(
+          child: _ResultGrid(result: result, onExport: _exportResultRows),
+        ),
+        if (result.truncated) _loadMoreBar(t, index, result),
+      ],
+    );
   }
 
   /// 「导出结果」:把结果网格当前显示的数据写为 CSV / JSON 文件
@@ -1147,6 +1184,77 @@ class _QueryPageState extends State<QueryPage> {
       database: _database ?? '',
       label: widget.title,
       schema: _schema,
+    );
+  }
+
+  /// 「加载更多」:对某条被截断的 SELECT 结果,用 offset 续取下一页并累加进结果。
+  /// 期间以 [_loadingMoreIndex] 标记;切 tab / 停止会 bump _runGeneration,
+  /// 使在途续取结果作废(不追加到已失效的 outcome)。
+  Future<void> _loadMore(int index) async {
+    if (index >= _outcomes.length) return;
+    final outcome = _outcomes[index];
+    final cur = outcome.result;
+    if (cur == null || !cur.isSelect) return;
+    final conn = _lookupConnection();
+    if (conn == null) return;
+    final generation = _runGeneration;
+    setState(() => _loadingMoreIndex = index);
+    try {
+      final more = await context.read<AppState>().connectionManager.runQuery(
+        conn,
+        outcome.sql,
+        database: _database,
+        schema: _schema,
+        limit: _resultLimit,
+        offset: cur.rows.length,
+      );
+      if (!mounted || generation != _runGeneration) return;
+      outcome.result = QueryResult(
+        columns: cur.columns,
+        rows: [...cur.rows, ...more.rows],
+        limit: cur.limit,
+        offset: cur.rows.length + more.rows.length,
+        moreRows: more.moreRows,
+      );
+      setState(() => _loadingMoreIndex = null);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadingMoreIndex = null);
+      await MessageBox.show(
+        context,
+        title: '加载更多',
+        message: e.toString(),
+        type: MessageBoxType.error,
+        okText: '知道了',
+      );
+    }
+  }
+
+  /// 结果被截断时的「加载更多」底栏(已加载行数 + 续取按钮)
+  Widget _loadMoreBar(AppPalette t, int index, QueryResult result) {
+    final loading = _loadingMoreIndex == index;
+    return Container(
+      height: 30,
+      decoration: BoxDecoration(
+        color: t.secondary,
+        border: Border(top: BorderSide(color: t.border)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
+        children: [
+          Text(
+            '已加载 ${result.rows.length} 行(达到单次上限,可能还有更多)',
+            style: TextStyle(fontSize: 12, color: t.mutedForeground),
+          ),
+          const Spacer(),
+          ToolbarButton(
+            icon: Icons.expand_more,
+            text: loading ? '加载中…' : '加载更多',
+            enabled: !loading && !_running,
+            onTap: () => _loadMore(index),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1688,6 +1796,7 @@ const Map<String, TextStyle> _sqlDarkTheme = {
 /// 补全提示面板(re_editor CodeAutocomplete 的 viewBuilder)。
 ///
 /// 每项 = 类型小图标 + 匹配词(输入前缀段加粗)+ 右侧灰色类型标注;
+/// 列项额外追加中文注释列(来自 ColumnDef.comment)。
 /// 选中 / hover 手绘派生色(明暗自适应),Listener.onPointerDown
 /// 零延迟选择,无 InkWell / 水波纹。
 class _SqlPromptPanel extends StatefulWidget implements PreferredSizeWidget {
@@ -1700,7 +1809,7 @@ class _SqlPromptPanel extends StatefulWidget implements PreferredSizeWidget {
   final ValueChanged<CodeAutocompleteResult> onSelected;
 
   static const double itemHeight = 26;
-  static const double panelWidth = 280;
+  static const double panelWidth = 400;
   static const int maxVisibleItems = 8;
 
   @override
@@ -1824,13 +1933,37 @@ class _SqlPromptPanelState extends State<_SqlPromptPanel> {
               if (prompt.detail.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(left: 8),
-                  child: Text(
-                    prompt.detail,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: t.mutedForeground,
-                      decoration: TextDecoration.none,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 90),
+                    child: Text(
+                      prompt.detail,
+                      textAlign: TextAlign.right,
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: t.mutedForeground,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                  ),
+                ),
+              // 对象注释(列 / 表 / 视图 / 函数):后端已拉回 comment 时展示,
+              // Expanded 吃满剩余宽度、ellipsis 截断
+              if (prompt.comment.isNotEmpty)
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 10),
+                    child: Text(
+                      prompt.comment,
+                      textAlign: TextAlign.right,
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: t.mutedForeground.withValues(alpha: 0.85),
+                        decoration: TextDecoration.none,
+                      ),
                     ),
                   ),
                 ),

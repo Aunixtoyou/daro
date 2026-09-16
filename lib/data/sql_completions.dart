@@ -152,16 +152,19 @@ enum SqlPromptKind { keyword, function, table, view, column }
 /// SQL 补全提示词:关键字 / 函数 / 表 / 视图 / 列。
 ///
 /// 插入内容始终为 [word] 本身(函数不带参数占位,SQL 中占位符反而碍事);
-/// [detail] 为右侧灰色标注(列的数据类型、函数分类等)。
+/// [detail] 为右侧灰色标注(列的数据类型、函数分类等);
+/// [comment] 为列注释(仅 SqlPromptKind.column 使用,来自 ColumnDef.comment)。
 class SqlPrompt extends CodePrompt {
   const SqlPrompt({
     required super.word,
     required this.kind,
     this.detail = '',
+    this.comment = '',
   });
 
   final SqlPromptKind kind;
   final String detail;
+  final String comment;
 
   @override
   CodeAutocompleteResult get autocomplete => CodeAutocompleteResult.fromWord(word);
@@ -193,16 +196,20 @@ final RegExp _sqlPlainName = RegExp(r'^[A-Za-z_][A-Za-z0-9_$]*$');
 final RegExp _sqlToken =
     RegExp(r'[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)*|\d+|\S');
 
-/// 解析 SQL 中的「表别名 → 实际表名」映射(键为小写别名)。
+/// FROM / JOIN / UPDATE 之后的一处表引用:实际表名(unqualified)+ 可选别名
+typedef _TableRef = ({String table, String? alias});
+
+/// 扫描 SQL 中 `FROM` / `JOIN` / `UPDATE` 之后的表引用,返回 (表名, 别名?) 列表。
 ///
-/// 识别 `FROM` / `JOIN` / `UPDATE` 之后的表引用,支持:
+/// 支持:
 /// - 带 `AS`(`FROM tag AS b`)与省略 `AS`(`FROM tag b`)两种写法
-/// - schema 限定表名(`FROM public.tag AS b` → `b` 映射到 `tag`)
+/// - schema 限定表名(`FROM public.tag AS b` → table=`tag`)
 /// - 逗号分隔的多表(`FROM a t1, b t2`)
+/// - 无别名引用(`FROM tag` → alias=null)
 ///
 /// 字符串字面量 / 注释先剥离,SQL 保留字(WHERE、ORDER 等)不会被误判为别名。
-Map<String, String> parseTableAliases(String sql) {
-  final aliases = <String, String>{};
+List<_TableRef> _scanTableRefs(String sql) {
+  final refs = <_TableRef>[];
   final tokens = [
     for (final match in _sqlToken.allMatches(_stripSqlLiterals(sql)))
       match.group(0)!,
@@ -223,16 +230,39 @@ Map<String, String> parseTableAliases(String sql) {
       final table = _unqualified(tokens[j]);
       j++;
       // 可选 `AS`;省略时下一个非保留标识符即别名
+      String? alias;
       if (j < tokens.length && tokens[j].toUpperCase() == 'AS') j++;
       if (j < tokens.length &&
           _sqlPlainName.hasMatch(tokens[j]) &&
           !kSqlKeywords.contains(tokens[j].toUpperCase())) {
-        aliases.putIfAbsent(tokens[j].toLowerCase(), () => table);
+        alias = tokens[j];
         j++;
       }
+      refs.add((table: table, alias: alias));
+    }
+  }
+  return refs;
+}
+
+/// 解析 SQL 中的「表别名 → 实际表名」映射(键为小写别名)。
+///
+/// 仅收录显式写了别名的引用(`FROM tag AS b` / `FROM tag b`);
+/// 无别名引用不产生映射(裸表名本身即可作为前缀)。
+Map<String, String> parseTableAliases(String sql) {
+  final aliases = <String, String>{};
+  for (final ref in _scanTableRefs(sql)) {
+    if (ref.alias != null) {
+      aliases.putIfAbsent(ref.alias!.toLowerCase(), () => ref.table);
     }
   }
   return aliases;
+}
+
+/// 解析 SQL 作用域内引用的全部表名(FROM / JOIN / UPDATE 之后,含无别名引用),
+/// 大小写按原始写法去重。用于「裸列名」补全:即使没写 `表名.` 前缀,
+/// 只要该表出现在当前语句的 FROM 子句里,它的列也应进入候选。
+Set<String> parseReferencedTables(String sql) {
+  return {for (final ref in _scanTableRefs(sql)) ref.table};
 }
 
 /// 剥离字符串字面量与注释(替换为空白,便于后续词法切分)
@@ -335,9 +365,17 @@ class SqlPromptsBuilder implements CodeAutocompletePromptsBuilder {
   /// 正在加载列的缓存 key(防止重复请求)
   final Set<String> _loadingColumns = {};
 
+  /// 列缓存建立时对应的表结构版本(TableListState.revision);
+  /// 与当前版本不一致(如 ALTER 后 refreshDatabase)时清空列缓存重新拉取
+  int? _columnCacheRevision;
+
   /// 别名映射缓存:按整篇 SQL 文本缓存,避免每次按键重复解析
   String? _aliasCacheKey;
   Map<String, String> _aliasCache = const {};
+
+  /// 作用域表集合缓存:按整篇 SQL 文本缓存 FROM/JOIN 引用的表名
+  String? _scopeCacheKey;
+  Set<String> _scopeTables = const {};
 
   /// 查询页运行上下文(连接/库/模式)变化时刷新数据源并清列缓存
   void updateContext(ConnectionManager? manager, ConnectionInfo? conn,
@@ -354,6 +392,7 @@ class SqlPromptsBuilder implements CodeAutocompletePromptsBuilder {
     _schema = schema;
     _columnCache.clear();
     _loadingColumns.clear();
+    _columnCacheRevision = null;
   }
 
   @override
@@ -362,9 +401,20 @@ class SqlPromptsBuilder implements CodeAutocompletePromptsBuilder {
     CodeLine codeLine,
     CodeLineSelection selection,
   ) {
-    // 预热别名指向的表结构:键入「别名.」时列已就绪,提示无需等待懒加载
+    // 表结构版本变化(如 ALTER 后 refreshDatabase):清空列缓存,本次重新懒加载
+    final state = _tableState();
+    if (state != null) {
+      final rev = state.revision ?? 0;
+      if (_columnCacheRevision != rev) {
+        _columnCache.clear();
+        _loadingColumns.clear();
+        _columnCacheRevision = rev;
+      }
+    }
+
+    // 预热整篇 SQL 引用的表结构(含无别名):键入「别名.」或裸列名时列已就绪
     final documentSql = sqlTextOf?.call();
-    if (documentSql != null) _prewarmAliasedColumns(documentSql);
+    if (documentSql != null) _prewarmScopeColumns(documentSql);
 
     final text = codeLine.text;
     final extent = selection.extentOffset.clamp(0, text.length);
@@ -446,17 +496,25 @@ class SqlPromptsBuilder implements CodeAutocompletePromptsBuilder {
     return _aliasCache;
   }
 
+  /// 作用域表集合(按整篇 SQL 文本缓存):FROM/JOIN 引用的全部表名
+  Set<String> _referencedTablesOf(String sql) {
+    if (sql.isEmpty) return const {};
+    if (_scopeCacheKey != sql) {
+      _scopeCacheKey = sql;
+      _scopeTables = parseReferencedTables(sql);
+    }
+    return _scopeTables;
+  }
+
   /// 列缓存的 key:"连接|库|模式|表"
   String _columnCacheKey(String table) =>
       '${_conn?.name}|$_database|$_schema|$table';
 
-  /// 预热整篇 SQL 中别名指向的表结构:键入「别名.」的瞬间列已就绪,
-  /// 无需等待第一次懒加载(失败的表会在缓存中留空,不重复请求)
-  void _prewarmAliasedColumns(String sql) {
+  /// 预热整篇 SQL 引用的表结构(含无别名):键入「别名.」或裸列名的瞬间
+  /// 列已就绪,无需等待第一次懒加载(失败的表会在缓存中留空,不重复请求)
+  void _prewarmScopeColumns(String sql) {
     if (sql.isEmpty) return;
-    final aliases = _aliasesOf(sql);
-    if (aliases.isEmpty) return;
-    for (final table in aliases.values.toSet()) {
+    for (final table in _referencedTablesOf(sql)) {
       final canonical = _resolveTable(table);
       if (canonical == null) continue;
       final key = _columnCacheKey(canonical);
@@ -510,6 +568,7 @@ class SqlPromptsBuilder implements CodeAutocompletePromptsBuilder {
             word: column.name,
             kind: SqlPromptKind.column,
             detail: column.type,
+            comment: column.comment,
           ),
       ];
     } catch (_) {
@@ -520,10 +579,29 @@ class SqlPromptsBuilder implements CodeAutocompletePromptsBuilder {
     }
   }
 
-  /// 普通输入补全:schema 对象(表/视图/函数)在前,内置函数次之,关键字最后
+  /// 普通输入补全:作用域列在前,schema 对象(表/视图/函数)次之,
+  /// 内置函数再次,关键字最后
   List<SqlPrompt> _wordPrompts(String input) {
     if (input.isEmpty) return const [];
     final result = <SqlPrompt>[];
+
+    // 裸列名补全:当前语句 FROM/JOIN 引用了哪些表,就把它们的列也列出来,
+    // 无需写 `表名.` 前缀(无别名同样生效)。列结构由 _prewarmScopeColumns
+    // 预热;尚未就绪(首轮加载中)时本轮跳过,继续输入后下一轮生效。
+    final scopeSql = sqlTextOf?.call() ?? '';
+    final addedColumns = <String>{};
+    for (final table in _referencedTablesOf(scopeSql)) {
+      final canonical = _resolveTable(table);
+      if (canonical == null) continue;
+      final cached = _columnCache[_columnCacheKey(canonical)];
+      if (cached == null) continue;
+      for (final col in cached) {
+        if (addedColumns.add(col.word.toLowerCase()) &&
+            _matchWord(col.word, input)) {
+          result.add(col);
+        }
+      }
+    }
 
     // schema 对象:复用连接树缓存,未加载时异步触发(幂等)
     final state = _tableState();
@@ -532,17 +610,29 @@ class SqlPromptsBuilder implements CodeAutocompletePromptsBuilder {
     } else {
       for (final table in (state.tables ?? const <String>[])) {
         if (_matchWord(table, input)) {
-          result.add(SqlPrompt(word: table, kind: SqlPromptKind.table));
+          result.add(SqlPrompt(
+            word: table,
+            kind: SqlPromptKind.table,
+            comment: state.tableComments?[table] ?? '',
+          ));
         }
       }
       for (final view in (state.views ?? const <String>[])) {
         if (_matchWord(view, input)) {
-          result.add(SqlPrompt(word: view, kind: SqlPromptKind.view));
+          result.add(SqlPrompt(
+            word: view,
+            kind: SqlPromptKind.view,
+            comment: state.viewComments?[view] ?? '',
+          ));
         }
       }
       for (final fn in (state.functions ?? const <String>[])) {
         if (_matchWord(fn, input)) {
-          result.add(SqlPrompt(word: fn, kind: SqlPromptKind.function));
+          result.add(SqlPrompt(
+            word: fn,
+            kind: SqlPromptKind.function,
+            comment: state.functionComments?[fn] ?? '',
+          ));
         }
       }
     }

@@ -37,6 +37,9 @@ class TableListState {
     this.functions = const [],
     this.procedures = const [],
     this.users = const [],
+    this.tableComments = const {},
+    this.viewComments = const {},
+    this.functionComments = const {},
     this.categoryErrors,
     this.error,
   });
@@ -47,6 +50,19 @@ class TableListState {
   List<String>? functions;
   List<String>? procedures;
   List<String>? users;
+
+  /// 对象列表的结构版本号:每次 [ConnectionManager.refreshDatabase] 重载后 +1。
+  /// SQL 补全构建器(SqlPromptsBuilder)据此判断列缓存是否失效——ALTER TABLE
+  /// 加/删列后即时反映到列补全,无需切换运行上下文。可空:热重载旧实例兜底,
+  /// 读取处一律 `?? 0`。
+  int? revision;
+
+  /// 表 / 视图 / 函数名 → 注释(SQL 补全面板展示用)。与对应列表同源同批填充;
+  /// 注释读取失败降级为空 map。可空字段:热重载后旧实例上为 null,读取处一律
+  /// 用 `?[name] ?? ''` 兜底。
+  Map<String, String>? tableComments;
+  Map<String, String>? viewComments;
+  Map<String, String>? functionComments;
 
   /// 整体加载失败(会话无法定位 / 表列表都拉不到)时的错误;
   /// 为 null 表示库可正常打开
@@ -282,6 +298,23 @@ class ConnectionManager extends ChangeNotifier {
     final functions = await load(ObjectCategory.function);
     final procedures = await load(ObjectCategory.procedure);
     final users = await load(ObjectCategory.user);
+    // 对象注释:补全增强信息,读取失败静默降级为空 map(不影响对象列表,
+    // 也不记入 categoryErrors —— 注释缺失不是需要用户重试的错误)
+    Future<Map<String, String>> comments(
+        Future<Map<String, String>> Function() query) async {
+      try {
+        return await query();
+      } catch (_) {
+        return const {};
+      }
+    }
+
+    final tableComments = await comments(
+        () => driver.listTableComments(database, schema: schema));
+    final viewComments = await comments(
+        () => driver.listViewComments(database, schema: schema));
+    final functionComments = await comments(
+        () => driver.listFunctionComments(database, schema: schema));
     state
       ..tables = tables
       ..views = views
@@ -289,6 +322,9 @@ class ConnectionManager extends ChangeNotifier {
       ..functions = functions
       ..procedures = procedures
       ..users = users
+      ..tableComments = tableComments
+      ..viewComments = viewComments
+      ..functionComments = functionComments
       ..categoryErrors = errors;
   }
 
@@ -441,12 +477,31 @@ class ConnectionManager extends ChangeNotifier {
     ConnectionInfo conn,
     String sql, {
     int limit = 1000,
+    int offset = 0,
     String? database,
     String? schema,
   }) async {
     final driver =
         await sessionFor(conn, database: database, schema: schema);
-    return driver.executeQuery(sql, limit: limit);
+    return driver.executeQuery(sql, limit: limit, offset: offset);
+  }
+
+  /// 取当前会话的服务端会话 id(供查询页「停止」带外取消);不支持的驱动返回 null。
+  Future<int?> serverSessionId(ConnectionInfo conn,
+      {String? database, String? schema}) async {
+    final driver = await sessionFor(conn, database: database, schema: schema);
+    return driver.serverSessionId();
+  }
+
+  /// 带外取消某连接正在执行的查询(用已连的驱动实例建第二条连接发 KILL / cancel)。
+  /// 直接取 [_drivers] 实例,不走 [sessionFor](主连接正被 executeQuery 占用)。
+  /// 权限不足或带外连接失败时静默——退化为「仅客户端停止」,不打断 UI。
+  Future<void> killSession(ConnectionInfo conn, int sessionId) async {
+    try {
+      await _drivers[conn.name]?.killSession(sessionId);
+    } catch (_) {
+      // 取消失败(权限不足 / 带外连接失败):主查询仍会自然结束,不额外打扰用户
+    }
   }
 
   /// 查询表结构(字段列表),供「设计表」视图展示;连接失效时自动重连一次。
@@ -578,6 +633,9 @@ class ConnectionManager extends ChangeNotifier {
       ..functions = null
       ..procedures = null
       ..users = null
+      ..tableComments = null
+      ..viewComments = null
+      ..functionComments = null
       ..categoryErrors = null
       ..error = null;
     notifyListeners();
@@ -586,6 +644,9 @@ class ConnectionManager extends ChangeNotifier {
     } else {
       await expandSchema(conn, database, schema);
     }
+    // 重载完成:结构版本号 +1,使 SQL 补全的列缓存下次构建时失效
+    // (ALTER TABLE 加/删列后,列补全即时反映新结构)
+    state.revision = (state.revision ?? 0) + 1;
   }
 
   /// 关闭并移除某连接的驱动(如删除连接时)

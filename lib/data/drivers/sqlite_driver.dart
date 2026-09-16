@@ -84,6 +84,22 @@ class SqliteDriver implements DatabaseDriver {
     ];
   }
 
+  // SQLite 无表 / 视图 / 函数注释概念,补全侧无注释可展示
+  @override
+  Future<Map<String, String>> listTableComments(String database,
+          {String? schema}) async =>
+      const {};
+
+  @override
+  Future<Map<String, String>> listViewComments(String database,
+          {String? schema}) async =>
+      const {};
+
+  @override
+  Future<Map<String, String>> listFunctionComments(String database,
+          {String? schema}) async =>
+      const {};
+
   @override
   Future<List<String>> listMaterializedViews(String database,
           {String? schema}) async =>
@@ -166,11 +182,12 @@ class SqliteDriver implements DatabaseDriver {
   }
 
   @override
-  Future<QueryResult> executeQuery(String sql, {int limit = 1000}) {
+  Future<QueryResult> executeQuery(String sql,
+      {int limit = 1000, int offset = 0}) {
     final db = _get();
     // 封顶必须下推到服务端:sqlite3 的 select() 返回已物化的 ResultSet,
-    // 在调用方 break 救不回来(详见 sql_row_cap.dart)
-    final capped = capSelectSql(sql, maxRows: limit + 1);
+    // 在调用方 break 救不回来(详见 sql_row_cap.dart);offset 同理由服务端跳过
+    final capped = capSelectSql(sql, maxRows: limit + 1, offset: offset);
     // select() 对任何返回行的语句都适用(含 RETURNING);
     // 纯写语句经 select() 得到空结果集,再用 updatedRows 补受影响行数
     final result = db.select(capped ?? sql);
@@ -189,9 +206,18 @@ class SqliteDriver implements DatabaseDriver {
       rows: rows,
       affectedRows: columns.isEmpty ? db.updatedRows : 0,
       limit: limit,
+      offset: offset,
       // 服务端只被允许返回 limit + 1 行,多出的那行即「还有更多」的确证
       moreRows: capped != null && result.length > limit,
     ));
+  }
+
+  @override
+  Future<int?> serverSessionId() async => null;
+
+  @override
+  Future<void> killSession(int sessionId) async {
+    // SQLite 本地文件型,查询在进程内执行,无服务端会话可取消
   }
 
   @override

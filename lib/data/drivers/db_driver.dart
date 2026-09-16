@@ -53,6 +53,7 @@ class QueryResult {
     this.affectedRows = 0,
     this.limit = 1000,
     this.moreRows = false,
+    this.offset = 0,
   });
 
   /// 列名(仅 SELECT 有值;空列表表示语句无结果集)
@@ -73,6 +74,9 @@ class QueryResult {
   /// 驱动精确上报的「还有更多行未取回」:封顶流式取数(见 `odbcQueryCapped`)
   /// 靠多读的那一行判定;一次性取数的驱动无从得知,保持默认 false
   final bool moreRows;
+
+  /// 本次结果在整体结果集中的起始行偏移(「加载更多」分页续取用);首页为 0
+  final int offset;
 
   /// 是否达到上限(可能还有更多行)
   bool get truncated => isSelect && (moreRows || rows.length >= limit);
@@ -138,6 +142,21 @@ abstract class DatabaseDriver {
   /// 列出指定数据库下的视图([schema] 语义同 [listTables])
   Future<List<String>> listViews(String database, {String? schema});
 
+  /// 表名 → 表注释(供 SQL 补全面板展示;无表注释概念的驱动返回空 map)。
+  /// 键须与 [listTables] 返回的表名一致。读取失败由调用方(ConnectionManager)
+  /// 降级为「无注释」,不影响表列表本身。
+  /// 注意:各驱动用 `implements` 实现本接口,不继承默认实现,故每个驱动都需显式重写。
+  Future<Map<String, String>> listTableComments(String database,
+      {String? schema});
+
+  /// 视图名 → 视图注释([schema] 语义同 [listTableComments])
+  Future<Map<String, String>> listViewComments(String database,
+      {String? schema});
+
+  /// 函数名 → 函数注释([schema] 语义同 [listTableComments],键与 [listFunctions] 一致)
+  Future<Map<String, String>> listFunctionComments(String database,
+      {String? schema});
+
   /// 列出指定数据库下的实体化视图([schema] 语义同 [listTables])。
   /// 仅 PostgreSQL 家族存在实体化视图概念,其余驱动返回空列表。
   Future<List<String>> listMaterializedViews(String database,
@@ -183,8 +202,24 @@ abstract class DatabaseDriver {
   Future<void> useSchema(String? schema);
 
   /// 执行任意 SQL:SELECT 返回结果集,写操作返回受影响行数。
-  /// 结果最多 [limit] 行(超出截断);语句文本由调用方保证非空
-  Future<QueryResult> executeQuery(String sql, {int limit = 1000});
+  /// 结果最多 [limit] 行(超出截断);[offset] 跳过前若干行再取(「加载更多」
+  /// 分页续取,首页 0)。MySQL / PG / SQLite 以 `LIMIT n OFFSET m` 下推服务端;
+  /// SQL Server / Access 走封顶流式游标,从头读取并丢弃前 [offset] 行。
+  /// 语句文本由调用方保证非空
+  Future<QueryResult> executeQuery(String sql,
+      {int limit = 1000, int offset = 0});
+
+  /// 当前会话的服务端会话 id,供「停止」按钮带外取消正在执行的查询。
+  /// MySQL = CONNECTION_ID(),PostgreSQL = pg_backend_pid(),SQL Server = @@SPID;
+  /// SQLite / Access 等本地文件型无服务端会话,返回 null。
+  Future<int?> serverSessionId();
+
+  /// 带外取消 [sessionId] 对应会话上正在执行的查询。
+  /// 执行查询的连接正被 await 占住、无法自取消,故各驱动用**第二条临时连接**
+  /// 下发(MySQL `KILL`、PostgreSQL `pg_cancel_backend`、SQL Server `KILL`)。
+  /// 需要服务端权限(MySQL CONNECTION_ADMIN、PG 同用户/管理员、SQL Server
+  /// ALTER SERVER STATE);无会话可取消的驱动为 no-op。
+  Future<void> killSession(int sessionId);
 
   /// 查询指定表的字段(列)结构,供「设计表」视图展示。
   /// 返回按定义顺序排列的列定义;不支持的驱动可返回空列表。

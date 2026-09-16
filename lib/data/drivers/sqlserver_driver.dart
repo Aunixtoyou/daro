@@ -183,6 +183,67 @@ class SqlServerDriver implements DatabaseDriver {
     ];
   }
 
+  /// 执行「OBJ_NAME + CMT」两列查询,聚成 名称 → 注释(trim 后)的 Map。
+  Future<Map<String, String>> _objectComments(String sql) async {
+    final r = await _runSql(sql);
+    return {
+      for (final row in r.rows)
+        if (row['OBJ_NAME'] != null)
+          row['OBJ_NAME'].toString(): (row['CMT']?.toString() ?? '').trim(),
+    };
+  }
+
+  // SQL Server 对象级注释存于 sys.extended_properties(class=1、minor_id=0、
+  // name='MS_Description');ep.value 是 sql_variant,CAST 成 NVARCHAR 便于读取。
+  @override
+  Future<Map<String, String>> listTableComments(String database,
+      {String? schema}) {
+    final qdb = _quoted(database);
+    final sf = schema == null ? '' : "AND s.name = '${_literal(schema)}' ";
+    return _objectComments(
+      "SELECT t.name AS OBJ_NAME, CAST(ep.value AS NVARCHAR(4000)) AS CMT "
+      "FROM $qdb.sys.tables t "
+      "JOIN $qdb.sys.schemas s ON s.schema_id = t.schema_id "
+      "LEFT JOIN $qdb.sys.extended_properties ep "
+      "  ON ep.class = 1 AND ep.major_id = t.object_id AND ep.minor_id = 0 "
+      " AND ep.name = 'MS_Description' "
+      "WHERE 1 = 1 $sf",
+    );
+  }
+
+  @override
+  Future<Map<String, String>> listViewComments(String database,
+      {String? schema}) {
+    final qdb = _quoted(database);
+    final sf = schema == null ? '' : "AND s.name = '${_literal(schema)}' ";
+    return _objectComments(
+      "SELECT v.name AS OBJ_NAME, CAST(ep.value AS NVARCHAR(4000)) AS CMT "
+      "FROM $qdb.sys.views v "
+      "JOIN $qdb.sys.schemas s ON s.schema_id = v.schema_id "
+      "LEFT JOIN $qdb.sys.extended_properties ep "
+      "  ON ep.class = 1 AND ep.major_id = v.object_id AND ep.minor_id = 0 "
+      " AND ep.name = 'MS_Description' "
+      "WHERE 1 = 1 $sf",
+    );
+  }
+
+  @override
+  Future<Map<String, String>> listFunctionComments(String database,
+      {String? schema}) {
+    final qdb = _quoted(database);
+    final sf = schema == null ? '' : "AND s.name = '${_literal(schema)}' ";
+    // FN 标量函数 / IF 内联表值 / TF 表值 / AF 聚合 / PC 程序化 CLR 函数
+    return _objectComments(
+      "SELECT o.name AS OBJ_NAME, CAST(ep.value AS NVARCHAR(4000)) AS CMT "
+      "FROM $qdb.sys.objects o "
+      "JOIN $qdb.sys.schemas s ON s.schema_id = o.schema_id "
+      "LEFT JOIN $qdb.sys.extended_properties ep "
+      "  ON ep.class = 1 AND ep.major_id = o.object_id AND ep.minor_id = 0 "
+      " AND ep.name = 'MS_Description' "
+      "WHERE o.type IN ('FN', 'IF', 'TF', 'AF', 'PC') $sf",
+    );
+  }
+
   @override
   Future<List<String>> listMaterializedViews(String database,
           {String? schema}) async =>
@@ -300,18 +361,54 @@ class SqlServerDriver implements DatabaseDriver {
   }
 
   @override
-  Future<QueryResult> executeQuery(String sql, {int limit = 1000}) async {
+  Future<QueryResult> executeQuery(String sql,
+      {int limit = 1000, int offset = 0}) async {
     // 走封顶流式,不能用 _runSql:dart_odbc 的 execute 会把整棵结果集在
     // ODBC isolate 里抽干后整体拷回,`SELECT * FROM 大表` 会把进程内存
     // 顶到数 GB(实测 5.3 GB)并报 HY001「Memory allocation failure」,
     // 且要等全表读完才出结果。详见 odbcQueryCapped。
-    final r = await odbcQueryCapped(_get(), sql, limit: limit);
+    final r = await odbcQueryCapped(_get(), sql, limit: limit, offset: offset);
     return QueryResult(
       columns: r.columns,
       rows: r.rows,
       limit: limit,
+      offset: offset,
       moreRows: r.moreRows,
     );
+  }
+
+  @override
+  Future<int?> serverSessionId() async {
+    final r = await _runSql('SELECT @@SPID AS spid');
+    if (r.rows.isEmpty) return null;
+    return int.tryParse(r.rows.first['spid']?.toString() ?? '');
+  }
+
+  @override
+  Future<void> killSession(int sessionId) async {
+    // 主连接被 executeQuery 占住 → 第二条 ODBC 连接发 KILL;依次试已装驱动
+    const drivers = [
+      'ODBC Driver 18 for SQL Server',
+      'ODBC Driver 17 for SQL Server',
+      'SQL Server Native Client 11.0',
+      'SQL Server',
+    ];
+    Object? lastError;
+    for (final driver in drivers) {
+      final odbc = DartOdbc();
+      try {
+        await odbc.connectWithConnectionString(_connectionString(driver));
+        await odbc.execute('KILL $sessionId');
+        return;
+      } catch (e) {
+        lastError = e;
+      } finally {
+        try {
+          await odbc.disconnect();
+        } catch (_) {}
+      }
+    }
+    if (lastError != null) throw Exception('取消查询失败: $lastError');
   }
 
   @override
@@ -319,12 +416,26 @@ class SqlServerDriver implements DatabaseDriver {
       {String? schema}) async {
     final schemaFilter = schema == null
         ? ''
-        : "AND TABLE_SCHEMA = '${_literal(schema)}' ";
+        : "AND c.TABLE_SCHEMA = '${_literal(schema)}' ";
+    final qdb = _quoted(database);
+    // SQL Server 列注释存于 sys.extended_properties(name='MS_Description'),
+    // INFORMATION_SCHEMA 拿不到;按 表名 → 模式 → 列 三级 JOIN 定位到
+    // (major_id, minor_id) 后再取 ep.value。ep.value 是 sql_variant,
+    // CAST 成 NVARCHAR(4000) 便于驱动直接读文本
     final r = await _runSql(
-      "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT "
-      "FROM ${_quoted(database)}.INFORMATION_SCHEMA.COLUMNS "
-      "WHERE TABLE_NAME = '${_literal(table)}' $schemaFilter"
-      "ORDER BY ORDINAL_POSITION",
+      "SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, "
+      "CAST(ep.value AS NVARCHAR(4000)) AS COLUMN_COMMENT "
+      "FROM $qdb.INFORMATION_SCHEMA.COLUMNS c "
+      "LEFT JOIN $qdb.sys.tables tb ON tb.name = c.TABLE_NAME "
+      "LEFT JOIN $qdb.sys.schemas s "
+      "  ON s.schema_id = tb.schema_id AND s.name = c.TABLE_SCHEMA "
+      "LEFT JOIN $qdb.sys.columns sc "
+      "  ON sc.object_id = tb.object_id AND sc.name = c.COLUMN_NAME "
+      "LEFT JOIN $qdb.sys.extended_properties ep "
+      "  ON ep.class = 1 AND ep.major_id = sc.object_id "
+      " AND ep.minor_id = sc.column_id AND ep.name = 'MS_Description' "
+      "WHERE c.TABLE_NAME = '${_literal(table)}' $schemaFilter"
+      "ORDER BY c.ORDINAL_POSITION",
     );
     return [
       for (final row in r.rows)
@@ -333,6 +444,7 @@ class SqlServerDriver implements DatabaseDriver {
           type: row['DATA_TYPE']?.toString() ?? '',
           nullable: (row['IS_NULLABLE']?.toString() ?? 'YES') == 'YES',
           defaultValue: row['COLUMN_DEFAULT']?.toString(),
+          comment: row['COLUMN_COMMENT']?.toString() ?? '',
         ),
     ];
   }

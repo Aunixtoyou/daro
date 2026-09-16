@@ -11,6 +11,20 @@ void main() {
       );
     });
 
+    test('offset>0 追加 LIMIT n OFFSET m(加载更多续取)', () {
+      expect(
+        capSelectSql('SELECT * FROM t', maxRows: 1001, offset: 1000),
+        'SELECT * FROM t\nLIMIT 1001 OFFSET 1000',
+      );
+    });
+
+    test('offset=0 不追加 OFFSET 子句(保持旧行为)', () {
+      expect(
+        capSelectSql('SELECT * FROM t', maxRows: 1001, offset: 0),
+        'SELECT * FROM t\nLIMIT 1001',
+      );
+    });
+
     test('末尾分号被去掉后再追加', () {
       expect(
         capSelectSql('SELECT * FROM t;', maxRows: 10),

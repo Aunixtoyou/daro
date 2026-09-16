@@ -95,6 +95,41 @@ class MysqlDriver implements DatabaseDriver {
     ];
   }
 
+  /// 执行「名称列 + 注释列」两列查询,聚成 名称 → 注释(trim 后)的 Map。
+  /// 空注释(多数表/函数未写 COMMENT)会归一为 ''。
+  Future<Map<String, String>> _objectComments(String sql) async {
+    final conn = await _get();
+    final rs = await conn.execute(sql);
+    return {
+      for (final row in rs.rows)
+        if (row.colAt(0) != null) row.colAt(0)!: (row.colAt(1) ?? '').trim(),
+    };
+  }
+
+  @override
+  Future<Map<String, String>> listTableComments(String database,
+          {String? schema}) =>
+      _objectComments("SELECT TABLE_NAME, TABLE_COMMENT "
+          "FROM information_schema.TABLES "
+          "WHERE TABLE_SCHEMA = '${_literal(database)}' "
+          "AND TABLE_TYPE = 'BASE TABLE'");
+
+  @override
+  Future<Map<String, String>> listViewComments(String database,
+          {String? schema}) =>
+      _objectComments("SELECT TABLE_NAME, TABLE_COMMENT "
+          "FROM information_schema.TABLES "
+          "WHERE TABLE_SCHEMA = '${_literal(database)}' "
+          "AND TABLE_TYPE = 'VIEW'");
+
+  @override
+  Future<Map<String, String>> listFunctionComments(String database,
+          {String? schema}) =>
+      _objectComments("SELECT ROUTINE_NAME, ROUTINE_COMMENT "
+          "FROM information_schema.ROUTINES "
+          "WHERE ROUTINE_SCHEMA = '${_literal(database)}' "
+          "AND ROUTINE_TYPE = 'FUNCTION'");
+
   @override
   Future<List<String>> listMaterializedViews(String database,
           {String? schema}) async =>
@@ -204,11 +239,12 @@ class MysqlDriver implements DatabaseDriver {
   }
 
   @override
-  Future<QueryResult> executeQuery(String sql, {int limit = 1000}) async {
+  Future<QueryResult> executeQuery(String sql,
+      {int limit = 1000, int offset = 0}) async {
     final conn = await _get();
     // 封顶必须下推到服务端:mysql_client 会把整棵结果集读进内存才交回,
-    // 在调用方 break 救不回来(详见 sql_row_cap.dart)
-    final capped = capSelectSql(sql, maxRows: limit + 1);
+    // 在调用方 break 救不回来(详见 sql_row_cap.dart);offset 同理由服务端跳过
+    final capped = capSelectSql(sql, maxRows: limit + 1, offset: offset);
     final rs = await conn.execute(capped ?? sql);
 
     final columns = [for (final col in rs.cols) col.name];
@@ -219,6 +255,7 @@ class MysqlDriver implements DatabaseDriver {
         rows: const [],
         affectedRows: rs.affectedRows.toInt(),
         limit: limit,
+        offset: offset,
       );
     }
 
@@ -233,9 +270,35 @@ class MysqlDriver implements DatabaseDriver {
       columns: columns,
       rows: rows,
       limit: limit,
+      offset: offset,
       // 服务端只被允许返回 limit + 1 行,多出的那行即「还有更多」的确证
       moreRows: capped != null && rs.rows.length > limit,
     );
+  }
+
+  @override
+  Future<int?> serverSessionId() async {
+    final conn = await _get();
+    final rs = await conn.execute('SELECT CONNECTION_ID()');
+    return int.tryParse(rs.rows.first.colAt(0) ?? '');
+  }
+
+  @override
+  Future<void> killSession(int sessionId) async {
+    // 主连接正被 executeQuery 的 await 占住,无法自取消 → 用第二条临时连接发 KILL
+    final killer = await MySQLConnection.createConnection(
+      host: _conn.host,
+      port: int.tryParse(_conn.port) ?? 3306,
+      userName: _conn.username,
+      password: _conn.password,
+      secure: false,
+    );
+    try {
+      await killer.connect();
+      await killer.execute('KILL $sessionId');
+    } finally {
+      await killer.close();
+    }
   }
 
   @override

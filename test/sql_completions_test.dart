@@ -7,17 +7,26 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:re_editor/re_editor.dart';
 
 /// 构造已加载 schema 的 ConnectionManager:
-/// 表 [tables]、视图 [views](仅 sqlite 假连接,不发真实请求)
+/// 表 [tables]、视图 [views]、函数 [functions] 及各自注释映射
+/// (仅 sqlite 假连接,不发真实请求)
 ConnectionManager _managerWithSchema({
   String database = 'db',
   List<String> tables = const [],
   List<String> views = const [],
+  List<String> functions = const [],
+  Map<String, String> tableComments = const {},
+  Map<String, String> viewComments = const {},
+  Map<String, String> functionComments = const {},
 }) {
   final manager = ConnectionManager();
   manager.tableStateOf('c', database)
     ..status = LoadStatus.loaded
     ..tables = tables
-    ..views = views;
+    ..views = views
+    ..functions = functions
+    ..tableComments = tableComments
+    ..viewComments = viewComments
+    ..functionComments = functionComments;
   return manager;
 }
 
@@ -168,6 +177,127 @@ void main() {
     expect(_words(upper!), containsAll(['id', 'user_name']));
   });
 
+  testWidgets('「表名.」列补全:ColumnDef.comment 会流到 SqlPrompt.comment',
+      (tester) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(builder: (context) {
+        ctx = context;
+        return const SizedBox();
+      }),
+    ));
+
+    final manager = _managerWithSchema(tables: ['users']);
+    final builder = SqlPromptsBuilder(
+      describeTableImpl: (manager, conn, db, table) async => [
+        const ColumnDef(
+          name: 'status',
+          type: 'tinyint',
+          comment: '用户状态:0-禁用 1-正常',
+        ),
+        const ColumnDef(name: 'nick', type: 'varchar'),
+      ],
+    );
+    builder.updateContext(manager, _conn, 'db');
+
+    expect(_buildAt(ctx, builder, 'SELECT users.', 13), isNull);
+    await tester.pump();
+
+    final value = _buildAt(ctx, builder, 'SELECT users.', 13);
+    expect(value, isNotNull);
+    final prompts = value!.prompts.cast<SqlPrompt>();
+    final status = prompts.firstWhere((p) => p.word == 'status');
+    expect(status.kind, SqlPromptKind.column);
+    expect(status.detail, 'tinyint');
+    expect(status.comment, '用户状态:0-禁用 1-正常');
+    // 未拉注释的列保持空串,不占据面板第三列
+    final nick = prompts.firstWhere((p) => p.word == 'nick');
+    expect(nick.comment, '');
+  });
+
+  testWidgets('裸列名补全:FROM 无别名也能列出该表的列', (tester) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(builder: (context) {
+        ctx = context;
+        return const SizedBox();
+      }),
+    ));
+
+    final manager = _managerWithSchema(tables: ['tc_leave_car']);
+    final builder = SqlPromptsBuilder(
+      describeTableImpl: (manager, conn, db, table) async {
+        expect(table, 'tc_leave_car');
+        return [
+          const ColumnDef(
+            name: 'leave_car_id',
+            type: 'bigint',
+            comment: '离场记录ID',
+          ),
+          const ColumnDef(name: 'parkinglot_id', type: 'bigint'),
+        ];
+      },
+    );
+    builder.updateContext(manager, _conn, 'db');
+    // 光标停在 WHERE 条件里输入了列前缀,FROM 表既无点前缀也无别名
+    builder.sqlTextOf = () => 'SELECT * from tc_leave_car WHERE leave_ca';
+
+    // 首轮:列结构尚在预热,裸列名不匹配任何关键字/函数 → 无提示
+    expect(_buildAt(ctx, builder, 'WHERE leave_ca', 16), isNull);
+    await tester.pump();
+
+    // 预热完成后:leave_car_id 作为列候选出现,携带类型与中文注释
+    final value = _buildAt(ctx, builder, 'WHERE leave_ca', 16);
+    expect(value, isNotNull);
+    final col = value!.prompts.cast<SqlPrompt>().single;
+    expect(col.word, 'leave_car_id');
+    expect(col.kind, SqlPromptKind.column);
+    expect(col.detail, 'bigint');
+    expect(col.comment, '离场记录ID');
+  });
+
+  testWidgets('表 / 视图 / 函数补全携带中文注释', (tester) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(builder: (context) {
+        ctx = context;
+        return const SizedBox();
+      }),
+    ));
+
+    final manager = _managerWithSchema(
+      tables: ['tc_leave_car'],
+      views: ['v_active_car'],
+      functions: ['fn_calc_fee'],
+      tableComments: {'tc_leave_car': '车辆离场记录'},
+      viewComments: {'v_active_car': '在场车辆视图'},
+      functionComments: {'fn_calc_fee': '计算停车费用'},
+    );
+    final builder = SqlPromptsBuilder();
+    builder.updateContext(manager, _conn, 'db');
+
+    final table = _buildAt(ctx, builder, 'SELECT * FROM tc', 16)!
+        .prompts
+        .cast<SqlPrompt>()
+        .firstWhere((p) => p.word == 'tc_leave_car');
+    expect(table.kind, SqlPromptKind.table);
+    expect(table.comment, '车辆离场记录');
+
+    final view = _buildAt(ctx, builder, 'SELECT * FROM v_', 16)!
+        .prompts
+        .cast<SqlPrompt>()
+        .firstWhere((p) => p.word == 'v_active_car');
+    expect(view.kind, SqlPromptKind.view);
+    expect(view.comment, '在场车辆视图');
+
+    final fn = _buildAt(ctx, builder, 'SELECT fn_', 10)!
+        .prompts
+        .cast<SqlPrompt>()
+        .firstWhere((p) => p.word == 'fn_calc_fee');
+    expect(fn.kind, SqlPromptKind.function);
+    expect(fn.comment, '计算停车费用');
+  });
+
   testWidgets('未识别的「表名.」不提示', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
@@ -207,6 +337,22 @@ void main() {
       expect(parseTableAliases("SELECT 'from tag as b'"), isEmpty);
       expect(parseTableAliases('-- from tag as b'), isEmpty);
       expect(parseTableAliases('/* from tag as b */ SELECT 1'), isEmpty);
+    });
+  });
+
+  group('作用域表集合(parseReferencedTables)', () {
+    test('收集 FROM / JOIN 引用的表(含无别名裸表)', () {
+      expect(parseReferencedTables('SELECT * FROM tc_leave_car WHERE x = 1'),
+          {'tc_leave_car'});
+      expect(parseReferencedTables('SELECT * FROM a JOIN b ON a.id = b.id'),
+          {'a', 'b'});
+      // 有别名时收录实际表名,而非别名
+      expect(parseReferencedTables('SELECT * FROM tag AS b'), {'tag'});
+      expect(parseReferencedTables('SELECT * FROM public.tag t, orders o'),
+          {'tag', 'orders'});
+      // 字符串 / 注释里的 from 不产生表引用
+      expect(parseReferencedTables("SELECT 'from x'"), isEmpty);
+      expect(parseReferencedTables('-- from x'), isEmpty);
     });
   });
 
@@ -351,6 +497,43 @@ void main() {
     expect(_buildAt(ctx, builder, 'SELECT users.', 13), isNull);
     await tester.pump();
     expect(_buildAt(ctx, builder, 'SELECT users.', 13), isNotNull);
+    expect(calls, 2);
+  });
+
+  testWidgets('表结构版本变化(ALTER)后列缓存失效', (tester) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(builder: (context) {
+        ctx = context;
+        return const SizedBox();
+      }),
+    ));
+
+    var calls = 0;
+    final manager = _managerWithSchema(tables: ['users']);
+    final builder = SqlPromptsBuilder(
+      describeTableImpl: (manager, conn, db, table) async {
+        calls++;
+        return [const ColumnDef(name: 'id', type: 'int')];
+      },
+    );
+    builder.updateContext(manager, _conn, 'db');
+
+    // 首次:懒加载列结构
+    expect(_buildAt(ctx, builder, 'SELECT users.', 13), isNull);
+    await tester.pump();
+    expect(_buildAt(ctx, builder, 'SELECT users.', 13), isNotNull);
+    expect(calls, 1);
+
+    // 模拟 ALTER TABLE 后 refreshDatabase 重载:bump 结构版本号
+    manager.tableStateOf('c', 'db').revision = 1;
+
+    // 版本变化 → 列缓存失效 → 重新拉取(而非沿用旧结构)
+    expect(_buildAt(ctx, builder, 'SELECT users.', 13), isNull);
+    await tester.pump();
+    final value = _buildAt(ctx, builder, 'SELECT users.', 13);
+    expect(value, isNotNull);
+    expect((value!.prompts.single as SqlPrompt).word, 'id');
     expect(calls, 2);
   });
 }

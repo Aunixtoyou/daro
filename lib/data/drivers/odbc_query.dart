@@ -30,24 +30,33 @@ class OdbcCappedResult {
 /// 本函数改用 `executeCursor`(dart_odbc 6.1.0+ 的流式接口):取满 `limit + 1`
 /// 行即停,`finally` 关闭游标 → 释放语句句柄 → 服务端随之中止剩余结果。
 /// 第 `limit + 1` 行只用于精确判定「还有更多行」,不纳入返回结果。
+/// [offset] > 0 时先丢弃前 offset 行再取(「加载更多」续取):ODBC 游标只能从头
+/// 逐行读,故在客户端跳过,不改写用户 SQL(避开 SQL Server OFFSET/FETCH 强制
+/// ORDER BY 的方言问题)。代价是服务端仍会重跑并扫到 offset 行。
 Future<OdbcCappedResult> odbcQueryCapped(
   IDartOdbc odbc,
   String sql, {
   required int limit,
+  int offset = 0,
 }) async {
   final rows = <List<String>>[];
   List<String>? columns;
   var moreRows = false;
+  var skipped = 0;
   // 游标在 try 内创建:executeCursor 自身失败时底层已自行释放语句句柄,
   // 外层再 close 会二次释放,故用可空变量 + `?.` 只关闭成功创建的那个
   OdbcCursor? cursor;
   try {
     cursor = await odbc.executeCursor(sql);
-    // 上界取到 limit + 1:多读的那一行只用来判定是否还有剩余
-    while (rows.length <= limit) {
+    // 取满 limit 行后再多读一行即判定「还有更多」并停;游标从头读,先跳过 offset 行
+    while (true) {
       final item = await cursor.next();
       if (item is CursorDone) break;
       final row = (item as CursorItem).value;
+      if (skipped < offset) {
+        skipped++;
+        continue;
+      }
       if (rows.length >= limit) {
         moreRows = true;
         break;

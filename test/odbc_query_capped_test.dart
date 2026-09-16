@@ -90,6 +90,34 @@ void main() {
       expect(cursor.closeCalls, 1);
     });
 
+    test('offset 续取:游标从头读,客户端跳过前 offset 行再取 limit 行', () async {
+      final cursor = _FakeCursor(100000);
+      final odbc = _FakeOdbc(cursor);
+
+      final r = await odbcQueryCapped(odbc, 'SELECT * FROM big',
+          limit: 10, offset: 1000);
+
+      expect(r.rows.length, 10);
+      // 跳过 1000 行 + 取 10 行 + 多读 1 行判定「还有更多」
+      expect(cursor.nextCalls, 1011);
+      expect(r.rows.first.first, '1001');
+      expect(r.rows.last.first, '1010');
+      expect(r.moreRows, isTrue);
+      expect(cursor.closeCalls, 1);
+    });
+
+    test('offset 超过总行数时返回空结果', () async {
+      final cursor = _FakeCursor(5);
+      final odbc = _FakeOdbc(cursor);
+
+      final r = await odbcQueryCapped(odbc, 'SELECT * FROM small',
+          limit: 10, offset: 100);
+
+      expect(r.rows, isEmpty);
+      expect(r.moreRows, isFalse);
+      expect(cursor.closeCalls, 1);
+    });
+
     test('空结果集(写语句)返回空列与空行', () async {
       final cursor = _FakeCursor(0);
       final odbc = _FakeOdbc(cursor);

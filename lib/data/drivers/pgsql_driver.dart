@@ -126,6 +126,47 @@ class PgsqlDriver implements DatabaseDriver {
     ];
   }
 
+  /// 执行「名称列 + 描述列」两列查询,聚成 名称 → 注释(trim 后)的 Map。
+  Future<Map<String, String>> _objectComments(String sql) async {
+    final conn = _get();
+    final result = await conn.execute(sql);
+    return {
+      for (final row in result)
+        if (row[0] != null) row[0].toString(): (row[1]?.toString() ?? '').trim(),
+    };
+  }
+
+  // PG 的对象注释统一存于 pg_description,objsubid=0 表示对象级(非列级)注释。
+  // 表 / 视图来自 pg_class(relkind r / v),函数来自 pg_proc,均按 nspname 过滤。
+  @override
+  Future<Map<String, String>> listTableComments(String database,
+          {String? schema}) =>
+      _objectComments(
+          "SELECT c.relname, d.description FROM pg_class c "
+          "JOIN pg_namespace n ON n.oid = c.relnamespace "
+          "LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0 "
+          "WHERE n.nspname = ${_lit(schema ?? _schemaOrPublic)} "
+          "AND c.relkind = 'r'");
+
+  @override
+  Future<Map<String, String>> listViewComments(String database,
+          {String? schema}) =>
+      _objectComments(
+          "SELECT c.relname, d.description FROM pg_class c "
+          "JOIN pg_namespace n ON n.oid = c.relnamespace "
+          "LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0 "
+          "WHERE n.nspname = ${_lit(schema ?? _schemaOrPublic)} "
+          "AND c.relkind = 'v'");
+
+  @override
+  Future<Map<String, String>> listFunctionComments(String database,
+          {String? schema}) =>
+      _objectComments(
+          "SELECT p.proname, d.description FROM pg_proc p "
+          "JOIN pg_namespace n ON n.oid = p.pronamespace "
+          "LEFT JOIN pg_description d ON d.objoid = p.oid AND d.objsubid = 0 "
+          "WHERE n.nspname = ${_lit(schema ?? _schemaOrPublic)}");
+
   @override
   Future<List<String>> listMaterializedViews(String database,
       {String? schema}) async {
@@ -274,11 +315,12 @@ class PgsqlDriver implements DatabaseDriver {
   }
 
   @override
-  Future<QueryResult> executeQuery(String sql, {int limit = 1000}) async {
+  Future<QueryResult> executeQuery(String sql,
+      {int limit = 1000, int offset = 0}) async {
     final conn = _get();
     // 封顶必须下推到服务端:postgres 包的 Result 是已物化的 List<ResultRow>,
-    // 在调用方 break 救不回来(详见 sql_row_cap.dart)
-    final capped = capSelectSql(sql, maxRows: limit + 1);
+    // 在调用方 break 救不回来(详见 sql_row_cap.dart);offset 同理由服务端跳过
+    final capped = capSelectSql(sql, maxRows: limit + 1, offset: offset);
     final result = await conn.execute(capped ?? sql);
 
     final columns = [
@@ -293,6 +335,7 @@ class PgsqlDriver implements DatabaseDriver {
         rows: const [],
         affectedRows: result.affectedRows,
         limit: limit,
+        offset: offset,
       );
     }
 
@@ -307,21 +350,58 @@ class PgsqlDriver implements DatabaseDriver {
       columns: columns,
       rows: rows,
       limit: limit,
+      offset: offset,
       // 服务端只被允许返回 limit + 1 行,多出的那行即「还有更多」的确证
       moreRows: capped != null && result.length > limit,
     );
   }
 
   @override
+  Future<int?> serverSessionId() async {
+    final result = await _get().execute('SELECT pg_backend_pid()');
+    final v = result.first[0];
+    return v is int ? v : int.tryParse(v?.toString() ?? '');
+  }
+
+  @override
+  Future<void> killSession(int sessionId) async {
+    // 主连接正被 executeQuery 的 await 占住 → 用第二条临时连接发 pg_cancel_backend
+    final killer = await Connection.open(
+      Endpoint(
+        host: _conn.host,
+        port: int.tryParse(_conn.port) ?? 5432,
+        database: _conn.database.isEmpty ? 'postgres' : _conn.database,
+        username: _conn.username,
+        password: _conn.password,
+      ),
+      settings: const ConnectionSettings(
+        sslMode: SslMode.disable,
+        connectTimeout: Duration(seconds: 10),
+      ),
+    );
+    try {
+      await killer.execute('SELECT pg_cancel_backend($sessionId)');
+    } finally {
+      await killer.close();
+    }
+  }
+
+  @override
   Future<List<ColumnDef>> describeTable(String database, String table,
       {String? schema}) async {
     final conn = _get();
+    // col_description 需要 pg_class 的 OID,information_schema 里没有,
+    // 只能按 (nspname, relname) JOIN pg_namespace / pg_class 后取
     final result = await conn.execute(
-      "SELECT column_name, data_type, is_nullable, column_default "
-      "FROM information_schema.columns "
-      "WHERE table_schema = ${_lit(schema ?? _schemaOrPublic)} "
-      "AND table_name = '${table.replaceAll("'", "''")}' "
-      "ORDER BY ordinal_position",
+      "SELECT c.column_name, c.data_type, c.is_nullable, c.column_default, "
+      "col_description(pgc.oid, c.ordinal_position::int) "
+      "FROM information_schema.columns c "
+      "LEFT JOIN pg_namespace pgn ON pgn.nspname = c.table_schema "
+      "LEFT JOIN pg_class pgc "
+      "  ON pgc.relnamespace = pgn.oid AND pgc.relname = c.table_name "
+      "WHERE c.table_schema = ${_lit(schema ?? _schemaOrPublic)} "
+      "AND c.table_name = '${table.replaceAll("'", "''")}' "
+      "ORDER BY c.ordinal_position",
     );
     return [
       for (final row in result)
@@ -330,6 +410,7 @@ class PgsqlDriver implements DatabaseDriver {
           type: row[1]?.toString() ?? '',
           nullable: (row[2]?.toString() ?? 'YES') == 'YES',
           defaultValue: row[3]?.toString(),
+          comment: row[4]?.toString() ?? '',
         ),
     ];
   }
