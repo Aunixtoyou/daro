@@ -16,7 +16,7 @@
 | 状态管理 | `provider` + `ChangeNotifier` (AppState) |
 | 主题 | 自建 `AppPalette` / `Tokens` 语义色板 + `base_ui_flutter` 的 `DesktopTokens` / `TokenScope` |
 | UI 组件库 | `base_ui_flutter`（本地 path 依赖，git submodule） |
-| 字体 | `chinese_font_library` 中文排版优化 |
+| 字体 | 中文回退 `Microsoft YaHei` / `PingFang SC`（见 `lib/theme/app_theme.dart` 的 `chineseFontFamilyFallback`） |
 
 ---
 

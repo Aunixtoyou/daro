@@ -4,6 +4,14 @@ import 'package:provider/provider.dart';
 
 import '../app/app_state.dart';
 
+/// 中文字体回退列表(桌面端):Windows 用微软雅黑,macOS 用苹方。
+/// 取代此前依赖 chinese_font_library 提供的 SystemChineseFont.fontFamilyFallback,
+/// 仅保留本项目实际运行平台所需的回退项。
+const List<String> chineseFontFamilyFallback = [
+  '微软雅黑', // Windows
+  'PingFang SC', // macOS / iOS
+];
+
 /// 通用 UI 色板:与 base-ui-flutter 的 [DesktopTokens] 命名对齐,
 /// 各 widget 不硬编码颜色,统一通过 [Tokens.of] 取色。
 ///
@@ -395,4 +403,15 @@ class Tokens {
         : (mode == ThemeMode.dark ? Brightness.dark : Brightness.light);
     return brightness == Brightness.dark ? app.effectiveDark : app.effectiveLight;
   }
+}
+
+/// 正文文字色:明亮主题下取纯黑(区别于色板 token 的近黑 `0xff1f1f1f`),
+/// 暗色主题沿用 token 前景色,避免深底不可读。
+/// 用于 ribbon / 连接树等需要纯黑正文的区域。
+/// 始终经 [Tokens.of] 取色以注册主题依赖,保证切换明暗后自动重建。
+Color bodyTextColor(BuildContext context) {
+  final foreground = Tokens.of(context).foreground;
+  return Theme.of(context).brightness == Brightness.dark
+      ? foreground
+      : const Color(0xff000000);
 }

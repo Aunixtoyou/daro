@@ -28,11 +28,12 @@ class DatabaseTree extends StatefulWidget {
 }
 
 class _DatabaseTreeState extends State<DatabaseTree> {
-  /// 树节点图标尺寸(连接/库/模式/分组):与对象面板共用 [kObjectIconSize]
-  static const double _treeIconSize = kObjectIconSize;
+  /// 树节点图标尺寸(连接/库/模式/分组):正文字号 12px,图标取 16px。
+  /// 不再复用对象面板的 [kObjectIconSize](其尺寸更大且服务于中栏网格)。
+  static const double _treeIconSize = 16;
 
-  /// 对象行图标尺寸(表/视图/函数):原 13px,累计调大 10% ×3
-  static const double _objectIconSize = 17.3;
+  /// 对象行图标尺寸(表/视图/函数):与树节点图标同尺寸。
+  static const double _objectIconSize = 16;
 
   /// 展开节点 key 集合:连接名 / "连接名|库" / "连接名|库|模式"。
   /// 分组(表 / 视图 / 函数 / 用户 / 查询)不可展开,不入此集合。
@@ -1412,8 +1413,8 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                   child: Text(
                     name,
                     style: TextStyle(
-                      fontSize: 12.5,
-                      color: t.foreground,
+                      fontSize: 12,
+                      color: bodyTextColor(context),
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -1688,7 +1689,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                     height: 26,
                     child: Icon(
                       expanded ? Icons.expand_more : Icons.chevron_right,
-                      size: 16,
+                      size: 14,
                       color: t.disabledForeground,
                     ),
                   ),
@@ -1702,9 +1703,11 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                 child: Text(
                   text,
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: FontWeight.w400,
-                    color: (!noArrow && !opened) ? t.mutedForeground : t.foreground,
+                    // 正文一律纯黑(明亮主题);未打开节点仅隐藏箭头 / 图标灰显,
+                    // 文字不再降灰
+                    color: bodyTextColor(context),
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),

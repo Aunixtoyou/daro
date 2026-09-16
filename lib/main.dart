@@ -1,5 +1,4 @@
 import 'package:base_ui_flutter/base_ui_flutter.dart';
-import 'package:chinese_font_library/chinese_font_library.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
@@ -101,7 +100,10 @@ class DbApp extends StatelessWidget {
       scaffoldBackgroundColor: palette.background,
       canvasColor: palette.background,
       popupMenuTheme: PopupMenuThemeData(color: palette.popover),
-      textTheme: SystemChineseFont.textTheme(brightness),
+      textTheme: (brightness == Brightness.dark
+              ? Typography.material2021().white
+              : Typography.material2021().black)
+          .apply(fontFamilyFallback: chineseFontFamilyFallback),
     );
   }
 }

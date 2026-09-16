@@ -9,7 +9,6 @@ environment:
 dependencies:
   base_ui_flutter:
     path: base-ui-flutter
-  chinese_font_library: ^1.3.0
   flutter:
     sdk: flutter
   file_selector: ^1.0.3

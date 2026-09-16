@@ -1,5 +1,4 @@
 import 'package:base_ui_flutter/base_ui_flutter.dart';
-import 'package:chinese_font_library/chinese_font_library.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../app/app_state.dart';
@@ -106,7 +105,7 @@ class Ribbon extends StatelessWidget {
                   for (final b in visibleButtons)
                     _button(context,
                         (c) => ObjectCategoryIcon(
-                            category: b.category, size: 32),
+                            category: b.category, size: 26),
                         b.category.label, _accents[b.accentIndex],
                         active: activeCategory == b.category,
                         onTap: () => app.showObjectCategory(b.category)),
@@ -127,7 +126,10 @@ class Ribbon extends StatelessWidget {
   Widget _button(BuildContext context, Widget Function(Color color) iconBuilder,
       String text, Color color,
       {VoidCallback? onTap, bool active = false}) {
-    final t = Tokens.of(context);
+    // ribbon 按钮为「图标 + 文字」竖排,横向留白由按钮 padding 提供;
+    // 默认 controlPaddingX=12 会让整体偏宽,这里压到 4,
+    // 使「实体化视图」等长标签在 66px 内容宽内单行放下、且外框比默认更窄。
+    final dt = TokenScope.maybeOf(context) ?? DesktopTokens.winForm;
     return Container(
       padding: active ? const EdgeInsets.only(bottom: 2) : null,
       decoration: active
@@ -138,26 +140,30 @@ class Ribbon extends StatelessWidget {
       child: Button(
         text: text,
         variant: ButtonVariant.ghost,
+        tokens: dt.copyWith(controlPaddingX: 4),
         onPressed: onTap ?? () {},
         child: SizedBox(
-          width: 56,
+          width: 66,
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               iconBuilder(active ? color : color.withValues(alpha: 0.7)),
-              const SizedBox(height: 3),
+              const SizedBox(height: 1),
               Text(
                 text,
+                softWrap: false,
+                overflow: TextOverflow.visible,
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 12,
+                  height: 1.2,
                   // 非激活按钮文字也用主前景色;
                   // 选中态不加粗,仅靠背景高亮区分
-                  color: t.foreground,
-                  fontWeight: FontWeight.w400,
+                  color: bodyTextColor(context),
+                  fontWeight: FontWeight.w500,
                   // 与全局字体机制一致:Button 内部 DefaultTextStyle 用的是 Segoe UI
                   // 且无 fontVariations,中文会退化成最细的 regular;
                   // 显式补上中文回退 + 可变字重轴,保证 ribbon 文字与其它区域同粗细
-                  fontFamilyFallback: SystemChineseFont.fontFamilyFallback,
+                  fontFamilyFallback: chineseFontFamilyFallback,
                   fontVariations: const [
                     FontVariation.weight(400),
                   ],
@@ -182,14 +188,14 @@ class Ribbon extends StatelessWidget {
     }
   }
 
-  /// 基础图标(32px)+ 右下角绿色「+」徽章,与新建按钮角标一致。
+  /// 基础图标(26px)+ 右下角绿色「+」徽章,与新建按钮角标一致。
   Widget _badgedIcon(String asset) => SizedBox(
-        width: 32,
-        height: 32,
+        width: 26,
+        height: 26,
         child: Stack(
           children: [
-            Positioned.fill(child: UiIcon(asset, size: 32)),
-            Positioned(right: 0, bottom: 0, child: _PlusBadge(size: 13)),
+            Positioned.fill(child: UiIcon(asset, size: 26)),
+            Positioned(right: 0, bottom: 0, child: _PlusBadge(size: 11)),
           ],
         ),
       );
