@@ -13,7 +13,11 @@ rem            --release" there, copy build\windows\arm64\... here, then package
 rem            -SkipBuild -Arch all.
 rem          -SkipBuild   skip "flutter build windows --release" (package what is there)
 rem          -NoPause     do not wait for a key press on exit (for CI / scripts)
-rem          Output: dist\daro-<version>-windows-<arch>.exe (one file per architecture)
+rem          -Installer   build the Inno Setup installer .exe only (default)
+rem          -Portable    build the portable/green .zip only (Inno Setup not required)
+rem          -All         build both
+rem            Output: dist\daro-<version>-windows-<arch>.exe             (installer)
+rem                    dist\daro-<version>-windows-<arch>-portable.zip    (green build)
 rem Note:    set ISCC_PATH=<full path of ISCC.exe> if installed at a custom location.
 
 set "SCRIPT_DIR=%~dp0"
@@ -25,10 +29,15 @@ rem ---------- args ----------
 set "SKIP_BUILD="
 set "NO_PAUSE="
 set "ARCH_REQ="
+set "MAKE_INSTALLER="
+set "MAKE_PORTABLE="
 :parse_args
 if "%~1"=="" goto :parse_args_done
 if /i "%~1"=="-SkipBuild" ( set "SKIP_BUILD=1" & shift & goto :parse_args )
 if /i "%~1"=="-NoPause"   ( set "NO_PAUSE=1"   & shift & goto :parse_args )
+if /i "%~1"=="-Installer" ( set "MAKE_INSTALLER=1" & shift & goto :parse_args )
+if /i "%~1"=="-Portable"  ( set "MAKE_PORTABLE=1"  & shift & goto :parse_args )
+if /i "%~1"=="-All"       ( set "MAKE_INSTALLER=1" & set "MAKE_PORTABLE=1" & shift & goto :parse_args )
 if /i "%~1"=="-Arch" (
     if "%~2"=="" (
         echo ERROR: -Arch needs a value: x64, arm64 or all.
@@ -40,9 +49,11 @@ if /i "%~1"=="-Arch" (
     goto :parse_args
 )
 echo ERROR: unknown option "%~1"
-echo Usage: build_installer.bat [-Arch x64^|arm64^|all] [-SkipBuild] [-NoPause]
+echo Usage: build_installer.bat [-Arch x64^|arm64^|all] [-Installer^|-Portable^|-All] [-SkipBuild] [-NoPause]
 goto :die
 :parse_args_done
+rem No packaging flag given -> keep the historical behaviour (installer .exe only).
+if not defined MAKE_INSTALLER if not defined MAKE_PORTABLE set "MAKE_INSTALLER=1"
 
 rem ---------- 0. Version: pubspec.yaml is the single source of truth ----------
 rem tool\gen_version.py derives two committed files from pubspec.yaml:
@@ -108,9 +119,15 @@ if errorlevel 1 (
 echo App version (from pubspec.yaml): %APP_VERSION%
 
 rem ---------- 1. Check Inno Setup (fail fast before flutter build) ----------
-call :locate_iscc
-if not defined ISCC goto :no_innosetup
-echo Inno Setup found: !ISCC!
+rem Only needed when an installer .exe is requested; the portable .zip is produced by
+rem portable_zip.ps1 and must stay usable on machines without Inno Setup.
+if defined MAKE_INSTALLER (
+    call :locate_iscc
+    if not defined ISCC goto :no_innosetup
+    echo Inno Setup found: !ISCC!
+) else (
+    echo Portable .zip only - Inno Setup not required.
+)
 
 rem ---------- 2. Host architecture + which arch(s) to package ----------
 set "HOST_ARCH=x64"
@@ -159,14 +176,14 @@ set "HARD_FAIL="
 for %%A in (%ARCH_LIST%) do call :package_arch %%A
 if defined HARD_FAIL goto :die
 if not "!N_PKG!"=="0" goto :pkg_done
-echo ERROR: no installer was produced. Build the target architecture first
+echo ERROR: no package was produced. Build the target architecture first
 echo        ^(flutter build windows --release^), then re-run this script.
 goto :die
 
 :pkg_done
 echo.
-echo Done. Wrote !N_PKG! installer(s) to %PROJECT_ROOT%\dist
-dir /b "%PROJECT_ROOT%\dist\daro-*windows-*.exe"
+echo Done. Wrote !N_PKG! package(s) to %PROJECT_ROOT%\dist
+dir /b "%PROJECT_ROOT%\dist\daro-*windows-*"
 call :maybe_pause
 endlocal
 exit /b 0
@@ -189,18 +206,62 @@ if /i "%ARCH_REQ%"=="%ARCH%" (
 )
 goto :eof
 :pa_run
+if defined MAKE_INSTALLER (
+    call :make_installer "%PBD%"
+    if errorlevel 1 (
+        echo ERROR: ISCC compile failed for %ARCH%.
+        set "HARD_FAIL=1"
+        goto :eof
+    )
+    set /a N_PKG+=1
+)
+if defined MAKE_PORTABLE (
+    call :make_portable "%PBD%"
+    if errorlevel 1 (
+        echo ERROR: portable zip failed for %ARCH%.
+        set "HARD_FAIL=1"
+        goto :eof
+    )
+    set /a N_PKG+=1
+)
+goto :eof
+
+rem ============================================================
+rem  Subroutine: build the Inno Setup installer for one arch
+rem  (%1 = absolute path of the Release build output dir)
+rem  Needs ARCH / APP_VERSION / ISS_FILE / ISCC, all set by the caller.
+rem ============================================================
+:make_installer
 set "PA_EXTRA="
 if /i "%ARCH%"=="arm64" set "PA_EXTRA=/DIsArm64"
-set "ISCC_ARGS="%ISS_FILE%" /DMyAppVersion=%APP_VERSION% /DArchTarget=%ARCH% /DBuildDir="%PBD%" !PA_EXTRA!"
+set "ISCC_ARGS="%ISS_FILE%" /DMyAppVersion=%APP_VERSION% /DArchTarget=%ARCH% /DBuildDir="%~1" !PA_EXTRA!"
 echo ==^> packaging %ARCH%: "!ISCC!" !ISCC_ARGS!
 "!ISCC!" !ISCC_ARGS!
-if errorlevel 1 (
-    echo ERROR: ISCC compile failed for %ARCH%.
-    set "HARD_FAIL=1"
-    goto :eof
+if errorlevel 1 exit /b 1
+exit /b 0
+
+rem ============================================================
+rem  Subroutine: build the portable (green) .zip for one arch
+rem  (%1 = absolute path of the Release build output dir)
+rem  Writes dist\daro-<version>-windows-<arch>-portable.zip - a plain archive holding
+rem  one versioned top level folder; no registry, no installer, no admin rights.
+rem  The heavy lifting is in portable_zip.ps1 (.NET ZipFile, streamed).
+rem  LICENSE / NOTICE.md ride along because GPLv3 requires the license text to be
+rem  distributed with the binary.
+rem ============================================================
+:make_portable
+set "MP_PS=%SCRIPT_DIR%portable_zip.ps1"
+if not exist "%MP_PS%" (
+    echo ERROR: missing packer script: %MP_PS%
+    exit /b 1
 )
-set /a N_PKG+=1
-goto :eof
+set "MP_NAME=daro-%APP_VERSION%-windows-%ARCH%"
+set "MP_ZIP=%PROJECT_ROOT%\dist\%MP_NAME%-portable.zip"
+set "MP_EXTRA=%PROJECT_ROOT%\LICENSE;%PROJECT_ROOT%\NOTICE.md"
+echo ==^> packaging %ARCH% portable: %MP_NAME%-portable.zip
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%MP_PS%" -Source "%~1" -Output "%MP_ZIP%" -RootName "%MP_NAME%" -ExtraFiles "%MP_EXTRA%"
+if errorlevel 1 exit /b 1
+exit /b 0
 
 rem ============================================================
 rem  Abort: print a footer, keep the window open when double-clicked
@@ -280,6 +341,9 @@ echo.
 echo  Option 3: already installed at a custom location?
 echo      set "ISCC_PATH=^<full path of ISCC.exe^>"
 echo      then re-run this script.
+echo.
+echo  Only need the portable (green) .zip? Inno Setup is not required:
+echo      installer\windows\build_installer.bat -Portable
 echo.
 echo  After installing, open a NEW terminal and re-run:
 echo      installer\windows\build_installer.bat

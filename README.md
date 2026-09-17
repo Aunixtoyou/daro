@@ -75,13 +75,40 @@ GitHub Actions，一次触发并行产出三平台安装包：
 
 | 平台 | Runner | 产物 |
 |---|---|---|
-| Windows | `windows-latest` | `daro-<ver>-windows-x64.exe`（Inno Setup，复用 `installer/windows`） |
+| Windows | `windows-latest` | `daro-<ver>-windows-x64.exe`（Inno Setup 安装包）<br>`daro-<ver>-windows-x64-portable.zip`（绿色版） |
 | macOS | `macos-14` | `daro-<ver>-macos-universal.dmg` / `.zip`（x86_64 + arm64 通用） |
 | Linux | `ubuntu-22.04` | `daro-<ver>-linux-amd64.deb` 与 `daro-<ver>-linux-x64.tar.xz` |
 
 工作流：`.github/workflows/release.yml`。版本号唯一来源仍是 `pubspec.yaml` 的
 `version:`，打包脚本（`installer/linux/package_linux.sh`、`installer/macos/make_dmg.sh`
-及既有 `installer/windows/build_installer.bat`）都从中取值。
+及 `installer/windows/build_installer.bat`）都从中取值。
+
+**Windows 绿色版（portable）**：解压即用，不跑安装程序、不写注册表、不需要管理员权限，
+适合放 U 盘或免装环境。压缩包内是一层带版本号的目录，解压不会把文件散落到当前路径：
+
+```
+daro-<ver>-windows-x64\
+  daro.exe  flutter_windows.dll  data\  LICENSE  NOTICE.md
+```
+
+本地打包（**不必**装 Inno Setup）：
+
+```bat
+:: 只出绿色版 zip（从 pubspec.yaml 取版本号，并校验生成文件一致）
+installer\windows\build_installer.bat -Portable
+
+:: 安装包 + 绿色版一次出齐；只出安装包是默认行为
+installer\windows\build_installer.bat -All
+installer\windows\build_installer.bat -SkipBuild -Arch x64 -NoPause   :: CI 用法
+```
+
+产物统一落在 `dist\`：
+`daro-<ver>-windows-x64.exe` 与 `daro-<ver>-windows-x64-portable.zip`。
+CI 里同一份 `flutter build` 产出两个包，不会为绿色版多构建一次。
+
+绿色版是「免安装」而非「免留痕」：连接配置、主题、已保存查询由 `path_provider` 写在
+`%APPDATA%\com.example\daro`，与安装版同一位置，因此两个版本可以互换使用。另外与安装包
+一样，目标机需具备 VC++ 2015-2022 运行库（Flutter Windows 桌面应用的通用要求）。
 
 **发布流程**：
 

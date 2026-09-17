@@ -16,3 +16,7 @@
 # cmd.exe 按 CRLF 计算行边界，LF-only 的 .bat 会被解析器切碎（同一份脚本在 CRLF 下
 # 完整跑通、在 LF 下报出一堆 "不是内部或外部命令" 的碎片），且 linux/macOS runner 不会用到。
 *.bat text eol=crlf
+
+# Windows 打包用 PowerShell 脚本（绿色版 zip 打包）：与 .bat 同属 Windows 侧工具链，
+# 统一 CRLF，避免工作区与仓库换行漂移。
+*.ps1 text eol=crlf

@@ -11,6 +11,9 @@ name: Release
 #
 # 说明：
 #   - base-ui-flutter 是 git submodule，所有 job 用 `submodules: recursive` 拉取。
+#   - Windows 一次 flutter build 出两个产物：Inno Setup 安装包 .exe 与绿色版 .zip
+#     （build_installer.bat -All；绿色版由 installer/windows/portable_zip.ps1 打包，
+#      解压得到一个带版本号的顶层目录，免安装、免管理员权限、不写注册表）。
 #   - pubspec.lock 未纳入版本控制，CI 每次 `flutter pub get` 现解析。
 #   - dart_odbc / mysql_client / sqlite3 为运行期加载系统库，编译期跨平台无碍；
 #     目标机需自行安装 ODBC / MySQL 客户端库才能用对应引擎（与 README 描述一致）。
@@ -51,7 +54,7 @@ jobs:
           echo "解析到版本号: $v"
 
   build-windows:
-    name: Windows x64 安装包
+    name: Windows x64 安装包 + 绿色版
     needs: meta
     runs-on: windows-latest
     steps:
@@ -71,21 +74,29 @@ jobs:
       - name: 构建 Windows Release
         run: flutter build windows --release
 
-      - name: Inno Setup 打包（复用本地脚本）
+      # -All = 一次构建出两个产物，避免为了绿色版再跑一遍 flutter build：
+      #   dist\daro-<ver>-windows-x64.exe            （Inno 安装包）
+      #   dist\daro-<ver>-windows-x64-portable.zip   （绿色版：解压即用，免安装免管理员）
+      # 脚本侧的检查/命名规范与本地完全一致。
+      - name: 打包安装包 + 绿色版（复用本地脚本）
         shell: cmd
-        run: installer\windows\build_installer.bat -SkipBuild -Arch x64 -NoPause
+        run: installer\windows\build_installer.bat -SkipBuild -Arch x64 -NoPause -All
 
       - name: 校验产物
         shell: pwsh
         run: |
           $exe = Get-ChildItem -Path dist -Filter "daro-*windows-*.exe" -ErrorAction SilentlyContinue
           if (-not $exe) { Write-Error "dist 下未找到 daro-<ver>-windows-<arch>.exe"; exit 1 }
-          $exe | ForEach-Object { "打包完成: $($_.Name) ($([math]::Round($_.Length/1MB,1)) MB)" }
+          $zip = Get-ChildItem -Path dist -Filter "daro-*windows-*-portable.zip" -ErrorAction SilentlyContinue
+          if (-not $zip) { Write-Error "dist 下未找到 daro-<ver>-windows-<arch>-portable.zip"; exit 1 }
+          @($exe) + @($zip) | ForEach-Object { "打包完成: $($_.Name) ($([math]::Round($_.Length/1MB,1)) MB)" }
 
       - uses: actions/upload-artifact@v4
         with:
           name: daro-windows-x64
-          path: dist/daro-*windows-*.exe
+          path: |
+            dist/daro-*windows-*.exe
+            dist/daro-*windows-*-portable.zip
           if-no-files-found: error
 
   build-macos:
