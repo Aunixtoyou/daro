@@ -12,6 +12,7 @@ import '../pages/connection_dialog_page.dart';
 import '../theme/app_theme.dart';
 import 'navicat_export_dialog.dart';
 import 'navicat_import_dialog.dart';
+import 'schema_sync_dialog.dart';
 import 'theme_customize_dialog.dart';
 
 /// 与 windows/runner/flutter_window.cpp 通信,接收窗口按钮 hover 状态。
@@ -296,17 +297,19 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
       //   MenuItem(text: '添加到收藏夹', enabled: false),
       //   MenuItem(text: '整理收藏夹...', enabled: false),
       // ]),
-      // const MenuItem(text: '工具', children: [
-      //   MenuItem(text: '命令列界面...', enabled: false),
-      //   MenuItem(text: '数据传输...', enabled: false),
-      //   MenuItem(text: '数据同步...', enabled: false),
-      //   MenuItem(text: '结构同步...', enabled: false),
-      //   MenuSeparator(),
-      //   MenuItem(text: '备份...', enabled: false),
-      //   MenuItem(text: '还原备份...', enabled: false),
-      //   MenuSeparator(),
-      //   MenuItem(text: '选项...', enabled: false),
-      // ]),
+      MenuItem(text: '工具', children: [
+        MenuItem(text: '命令列界面...', enabled: false),
+        MenuItem(text: '数据传输...', enabled: false),
+        MenuItem(text: '数据同步...', enabled: false),
+        MenuItem(
+            text: '结构同步...',
+            onPressed: () => _openSchemaSync(context)),
+        const MenuSeparator(),
+        MenuItem(text: '备份...', enabled: false),
+        MenuItem(text: '还原备份...', enabled: false),
+        MenuSeparator(),
+        MenuItem(text: '选项...', enabled: false),
+      ]),
       // const MenuItem(text: '窗口', children: [
       //   MenuItem(text: '新建窗口', enabled: false),
       //   MenuItem(text: '关闭窗口', enabled: false),
@@ -321,6 +324,11 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
         MenuItem(text: '关于...', onPressed: () => _showAbout(context)),
       ]),
     ];
+  }
+
+  /// 点击「结构同步」:弹出比对 / 部署大弹窗,读取当前连接树的连接与元数据缓存。
+  Future<void> _openSchemaSync(BuildContext context) async {
+    await showSchemaSyncDialog(context, app: context.read<AppState>());
   }
 
   /// 点击"新建连接":以模态弹窗(base-ui `DialogBox`)弹出"选择一个连接类型"窗口。
