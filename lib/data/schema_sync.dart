@@ -190,13 +190,20 @@ class SyncObject {
 
 /// 一次比对的完整结果。
 class SyncPlan {
-  SyncPlan({this.objects = const [], this.errors = const []});
+  SyncPlan({
+    this.objects = const [],
+    this.errors = const [],
+    this.canceled = false,
+  });
 
   /// 全部对象(含无操作)
   final List<SyncObject> objects;
 
   /// 整体级错误(某类对象列表拉取失败等);非空时结果不完整,界面必须显示
   final List<String> errors;
+
+  /// 用户中途取消:objects 为半成品,界面应丢弃本次结果保留旧计划
+  final bool canceled;
 
   Iterable<SyncObject> ofAction(SyncAction action) =>
       objects.where((o) => o.action == action);
@@ -236,12 +243,15 @@ String? structureSyncUnsupported(ConnectionInfo conn) {
 ///
 /// [onProgress] 在每开始处理一个对象时回调(阶段名 + 已完成 / 总数),界面据此
 /// 显示进度;总数为 0 表示该类别无对象。
+/// [isCancelled] 每处理一个对象前查询一次;返回 true 时立即停止,
+/// 产出的 [SyncPlan.canceled] 为 true(半成品结果,界面应丢弃)。
 Future<SyncPlan> compareSchemaSync({
   required SyncEndpoint source,
   required SyncEndpoint target,
   SyncOptions? options,
   SyncDriverFactory? driverFactory,
   void Function(String stage, int done, int total)? onProgress,
+  bool Function()? isCancelled,
 }) async {
   final opt = options ?? SyncOptions();
   final factory = driverFactory ?? _defaultDriverFactory;
@@ -274,6 +284,9 @@ Future<SyncPlan> compareSchemaSync({
 
     for (final kind in SyncObjectKind.values) {
       if (!opt.enabledOf(kind)) continue;
+      if (isCancelled?.call() == true) {
+        return SyncPlan(objects: objects, errors: errors, canceled: true);
+      }
       final List<String> srcNames, tgtNames;
       try {
         srcNames = await kind.lister(src.driver, source.database, schema: source.schema);
@@ -286,6 +299,9 @@ Future<SyncPlan> compareSchemaSync({
       final total = names.length;
       var done = 0;
       for (final pair in names) {
+        if (isCancelled?.call() == true) {
+          return SyncPlan(objects: objects, errors: errors, canceled: true);
+        }
         done++;
         onProgress?.call('比对${kind.label}', done, total);
         objects.add(await _diffOne(
@@ -314,12 +330,14 @@ Future<SyncPlan> compareSchemaSync({
 ///
 /// 逐对象执行:PostgreSQL 家族把**单个对象**的语句包进一条事务(失败只回滚该
 /// 对象,已成功的对象保留),其余类型 DDL 自带提交,按顺序执行。
-/// 任一对象失败不影响后续对象,[DeployItem.error] 记录原因。
+/// 默认任一对象失败不影响后续对象,[DeployItem.error] 记录原因;
+/// [stopOnError] 为 true 时首个失败即中止(剩余对象以「未执行(前序失败)」记错)。
 Future<DeployReport> deploySchemaSync({
   required SyncEndpoint target,
   required List<SyncObject> selected,
   SyncDriverFactory? driverFactory,
   void Function(DeployItem item)? onItemDone,
+  bool stopOnError = false,
 }) async {
   final factory = driverFactory ?? _defaultDriverFactory;
   final items = <DeployItem>[];
@@ -357,6 +375,15 @@ Future<DeployReport> deploySchemaSync({
         item.error = e.toString();
       }
       onItemDone?.call(item);
+      if (stopOnError && !item.ok) {
+        for (final rest in selected.skip(selected.indexOf(obj) + 1)) {
+          final skipped =
+              DeployItem(rest, error: '未执行(前序对象失败,已停止)');
+          items.add(skipped);
+          onItemDone?.call(skipped);
+        }
+        break;
+      }
     }
   } catch (e) {
     // 会话建立失败:未执行的项统一记错,已记录的项保持原状

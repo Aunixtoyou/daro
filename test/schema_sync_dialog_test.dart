@@ -11,10 +11,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
-// 结构同步弹窗的「冒烟」widget 测试:只验证界面装配与浅层交互——打开即渲染源/目标、
-// 预填当前树选中的连接、未选库时比较 / 部署禁用、连接下拉过滤掉文件型库、选项弹窗可开
-// 并如实回写。比对 / 部署的深层逻辑属于 lib/data/schema_sync.dart(已单独被数据层覆盖),
-// 且需要真实驱动会话,不在 widget 冒烟范围内(弹窗内部用默认工厂另开会话,测试不注入)。
+// 结构同步向导弹窗的「冒烟」widget 测试:只验证界面装配与浅层交互——打开即渲染
+// 设置页(源/目标 + 信息面板)、预填当前树选中的连接、未选库时比较禁用、连接下拉
+// 过滤掉文件型库、选项弹窗可开并如实回写;集成用例走完整向导:
+// 比较 → 差异页(分组表 + DDL 比较 / 部署脚本)→ 下一步 → 部署页 → 开始 → 自动重比。
+// 数据层逻辑(schema_sync.dart)另有覆盖,这里只借假驱动验证界面流转。
 
 /// 与 main.dart 同层级:Provider 必须在 MaterialApp 之上,showDialog 的弹层路由
 /// 才能拿到 AppState(Tokens.of / AppColors.of 依赖它)。
@@ -109,15 +110,15 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('结构同步'), findsOneWidget); // DialogBox 标题
-    expect(find.text('源(结构来源)'), findsOneWidget);
-    expect(find.text('目标(部署到)'), findsOneWidget);
+    expect(find.text('源'), findsOneWidget);
+    expect(find.text('目标'), findsOneWidget);
     // 源侧已预填该连接(只读下拉展示当前值),目标侧留空
     expect(find.text(src), findsWidgets);
     expect(find.text('选择连接'), findsWidgets);
-    // 未选库 → 尚不可比较 / 不可部署
+    // 未选库 → 尚不可比较;部署入口(「开始」)只在向导最后一步出现
     expect(_buttonEnabled(tester, '比较'), isFalse);
-    expect(_buttonEnabled(tester, '部署到目标'), isFalse);
-    expect(find.text('尚未比较'), findsWidgets); // 结果区 + 页脚各一
+    expect(find.text('选项'), findsOneWidget);
+    expect(find.text('开始'), findsNothing);
   });
 
   testWidgets('连接下拉过滤掉文件型库(sqlite 不参与结构同步)', (tester) async {
@@ -141,7 +142,7 @@ void main() {
     await tester.tap(find.text('打开结构同步'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('选项...'));
+    await tester.tap(find.text('选项'));
     await tester.pumpAndSettle();
 
     expect(find.text('结构同步选项'), findsOneWidget);
@@ -170,11 +171,12 @@ void main() {
     // 选项弹窗已关闭,主弹窗仍在(比较按钮回来了)
     expect(find.text('结构同步选项'), findsNothing);
     expect(find.text('比较'), findsOneWidget);
-    // 改了选项 → 旧比对作废:仍是「尚未比较」
-    expect(find.text('尚未比较'), findsWidgets);
+    // 改了选项 → 旧比对作废:回到设置页(源/目标两列仍在)
+    expect(find.text('源'), findsOneWidget);
+    expect(find.text('目标'), findsOneWidget);
   });
 
-  testWidgets('集成:注入假驱动走比对 → 差异树(新建/修改/删除)→ DDL 比较',
+  testWidgets('集成:假驱动比较 → 差异页(分组/勾选/DDL)→ 部署页 → 开始部署并自动重比',
       (tester) async {
     _bigSurface(tester);
 
@@ -219,8 +221,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('sync_tgt'));
     await tester.pumpAndSettle();
-    // 选目标库
-    await tester.tap(find.byType(ComboBox<String>).last);
+    // 选目标库(第 3 个 String 下拉:源库/源模式/目标库/目标模式)
+    await tester.tap(find.byType(ComboBox<String>).at(2));
     await tester.pumpAndSettle();
     await tester.tap(find.text('tgtdb'));
     await tester.pumpAndSettle();
@@ -230,25 +232,47 @@ void main() {
     await tester.tap(find.text('比较'));
     await tester.pumpAndSettle();
 
-    // 差异分组:源独有新建立、两侧不同修改、目标独有删除,各 1
-    expect(find.textContaining('要创建的对象（1）'), findsOneWidget);
-    expect(find.textContaining('要修改的对象（1）'), findsOneWidget);
-    expect(find.textContaining('要删除的对象（1）'), findsOneWidget);
+    // 自动进入差异页:三列差异表 + 分组标题(勾选数 / 总数)。
+    // 默认勾选:新建 + 修改入勾,删除不入勾。
+    expect(find.text('源对象'), findsOneWidget);
+    expect(find.text('目标对象'), findsOneWidget);
+    expect(find.text('要创建的对象 (已选择 1 个（共 1 个）)'), findsOneWidget);
+    expect(find.text('要修改的对象 (已选择 1 个（共 1 个）)'), findsOneWidget);
+    expect(find.text('要删除的对象 (已选择 0 个（共 1 个）)'), findsOneWidget);
+    // 新建行只有源列,删除行只有目标列,修改行两列都有名字
     expect(find.text('v_only_src'), findsOneWidget);
-    expect(find.text('v_diff'), findsOneWidget);
     expect(find.text('v_only_tgt'), findsOneWidget);
-    // 默认勾选策略:新建 + 修改入勾,删除不入勾 → 页脚 2/3
-    expect(find.text('勾选 2 / 共 3 处差异待部署（其中删除 1 项）'), findsOneWidget);
+    expect(find.text('v_diff'), findsNWidgets(2));
 
-    // 未选对象时右侧是占位提示
-    expect(find.text('从左侧选择一个对象查看 DDL 比较。'), findsOneWidget);
+    // 未选对象时底部「DDL 比较」页是占位提示
+    expect(find.text('在上方选择一个对象查看 DDL 比较。'), findsOneWidget);
 
-    // 点选“要创建”的视图 → 右侧渲染源 DDL 与将执行语句
+    // 点选“要创建”的视图 → DDL 比较渲染源侧定义
     await tester.tap(find.text('v_only_src'));
     await tester.pumpAndSettle();
     expect(find.textContaining('源 · v_only_src'), findsOneWidget);
-    expect(find.textContaining('将执行的语句（1）'), findsOneWidget);
     expect(find.textContaining('CREATE VIEW v_only_src'), findsWidgets);
+
+    // 切到底部「部署脚本」页:拼接勾选对象的语句(删除未勾,不在脚本里)
+    await tester.tap(find.text('部署脚本'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('CREATE VIEW v_only_src'), findsWidgets);
+    expect(find.textContaining('DROP VIEW v_only_tgt'), findsNothing);
+
+    // 下一步 → 部署页:目标服务器说明 + 复制脚本 + 部署选项,「开始」可用
+    await tester.tap(find.text('下一步'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('（以下脚本将在此服务器上运行）'), findsOneWidget);
+    expect(find.text('复制脚本'), findsOneWidget);
+    expect(find.text('部署选项'), findsOneWidget);
+    expect(find.text('消息日志'), findsOneWidget);
+    expect(_buttonEnabled(tester, '开始'), isTrue);
+
+    // 开始(未勾删除 → 无需二次确认)→ 部署完成后自动重新比较,回到差异页
+    await tester.tap(find.text('开始'));
+    await tester.pumpAndSettle();
+    expect(find.text('重新比较'), findsOneWidget); // 差异页页脚
+    expect(find.text('要创建的对象 (已选择 1 个（共 1 个）)'), findsOneWidget);
   });
 }
 
@@ -322,6 +346,10 @@ class _Driver implements DatabaseDriver {
   Future<String?> getDefinition(String database, String name, String kind,
       {String? schema}) async =>
       _views[name];
+  @override
+  Future<QueryResult> executeQuery(String sql,
+          {int limit = 1000, int offset = 0}) async =>
+      QueryResult(columns: const [], rows: const []); // 部署假执行:吞掉 DDL
 
   @override
   dynamic noSuchMethod(Invocation invocation) => null;
