@@ -29,6 +29,27 @@ FilterCriterion _filter(
 SortCriterion _sort(int column, {bool ascending = true, int id = 0}) =>
     SortCriterion(id: id, columnIndex: column, ascending: ascending);
 
+/// 一个括号分组(面板上的 `(` / `)` 两行)
+FilterGroup _group(
+  List<FilterNode> children, {
+  int id = 100,
+  bool enabled = true,
+  FilterJoin join = FilterJoin.and,
+}) =>
+    FilterGroup(
+      id: id,
+      children: children,
+      enabled: enabled,
+      join: join,
+    );
+
+String? _where(List<FilterNode> criteria, List<String> columns) =>
+    buildWhereClause(
+      criteria: criteria,
+      columns: columns,
+      ident: _mysqlIdent,
+    );
+
 void main() {
   group('buildWhereClause 组装筛选条件', () {
     const columns = ['userid', 'appid', 'login_times'];
@@ -212,6 +233,157 @@ void main() {
         ident: _bracketIdent,
       );
       expect(sql, "[login_times] = '3'");
+    });
+  });
+
+  group('buildWhereClause 组装括号分组', () {
+    const columns = ['userid', 'appid', 'login_times'];
+
+    test('分组带自己的括号,可显式改变「且 / 或」优先级', () {
+      expect(
+        _where([
+          _filter(0, FilterOperator.eq, value: '1', join: FilterJoin.or),
+          _group([
+            _filter(1, FilterOperator.eq, value: '2', id: 3),
+            _filter(2, FilterOperator.eq, value: '3', id: 4),
+          ]),
+        ], columns),
+        "(`userid` = '1' OR (`appid` = '2' AND `login_times` = '3'))",
+      );
+    });
+
+    test('组内只有一条也保留括号:面板上画了括号,SQL 里就得有', () {
+      expect(
+        _where([_group([_filter(1, FilterOperator.eq, value: '2')])], columns),
+        "(`appid` = '2')",
+      );
+    });
+
+    test('分组可嵌套', () {
+      expect(
+        _where([
+          _group([
+            _filter(0, FilterOperator.eq, value: '1', id: 3,
+                join: FilterJoin.or),
+            _group([
+              _filter(1, FilterOperator.eq, value: '2', id: 4),
+              _filter(2, FilterOperator.eq, value: '3', id: 5),
+            ], id: 6),
+          ], id: 7),
+        ], columns),
+        "(`userid` = '1' OR (`appid` = '2' AND `login_times` = '3'))",
+      );
+    });
+
+    test('分组的连接词描述它与后一条同级的关系', () {
+      expect(
+        _where([
+          _group(
+            [
+              _filter(0, FilterOperator.eq, value: '1', id: 3),
+              _filter(1, FilterOperator.eq, value: '2', id: 4),
+            ],
+            join: FilterJoin.or,
+          ),
+          _filter(2, FilterOperator.eq, value: '3', id: 5),
+        ], columns),
+        "((`userid` = '1' AND `appid` = '2') OR `login_times` = '3')",
+      );
+    });
+
+    test('停用的分组整组不参与 SQL,也不留下它的连接词', () {
+      expect(
+        _where([
+          _filter(0, FilterOperator.eq, value: '1', join: FilterJoin.or),
+          _group([
+            _filter(1, FilterOperator.eq, value: '2', id: 3),
+          ], id: 4, enabled: false, join: FilterJoin.or),
+          _filter(2, FilterOperator.eq, value: '3', id: 5),
+        ], columns),
+        "(`userid` = '1' OR `login_times` = '3')",
+      );
+    });
+
+    test('空分组 / 内容全无效的分组跳过', () {
+      expect(_where([_group([])], columns), isNull);
+      expect(
+        _where([
+          _group([_filter(9, FilterOperator.eq, value: '1', id: 3)]),
+          _filter(0, FilterOperator.eq, value: '2', id: 5),
+        ], columns),
+        "`userid` = '2'",
+      );
+    });
+  });
+
+  group('条件树操作(面板的增删移)', () {
+    const columns = ['userid', 'appid', 'login_times'];
+
+    test('flattenFilterNodes 按 SQL 出现顺序深度优先展开叶子', () {
+      final tree = [
+        _filter(0, FilterOperator.eq, id: 1),
+        _group([
+          _filter(1, FilterOperator.eq, id: 2),
+          _group([_filter(2, FilterOperator.eq, id: 3)], id: 4),
+        ], id: 5),
+        _filter(1, FilterOperator.eq, id: 6),
+      ];
+      expect(flattenFilterNodes(tree).map((f) => f.id), [1, 2, 3, 6]);
+    });
+
+    test('insertFilterNode 插在指定节点之后(含分组内);afterId 为 null 追加到根层',
+        () {
+      final inner = _filter(1, FilterOperator.eq, id: 2);
+      final tree = [_filter(0, FilterOperator.eq, id: 1), _group([inner], id: 3)];
+
+      insertFilterNode(tree, 2, _filter(2, FilterOperator.eq, id: 9));
+      expect((tree[1] as FilterGroup).children.map((n) => n.id), [2, 9]);
+
+      insertFilterNode(tree, null, _filter(0, FilterOperator.eq, id: 10));
+      expect(tree.map((n) => n.id), [1, 3, 10]);
+    });
+
+    test('removeFilterNode 删分组会连子树一起摘掉', () {
+      final tree = [
+        _filter(0, FilterOperator.eq, id: 1),
+        _group([_filter(1, FilterOperator.eq, id: 2)], id: 3),
+      ];
+      expect(removeFilterNode(tree, 3), isTrue);
+      expect(tree.map((n) => n.id), [1]);
+      expect(removeFilterNode(tree, 99), isFalse);
+    });
+
+    test('moveFilterNode 只在本层移动,到边界返回 false', () {
+      final tree = [
+        _filter(0, FilterOperator.eq, id: 1),
+        _group([
+          _filter(1, FilterOperator.eq, id: 2),
+          _filter(2, FilterOperator.eq, id: 3),
+        ], id: 4),
+      ];
+      // 组内下移:不跨出分组
+      expect(moveFilterNode(tree, 2, up: false), isTrue);
+      expect((tree[1] as FilterGroup).children.map((n) => n.id), [3, 2]);
+      // 根层第一条已是最前
+      expect(moveFilterNode(tree, 1, up: true), isFalse);
+      expect(moveFilterNode(tree, 4, up: false), isFalse);
+    });
+
+    test('copyFilterTree 深拷贝:改副本不影响原树', () {
+      final origin = [_group([_filter(0, FilterOperator.eq, value: '1', id: 1)])];
+      final draft = copyFilterTree(origin);
+      (draft[0] as FilterGroup).children.first =
+          _filter(1, FilterOperator.eq, value: '2', id: 2);
+      expect(sameFilters(origin, draft), isFalse);
+      expect(_where(origin, columns), "(`userid` = '1')");
+    });
+
+    test('sameFilters 递归比较分组内容', () {
+      List<FilterNode> treeOf(String value) => [
+            _group([_filter(0, FilterOperator.eq, value: value, id: 1)], id: 2),
+          ];
+      expect(sameFilters(treeOf('1'), treeOf('1')), isTrue);
+      expect(sameFilters(treeOf('1'), treeOf('2')), isFalse);
     });
   });
 

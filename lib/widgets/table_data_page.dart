@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../app/app_state.dart';
 import '../data/cell_value_view.dart';
+import '../data/db_data.dart';
 import '../data/table_view.dart';
 import '../theme/app_theme.dart';
 import 'data_export_wizard.dart';
@@ -31,8 +32,35 @@ const double _columnPanelMaxWidth = 320.0;
 const double _cellEditorMinHeight = 96.0;
 const double _cellEditorMaxHeight = 460.0;
 
+/// 筛选面板条件区:每缩进一层(一个括号分组)的宽度
+const double _filterIndentWidth = 18.0;
+
+/// 条件区各列固定宽:启用开关 / 列名下拉 / 运算符下拉 / 行尾控件。
+/// 排序行用同一组宽度,让两个小节的控件纵向对齐
+const double _filterCheckWidth = 28.0;
+const double _filterColumnWidth = 132.0;
+const double _filterOperatorWidth = 88.0;
+const double _filterTrailingWidth = 112.0;
+const double _filterGap = 6.0;
+
 /// "显示"菜单的三种行显示模式
 enum _NullFilter { all, onlyNull, nonNull }
+
+/// 筛选面板右上的「创建工具 / 文本」单选:条件的录入方式。
+///
+/// 两者是**两份独立草稿**,切回来不会丢:构建树始终保留,[text] 的输入框内容
+/// 也始终保留;点「应用」时只有当前选中的那份下推 SQL。
+enum _FilterSource {
+  /// 创建工具:可视化条件树(含括号分组)
+  builder('创建工具'),
+
+  /// 文本:手写 `WHERE` 片段,原文逐字下推(不做转义或重组)
+  text('文本');
+
+  const _FilterSource(this.label);
+
+  final String label;
+}
 
 /// 页面顶部的三个工具面板(可同时开启,各自独立停靠)
 enum _ToolPanel {
@@ -109,6 +137,10 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 列名(首次加载取得,各页共用)
   List<String>? _columns;
 
+  /// 列名 → 数据类型文本(如 `varchar(20)`),供表头第二行展示;
+  /// null = 尚未取得,空 map = 该表无可读类型信息(视图 / 权限不足等)
+  Map<String, String>? _columnTypes;
+
   /// 列宽(拖表头边框调整;列数变化时重置为默认宽度)
   List<double>? _columnWidths;
 
@@ -140,14 +172,30 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 已下推到 SQL 的排序准则(列表顺序 = `ORDER BY` 优先级);空 = 无排序
   final List<SortCriterion> _sorts = [];
 
-  /// 已下推到 SQL 的筛选准则;空 = 无筛选
-  final List<FilterCriterion> _filters = [];
+  /// 已下推到 SQL 的筛选条件树;空 = 无筛选
+  final List<FilterNode> _filters = [];
+
+  /// 「文本」模式下已下推的 WHERE 原文(逐字下推,与构建树互不覆盖)
+  String _appliedWhereText = '';
+
+  /// 已应用的筛选取自构建树还是文本框
+  _FilterSource _appliedSource = _FilterSource.builder;
 
   /// 筛选面板里的**草稿**:面板编辑的是它,点「应用筛选 & 排序」才下推。
   /// 与 [_filters] / [_sorts] 分开,避免"改了还没点应用,翻页却已经生效"。
-  List<FilterCriterion> _draftFilters = [];
+  List<FilterNode> _draftFilters = [];
 
   List<SortCriterion> _draftSorts = [];
+
+  /// 草稿的录入方式(面板右上单选)
+  _FilterSource _draftSource = _FilterSource.builder;
+
+  /// 「文本」草稿:控制器即唯一来源(与下面的值输入框同一套路,
+  /// 输入时只 [_touchDraft] 不 setState)
+  final TextEditingController _whereTextController = TextEditingController();
+
+  /// 面板里当前选中的条件行 id:决定 ↑↓ 与 +/O+ 挂在哪一行
+  int? _selectedFilterId;
 
   /// 草稿准则的值输入控制器(准则 id → 控制器),删行时一并释放
   final Map<int, TextEditingController> _valueControllers = {};
@@ -226,6 +274,7 @@ class _TableDataPageState extends State<TableDataPage> {
       controller.dispose();
     }
     _cellController.dispose();
+    _whereTextController.dispose();
     _draftRevision.dispose();
     super.dispose();
   }
@@ -287,6 +336,7 @@ class _TableDataPageState extends State<TableDataPage> {
     if (changed) {
       setState(() {
         _columns = null;
+        _columnTypes = null;
         _columnWidths = null;
         _totalRows = null;
         _typeId = '';
@@ -299,6 +349,9 @@ class _TableDataPageState extends State<TableDataPage> {
         _dirty = false;
         _sorts.clear();
         _filters.clear();
+        _appliedWhereText = '';
+        _appliedSource = _FilterSource.builder;
+        _selectedFilterId = null;
         _resetDrafts();
         _nullFilter = _NullFilter.all;
         // 列集与当前表强相关:可见列开关、列搜索、单元格编辑器绑定一并重置
@@ -322,17 +375,29 @@ class _TableDataPageState extends State<TableDataPage> {
 
   // ── 服务端 SQL 组装 ────────────────────────────────────
 
-  /// 筛选 WHERE 片段(不含 WHERE 关键字;无筛选返回 null)。
-  /// 由 [buildWhereClause] 组装准则,再与"显示模式"的下推条件 `AND` 在一起
-  String? get _whereSql {
+  /// 已应用状态的筛选片段(不含关键字):构建树按条件树组装,「文本」模式逐字
+  /// 下推用户原文(整体包一层,免得其中的 OR 被后面的 `AND` 抢走优先级)
+  String? get _appliedFilterSql {
     final columns = _columns;
     if (columns == null) return null;
-    final parts = <String>[];
-    final filterSql = buildWhereClause(
+    if (_appliedSource == _FilterSource.text) {
+      final text = _appliedWhereText.trim();
+      return text.isEmpty ? null : '($text)';
+    }
+    return buildWhereClause(
       criteria: _filters,
       columns: columns,
       ident: (column) => _ident(_typeId, column),
     );
+  }
+
+  /// 筛选 WHERE 片段(不含 WHERE 关键字;无筛选返回 null),
+  /// 再与"显示模式"的下推条件 `AND` 在一起
+  String? get _whereSql {
+    final columns = _columns;
+    if (columns == null) return null;
+    final parts = <String>[];
+    final filterSql = _appliedFilterSql;
     if (filterSql != null) parts.add(filterSql);
     switch (_nullFilter) {
       case _NullFilter.all:
@@ -363,7 +428,10 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 视图是否已变更(排序 / 筛选 / 显示模式任一非默认):
   /// 决定「移除所有排序及筛选」是否可点
   bool get _hasView =>
-      _sorts.isNotEmpty || _filters.isNotEmpty || _nullFilter != _NullFilter.all;
+      _sorts.isNotEmpty ||
+      _filters.isNotEmpty ||
+      _appliedWhereText.trim().isNotEmpty ||
+      _nullFilter != _NullFilter.all;
 
   /// 网格实际渲染的数据列下标(列面板隐藏的列不参与渲染)
   List<int> get _visibleCols =>
@@ -450,6 +518,7 @@ class _TableDataPageState extends State<TableDataPage> {
       });
       _syncCellEditor();
       _reportStatus();
+      if (_columnTypes == null) _loadColumnTypes(conn, generation);
     } catch (e) {
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
@@ -458,6 +527,43 @@ class _TableDataPageState extends State<TableDataPage> {
       });
     }
   }
+
+  /// 异步拉取列类型(表头第二行展示用):不阻塞数据渲染,返回后仅重建表头。
+  /// 失败(视图无结构 / 权限不足等)降级为空 map,即不显示类型行。
+  Future<void> _loadColumnTypes(
+      ConnectionInfo conn, int generation) async {
+    Map<String, String> types;
+    try {
+      final defs = await context
+          .read<AppState>()
+          .connectionManager
+          .describeTable(conn, widget.database, widget.table,
+              schema: widget.schema);
+      types = {for (final d in defs) d.name: d.type};
+    } catch (_) {
+      types = const {};
+    }
+    if (!mounted || generation != _loadGeneration) return;
+    setState(() => _columnTypes = types);
+  }
+
+  /// 类型文本 → 表头副标题前的小字形:数值族 '#',文本族 'abc',其余不画。
+  /// 类型名来自各驱动元数据,格式繁多(`varchar(20)`、`bigint unsigned`、
+  /// `decimal(10,2)`…),按词根匹配;`\b` 保证 int 不会误中 point / datetime。
+  static String? _typeGlyph(String? type) {
+    if (type == null || type.isEmpty) return null;
+    final t = type.toLowerCase();
+    if (_numericTypeRe.hasMatch(t)) return '#';
+    if (_textTypeRe.hasMatch(t)) return 'abc';
+    return null;
+  }
+
+  static final _numericTypeRe = RegExp(
+      r'\b(int|integer|bigint|smallint|tinyint|mediumint|serial|decimal|'
+      r'numeric|float|double|real|money|smallmoney|number|fixed|bool)\w*\b');
+  static final _textTypeRe = RegExp(
+      r'\b(char|varchar|nchar|nvarchar|character|text|tinytext|mediumtext|'
+      r'longtext|ntext|citext|clob|enum|set|string|uuid)\w*\b');
 
   /// 拉取第 [page] 页数据并设为当前页。
   /// 返回该页实际行数(0 表示越界空页,未改动 _pageData;负值表示失败)。
@@ -953,7 +1059,10 @@ class _TableDataPageState extends State<TableDataPage> {
 
   /// 草稿与已应用状态是否一致(决定「应用」是否可点 / 标签上的小圆点)
   bool get _draftDirty =>
-      !sameFilters(_draftFilters, _filters) || !sameSorts(_draftSorts, _sorts);
+      !sameFilters(_draftFilters, _filters) ||
+      !sameSorts(_draftSorts, _sorts) ||
+      _draftSource != _appliedSource ||
+      _whereTextController.text != _appliedWhereText;
 
   /// 通知「未应用的更改」提示区刷新(输入框 onChanged 调用,
   /// 只重建那一点 UI,不动数据网格)
@@ -965,23 +1074,30 @@ class _TableDataPageState extends State<TableDataPage> {
       controller.dispose();
     }
     _valueControllers.clear();
-    _draftFilters = [for (final f in _filters) f.copy()];
+    _draftFilters = copyFilterTree(_filters);
     _draftSorts = [for (final s in _sorts) s.copy()];
-    for (final criterion in _draftFilters) {
-      _valueControllers[criterion.id] = TextEditingController(text: criterion.value);
+    for (final criterion in flattenFilterNodes(_draftFilters)) {
+      _valueControllers[criterion.id] =
+          TextEditingController(text: criterion.value);
     }
+    _draftSource = _appliedSource;
+    _whereTextController.text = _appliedWhereText;
   }
 
-  /// 释放一条草稿准则的值控制器
-  void _dropValueController(FilterCriterion criterion) {
-    _valueControllers.remove(criterion.id)?.dispose();
+  /// 释放一个节点名下的值控制器(传入分组则连整棵子树一起释放)
+  void _dropValueControllers(FilterNode node) {
+    for (final criterion in flattenFilterNodes([node])) {
+      _valueControllers.remove(criterion.id)?.dispose();
+    }
   }
 
   /// 应用草稿:把草稿写进已应用状态并重载(丢弃未保存的行修改需先确认)
   Future<void> _applyDraft() async {
     if (!_draftDirty) return;
-    final filters = [for (final f in _draftFilters) f.copy()];
+    final filters = copyFilterTree(_draftFilters);
     final sorts = [for (final s in _draftSorts) s.copy()];
+    final source = _draftSource;
+    final whereText = _whereTextController.text;
     await _applyViewChange(() {
       _filters
         ..clear()
@@ -989,6 +1105,8 @@ class _TableDataPageState extends State<TableDataPage> {
       _sorts
         ..clear()
         ..addAll(sorts);
+      _appliedSource = source;
+      _appliedWhereText = whereText;
     });
   }
 
@@ -1022,7 +1140,7 @@ class _TableDataPageState extends State<TableDataPage> {
     await _applyDraft();
   }
 
-  /// 右键「筛选 → 更多筛选...」:展开面板并新增一条针对该列的空白条件
+  /// 右键「筛选 → 更多筛选...」:展开面板并在根层末尾新增一条针对该列的空白条件
   void _openFilterPanelFor(int column) {
     final criterion = FilterCriterion(
       id: _nextCriterionId++,
@@ -1032,21 +1150,27 @@ class _TableDataPageState extends State<TableDataPage> {
     _valueControllers[criterion.id] = TextEditingController();
     setState(() {
       _draftFilters = [..._draftFilters, criterion];
+      _draftSource = _FilterSource.builder;
+      _selectedFilterId = criterion.id;
       _openPanels.add(_ToolPanel.filter);
     });
   }
 
-  /// 把一条条件并入草稿:同列同运算符则改值并启用,否则追加新准则
+  /// 把一条条件并入草稿:同列同运算符则改值并启用,否则追加到根层末尾
   void _upsertDraftFilter(int column, FilterOperator op, String value) {
-    final existing = _draftFilters
+    final text = op.isUnary ? '' : value;
+    // 右键筛出的条件进条件树,故录入方式一并切回「创建工具」——
+    // 停在「文本」时应用的是原文,条件树里的改动不会生效
+    _draftSource = _FilterSource.builder;
+    final existing = flattenFilterNodes(_draftFilters)
         .where((f) => f.columnIndex == column && f.operator == op)
         .firstOrNull;
-    final text = op.isUnary ? '' : value;
     if (existing != null) {
       existing
         ..value = text
         ..enabled = true;
       _valueControllers[existing.id]?.text = text;
+      _selectedFilterId = existing.id;
       return;
     }
     final criterion = FilterCriterion(
@@ -1057,17 +1181,22 @@ class _TableDataPageState extends State<TableDataPage> {
     );
     _valueControllers[criterion.id] = TextEditingController(text: text);
     _draftFilters = [..._draftFilters, criterion];
+    _selectedFilterId = criterion.id;
   }
 
-  /// 清除全部筛选条件(右键菜单)
+  /// 清除全部筛选条件(条件树与「文本」原文一起清;右键菜单)
   Future<void> _clearFilter() async {
-    if (_draftFilters.isEmpty) return;
-    for (final criterion in _draftFilters) {
-      _dropValueController(criterion);
+    if (_draftFilters.isEmpty && _whereTextIsBlank) return;
+    for (final criterion in flattenFilterNodes(_draftFilters)) {
+      _valueControllers.remove(criterion.id)?.dispose();
     }
     _draftFilters = [];
+    _selectedFilterId = null;
+    _whereTextController.clear();
     await _applyDraft();
   }
+
+  bool get _whereTextIsBlank => _whereTextController.text.trim().isEmpty;
 
   void _setNullFilter(_NullFilter mode) {
     if (_nullFilter == mode) return;
@@ -1075,15 +1204,24 @@ class _TableDataPageState extends State<TableDataPage> {
   }
 
   Future<void> _clearAllView() async {
-    if (_draftFilters.isEmpty && _draftSorts.isEmpty && !_hasView) return;
-    for (final criterion in _draftFilters) {
-      _dropValueController(criterion);
+    if (_draftFilters.isEmpty &&
+        _draftSorts.isEmpty &&
+        _whereTextIsBlank &&
+        !_hasView) {
+      return;
+    }
+    for (final criterion in flattenFilterNodes(_draftFilters)) {
+      _valueControllers.remove(criterion.id)?.dispose();
     }
     _draftFilters = [];
     _draftSorts = [];
+    _selectedFilterId = null;
+    _whereTextController.clear();
     await _applyViewChange(() {
       _filters.clear();
       _sorts.clear();
+      _appliedWhereText = '';
+      _appliedSource = _FilterSource.builder;
       _nullFilter = _NullFilter.all;
     });
   }
@@ -1102,24 +1240,93 @@ class _TableDataPageState extends State<TableDataPage> {
 
   // ── 筛选面板(编辑草稿,点「应用」才下推) ────────────────
 
-  void _addFilterCriterion() {
-    final columns = _columns;
-    if (columns == null || columns.isEmpty) return;
+  /// 一条空白草稿条件(默认第一列 + 等于),同时建好它的值控制器
+  FilterCriterion _newDraftCriterion(int column) {
     final criterion = FilterCriterion(
       id: _nextCriterionId++,
-      columnIndex: 0,
+      columnIndex: column,
       operator: FilterOperator.eq,
     );
     _valueControllers[criterion.id] = TextEditingController();
-    setState(() => _draftFilters = [..._draftFilters, criterion]);
+    return criterion;
   }
 
-  void _removeFilterCriterion(FilterCriterion criterion) {
-    _dropValueController(criterion);
-    setState(() => _draftFilters = [
-          for (final f in _draftFilters)
-            if (!identical(f, criterion)) f,
-        ]);
+  /// 标题旁的 `+`:在根层末尾追加一条条件
+  void _addFilterCriterion() {
+    final columns = _columns;
+    if (columns == null || columns.isEmpty) return;
+    final criterion = _newDraftCriterion(0);
+    setState(() {
+      insertFilterNode(_draftFilters, null, criterion);
+      _selectedFilterId = criterion.id;
+    });
+  }
+
+  /// 行尾的 `+`:在该节点之后追加一条同级条件
+  void _addCriterionAfter(FilterNode node) {
+    final columns = _columns;
+    if (columns == null || columns.isEmpty) return;
+    final criterion = _newDraftCriterion(0);
+    setState(() {
+      insertFilterNode(_draftFilters, node.id, criterion);
+      _selectedFilterId = criterion.id;
+    });
+  }
+
+  /// 行尾的 `O+`:在该节点之后追加一个括号分组(组内先放一条空条件,
+  /// 免得出现点开却没有可填位置的死组)
+  void _addGroupAfter(FilterNode node) {
+    final columns = _columns;
+    if (columns == null || columns.isEmpty) return;
+    final group = FilterGroup(
+      id: _nextCriterionId++,
+      children: [_newDraftCriterion(0)],
+    );
+    setState(() {
+      insertFilterNode(_draftFilters, node.id, group);
+      _selectedFilterId = group.id;
+    });
+  }
+
+  /// 删除一个节点(分组连子树一起删)
+  void _removeFilterNode(FilterNode node) {
+    _dropValueControllers(node);
+    setState(() {
+      removeFilterNode(_draftFilters, node.id);
+      if (_selectedFilterId == node.id) _selectedFilterId = null;
+    });
+    _touchDraft();
+  }
+
+  /// ↑ / ↓:把选中节点在本层上移 / 下移一格(不跨层,分组整体移动)
+  void _moveSelectedFilter(bool up) {
+    final id = _selectedFilterId;
+    if (id == null) return;
+    if (moveFilterNode(_draftFilters, id, up: up)) {
+      setState(() {});
+      _touchDraft();
+    }
+  }
+
+  /// 切换「创建工具 / 文本」。
+  ///
+  /// 切到文本且输入框为空时,用当前条件树生成的片段预填,让用户在已有条件上
+  /// 改;已经手写过内容就不覆盖 —— 两份草稿各自保留,切回来不会丢。
+  void _setFilterSource(_FilterSource source) {
+    if (_draftSource == source) return;
+    final columns = _columns;
+    if (source == _FilterSource.text &&
+        _whereTextIsBlank &&
+        columns != null) {
+      _whereTextController.text = buildWhereClause(
+            criteria: _draftFilters,
+            columns: columns,
+            ident: (column) => _ident(_typeId, column),
+          ) ??
+          '';
+    }
+    setState(() => _draftSource = source);
+    _touchDraft();
   }
 
   void _addSortCriterion() {
@@ -1180,7 +1387,7 @@ class _TableDataPageState extends State<TableDataPage> {
             fontSize: 12.5,
             height: 1.2,
             decoration: TextDecoration.none,
-            fontWeight: FontWeight.w400,
+            fontWeight: FontWeight.w600,
             color: t.foreground,
             fontFamilyFallback: chineseFontFamilyFallback,
           ),
@@ -1216,7 +1423,11 @@ class _TableDataPageState extends State<TableDataPage> {
     );
   }
 
-  /// 筛选 & 排序面板:编辑草稿,点「应用筛选 & 排序」才下推 SQL 并重载
+  /// 筛选 & 排序面板:编辑草稿,点「应用筛选 & 排序」才下推 SQL 并重载。
+  ///
+  /// 条件区是一棵**可嵌套的条件树**:每层最后一条的行尾放 `+` / `O+`
+  /// (追加同级条件 / 追加括号分组),其余行放它与下一条的连接词;
+  /// 分组占 `(` / `)` 两行,组内缩进一层。
   Widget _filterPanel(AppPalette t) {
     final columns = _columns;
     return Container(
@@ -1224,84 +1435,31 @@ class _TableDataPageState extends State<TableDataPage> {
         color: t.surface,
         border: Border(bottom: BorderSide(color: t.border)),
       ),
-      padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
       child: ConstrainedBox(
         // 条件多时面板自身滚动,不挤压下面的数据网格
-        constraints: const BoxConstraints(maxHeight: 240),
+        constraints: const BoxConstraints(maxHeight: 260),
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _panelSectionHeader(
-                t,
-                '筛选',
-                trailing: [
-                  _panelIconButton(
-                      Icons.add, '添加筛选条件', _addFilterCriterion),
-                ],
-              ),
-              if (columns == null || _draftFilters.isEmpty)
-                _panelHint(t, '点击 + 添加筛选条件；每条条件行尾可切换「且 / 或」'),
-              for (var i = 0; i < _draftFilters.length; i++)
-                if (columns != null)
-                  _filterRow(
-                    t,
-                    columns,
-                    _draftFilters[i],
-                    // 连接词写在两行之间（贴在上一行行尾），最后一条没有可连的对象
-                    showJoin: i < _draftFilters.length - 1,
-                  ),
-              if (columns != null && _draftFilters.isNotEmpty)
-                _wherePreview(t, columns),
+              _filterHeader(t),
+              ..._filterBody(t, columns),
               const SizedBox(height: 12),
               _panelSectionHeader(
                 t,
                 '排序方式',
                 trailing: [
                   _panelIconButton(Icons.add, '添加排序准则', _addSortCriterion),
+                  const SizedBox(width: 8),
+                  if (_draftSorts.isEmpty)
+                    _panelHint(t, '点击 + 以添加排序准则'),
                 ],
               ),
-              if (columns == null || _draftSorts.isEmpty)
-                _panelHint(t, '点击 + 以添加排序准则'),
               for (final criterion in _draftSorts)
                 if (columns != null) _sortRow(t, columns, criterion),
               const SizedBox(height: 12),
-              Row(
-                children: [
-                  Button(
-                    text: '应用筛选 & 排序',
-                    // 草稿与已应用一致时无需重查数据
-                    onPressed: _draftDirty ? _applyDraft : null,
-                  ),
-                  const SizedBox(width: 8),
-                  Button(
-                    text: '清除筛选',
-                    onPressed:
-                        _draftFilters.isEmpty ? null : () => _clearFilter(),
-                  ),
-                  const SizedBox(width: 8),
-                  Button(
-                    text: '清除排序',
-                    onPressed: _draftSorts.isEmpty
-                        ? null
-                        : () {
-                            setState(() => _draftSorts = []);
-                            _applyDraft();
-                          },
-                  ),
-                  const SizedBox(width: 8),
-                  Button(
-                    text: '移除全部',
-                    onPressed: _draftFilters.isEmpty &&
-                            _draftSorts.isEmpty &&
-                            !_hasView
-                        ? null
-                        : () {
-                            _clearAllView();
-                          },
-                  ),
-                ],
-              ),
+              _applyRow(t),
             ],
           ),
         ),
@@ -1309,140 +1467,375 @@ class _TableDataPageState extends State<TableDataPage> {
     );
   }
 
-  /// 单条筛选条件:[启用] 列 运算符 值 [且/或] [删除]
-  ///
-  /// 「且 / 或」写在本条行尾,表示它与**下一条**条件的连接方式(与 Navicat 一致:
-  /// 连接词落在两行之间,只是贴在上一行尾部)。最后一条后面没有条件可连,
-  /// 故只留等宽空位,保证各行的删除按钮左边缘对齐。
-  Widget _filterRow(
+  /// 条件区主体:列信息未就绪时给提示,「文本」模式给输入框,
+  /// 「创建工具」模式把条件树从根层起逐行铺开
+  List<Widget> _filterBody(AppPalette t, List<String>? columns) {
+    if (columns == null) return [_panelHint(t, '正在读取列信息 …')];
+    if (_draftSource == _FilterSource.text) return [_whereTextBox(t)];
+    if (_draftFilters.isEmpty) {
+      return [
+        _panelHint(t, '点击 + 添加筛选条件；选中一行后可在其行尾追加同级条件（+）或括号分组（O+）')
+      ];
+    }
+    return [
+      for (var i = 0; i < _draftFilters.length; i++)
+        ..._filterNodeRows(
+          t,
+          columns,
+          _draftFilters[i],
+          level: 0,
+          isLast: i == _draftFilters.length - 1,
+        ),
+    ];
+  }
+
+  /// 「筛选」标题行:标题 + ↑↓(在本层移动选中行) + 右侧「创建工具 / 文本」单选
+  Widget _filterHeader(AppPalette t) {
+    final id = _selectedFilterId;
+    final selected = id == null ? null : findFilterNode(_draftFilters, id);
+    final siblings =
+        selected == null ? null : filterSiblings(_draftFilters, selected.id);
+    final position = selected == null || siblings == null
+        ? -1
+        : siblings.indexOf(selected);
+    return _panelSectionHeader(
+      t,
+      '筛选',
+      trailing: [
+        _panelIconButton(Icons.add, '添加筛选条件', _addFilterCriterion),
+        _panelIconButton(
+          Icons.arrow_upward,
+          '上移选中条件',
+          position > 0 ? () => _moveSelectedFilter(true) : null,
+        ),
+        _panelIconButton(
+          Icons.arrow_downward,
+          '下移选中条件',
+          position >= 0 && position < (siblings?.length ?? 0) - 1
+              ? () => _moveSelectedFilter(false)
+              : null,
+        ),
+        const Spacer(),
+        for (final source in _FilterSource.values)
+          Padding(
+            padding: const EdgeInsets.only(left: 10),
+            child: RadioButton<_FilterSource>(
+              value: source,
+              groupValue: _draftSource,
+              label: source.label,
+              onChanged: (_) => _setFilterSource(source),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// 一个节点在面板上占的行:条件一行;分组是 `(` + 子节点行 + `)`
+  List<Widget> _filterNodeRows(
+    AppPalette t,
+    List<String> columns,
+    FilterNode node, {
+    required int level,
+    required bool isLast,
+  }) {
+    return switch (node) {
+      final FilterCriterion criterion => [
+          _criterionRow(t, columns, criterion,
+              level: level, isLast: isLast),
+        ],
+      final FilterGroup group => [
+          _groupEdgeRow(t, group,
+              level: level, isLast: isLast, opening: true),
+          for (var i = 0; i < group.children.length; i++)
+            ..._filterNodeRows(
+              t,
+              columns,
+              group.children[i],
+              level: level + 1,
+              isLast: i == group.children.length - 1,
+            ),
+          _groupEdgeRow(t, group,
+              level: level, isLast: isLast, opening: false),
+        ],
+    };
+  }
+
+  /// 一条条件行:☑ 列 运算符 值 [行尾]
+  Widget _criterionRow(
     AppPalette t,
     List<String> columns,
     FilterCriterion criterion, {
-    required bool showJoin,
+    required int level,
+    required bool isLast,
   }) {
     final unary = criterion.operator.isUnary;
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        children: [
-          CheckBox(
+    return _filterRowShell(
+      t: t,
+      id: criterion.id,
+      level: level,
+      children: [
+        SizedBox(
+          width: _filterCheckWidth,
+          child: CheckBox(
             value: criterion.enabled,
             onChanged: (value) {
               setState(() => criterion.enabled = value ?? false);
               _touchDraft();
             },
           ),
-          const SizedBox(width: 6),
-          SizedBox(
-            width: 130,
-            child: ComboBox<int>(
-              items: [for (var i = 0; i < columns.length; i++) i],
-              value: criterion.columnIndex < columns.length
-                  ? criterion.columnIndex
-                  : null,
-              itemToString: (index) => columns[index],
-              onChanged: (index) {
-                if (index != null) {
-                  setState(() => criterion.columnIndex = index);
-                  _touchDraft();
-                }
-              },
-            ),
+        ),
+        const SizedBox(width: _filterGap),
+        SizedBox(
+          width: _filterColumnWidth,
+          child: ComboBox<int>(
+            items: [for (var i = 0; i < columns.length; i++) i],
+            value: criterion.columnIndex < columns.length
+                ? criterion.columnIndex
+                : null,
+            itemToString: (index) => columns[index],
+            onChanged: (index) {
+              if (index == null) return;
+              setState(() => criterion.columnIndex = index);
+              _touchDraft();
+            },
           ),
-          const SizedBox(width: 6),
-          SizedBox(
-            width: 96,
-            child: ComboBox<FilterOperator>(
-              items: FilterOperator.values,
-              value: criterion.operator,
-              itemToString: (op) => op.label,
-              onChanged: (op) {
-                if (op == null) return;
-                setState(() {
-                  criterion.operator = op;
-                  if (op.isUnary) criterion.value = '';
-                });
-                if (op.isUnary) _valueControllers[criterion.id]?.clear();
+        ),
+        const SizedBox(width: _filterGap),
+        SizedBox(
+          width: _filterOperatorWidth,
+          child: ComboBox<FilterOperator>(
+            items: FilterOperator.values,
+            value: criterion.operator,
+            itemToString: (op) => op.label,
+            onChanged: (op) {
+              if (op == null) return;
+              setState(() {
+                criterion.operator = op;
+                if (op.isUnary) criterion.value = '';
+              });
+              if (op.isUnary) _valueControllers[criterion.id]?.clear();
+              _touchDraft();
+            },
+          ),
+        ),
+        const SizedBox(width: _filterGap),
+        // 值输入框吃掉剩余宽度:窄窗口下不撑破整行(MinWidth 兜底不塌)
+        Expanded(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 80),
+            child: Input(
+              controller: _valueControllers[criterion.id],
+              // 空值在设计图里就是 <?> 占位,填了才生成条件
+              hint: unary ? '（无需值）' : '<?>',
+              enabled: criterion.enabled && !unary,
+              // 只改草稿:不 setState,避免每敲一个字重建整个页面
+              onChanged: (value) {
+                criterion.value = value;
                 _touchDraft();
               },
             ),
           ),
-          const SizedBox(width: 6),
-          // 值输入框吃掉剩余宽度:窄窗口下不撑破整行(MinWidth 兜底不塌)
-          Expanded(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 80),
-              child: Input(
-                controller: _valueControllers[criterion.id],
-                hint: unary ? '（无需值）' : '值',
-                enabled: criterion.enabled && !unary,
-                // 只改草稿:不 setState,避免每敲一个字重建整个页面
-                onChanged: (value) {
-                  criterion.value = value;
-                  _touchDraft();
-                },
+        ),
+        const SizedBox(width: _filterGap),
+        _filterRowTrailing(t, criterion,
+            append: isLast, showJoin: !isLast),
+      ],
+    );
+  }
+
+  /// 分组的首尾行。
+  ///
+  /// `(` 行带整组的启用开关,分组不是本层最后一条时连接词也写在它上面；
+  /// `)` 行则在本组是最后一条时承载 `+` / `O+`（往本层追加）。
+  Widget _groupEdgeRow(
+    AppPalette t,
+    FilterGroup group, {
+    required int level,
+    required bool isLast,
+    required bool opening,
+  }) {
+    return _filterRowShell(
+      t: t,
+      id: group.id,
+      level: level,
+      children: [
+        SizedBox(
+          width: _filterCheckWidth,
+          child: opening
+              ? CheckBox(
+                  value: group.enabled,
+                  onChanged: (value) {
+                    setState(() => group.enabled = value ?? false);
+                    _touchDraft();
+                  },
+                )
+              : null,
+        ),
+        const SizedBox(width: _filterGap),
+        SizedBox(
+          width: _filterColumnWidth + _filterGap + _filterOperatorWidth,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 2),
+            child: Text(
+              opening ? '(' : ')',
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.2,
+                decoration: TextDecoration.none,
+                fontWeight: FontWeight.w400,
+                color: t.foreground,
               ),
             ),
           ),
-          const SizedBox(width: 6),
-          SizedBox(
-            width: 72,
-            child: showJoin
-                ? ComboBox<FilterJoin>(
-                    items: FilterJoin.values,
-                    value: criterion.join,
-                    itemToString: (join) => join.label,
-                    onChanged: (join) {
-                      if (join == null) return;
-                      setState(() => criterion.join = join);
-                      _touchDraft();
-                    },
-                  )
-                : null,
-          ),
-          const SizedBox(width: 6),
-          _panelIconButton(Icons.close, '删除条件',
-              () => _removeFilterCriterion(criterion)),
-        ],
+        ),
+        const Expanded(child: SizedBox.shrink()),
+        _filterRowTrailing(t, group,
+            append: isLast && !opening, showJoin: opening && !isLast),
+      ],
+    );
+  }
+
+  /// 条件区一行的外壳:按层缩进 + 整行点选 + 选中行铺淡蓝底
+  Widget _filterRowShell({
+    required AppPalette t,
+    required int id,
+    required int level,
+    required List<Widget> children,
+  }) {
+    return Listener(
+      // 按下即选中,不等抬手:与网格行同一套零延迟交互
+      onPointerDown: (_) {
+        if (_selectedFilterId == id) return;
+        setState(() => _selectedFilterId = id);
+      },
+      child: Container(
+        padding: EdgeInsets.only(
+          left: level * _filterIndentWidth,
+          top: _filterGap,
+        ),
+        color: _selectedFilterId == id ? t.treeSelectedBg : null,
+        child: Row(children: children),
       ),
     );
   }
 
-  /// 草稿条件拼出的 `WHERE` 片段预览(灰字等宽,随输入实时刷新)
+  /// 行尾控件:[append] 时是本层追加按钮(`+` 条件 / `O+` 分组),[showJoin] 时
+  /// 是与下一条的连接词;选中行再挂一个删除按钮(非选中行保持设计图的干净)。
+  Widget _filterRowTrailing(
+    AppPalette t,
+    FilterNode node, {
+    required bool append,
+    required bool showJoin,
+  }) {
+    return SizedBox(
+      width: _filterTrailingWidth,
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (append) ...[
+              _miniButton(t, Icons.add, '在此条件后添加同级条件',
+                  () => _addCriterionAfter(node)),
+              _miniButton(t, Icons.add_circle_outline, '在此条件后添加括号分组',
+                  () => _addGroupAfter(node)),
+            ] else if (showJoin)
+              SizedBox(
+                width: 64,
+                child: ComboBox<FilterJoin>(
+                  items: FilterJoin.values,
+                  value: node.join,
+                  itemToString: (join) => join.label,
+                  onChanged: (join) {
+                    if (join == null) return;
+                    setState(() => node.join = join);
+                    _touchDraft();
+                  },
+                ),
+              ),
+            if (_selectedFilterId == node.id)
+              _miniButton(
+                t,
+                Icons.close,
+                node is FilterGroup ? '删除分组' : '删除条件',
+                () => _removeFilterNode(node),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 行尾的小方框图标按钮(设计图里的 + / O+ / ×)
+  Widget _miniButton(
+      AppPalette t, IconData icon, String tooltip, VoidCallback onTap) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: IconBtn(
+        icon: icon,
+        iconSize: 13,
+        size: const Size(22, 22),
+        outline: true,
+        color: t.accent,
+        tooltip: tooltip,
+        onTap: onTap,
+      ),
+    );
+  }
+
+  /// 「文本」模式:直接写 `WHERE` 片段(不含关键字),原文逐字下推。
   ///
-  /// 「且 / 或」混合时结果取决于 SQL 自身的优先级,与其让用户猜,不如把真实
-  /// 片段摊开;监听 [_draftRevision] 是因为值输入框刻意不 setState。
-  Widget _wherePreview(AppPalette t, List<String> columns) {
-    return ValueListenableBuilder<int>(
-      valueListenable: _draftRevision,
-      builder: (context, _, __) {
-        final sql = buildWhereClause(
-          criteria: _draftFilters,
-          columns: columns,
-          ident: (column) => _ident(_typeId, column),
-        );
-        if (sql == null) return const SizedBox.shrink();
-        return Padding(
-          padding: const EdgeInsets.only(left: 2, top: 6),
-          child: Text.rich(
-            TextSpan(
-              children: [
-                const TextSpan(text: 'WHERE  '),
-                TextSpan(text: sql),
-              ],
-            ),
-            style: TextStyle(
-              fontFamily: 'Consolas',
-              fontFamilyFallback: chineseFontFamilyFallback,
-              fontSize: 12,
-              height: 1.35,
-              decoration: TextDecoration.none,
-              fontWeight: FontWeight.w400,
-              color: t.mutedForeground,
-            ),
-          ),
-        );
-      },
+  /// 从「创建工具」切过来时若输入框为空,会先填入条件树当前生成的片段,
+  /// 便于在已有条件上改而不是从零重写。
+  Widget _whereTextBox(AppPalette t) {
+    return Padding(
+      padding: const EdgeInsets.only(top: _filterGap),
+      child: Textarea(
+        controller: _whereTextController,
+        hint: "不含 WHERE 关键字，例如：id > 100 AND name LIKE '集团%'",
+        minLines: 3,
+        maxLines: 8,
+        style: TextStyle(
+          fontFamily: 'Consolas',
+          fontFamilyFallback: chineseFontFamilyFallback,
+          fontSize: 12,
+          height: 1.4,
+          decoration: TextDecoration.none,
+          fontWeight: FontWeight.w400,
+          color: t.foreground,
+        ),
+        onChanged: (_) => _touchDraft(),
+      ),
+    );
+  }
+
+  /// 底部动作行:主按钮 + 有未应用改动时的灰字(设计图的「已编辑准则」)
+  Widget _applyRow(AppPalette t) {
+    return Row(
+      children: [
+        Button(
+          text: '应用筛选 & 排序',
+          variant: ButtonVariant.primary,
+          // 草稿与已应用一致时无需重查数据
+          onPressed: _draftDirty ? _applyDraft : null,
+        ),
+        const SizedBox(width: 10),
+        ValueListenableBuilder<int>(
+          valueListenable: _draftRevision,
+          builder: (context, _, __) => _draftDirty
+              ? Text(
+                  '已编辑准则',
+                  style: TextStyle(
+                    fontSize: 12,
+                    decoration: TextDecoration.none,
+                    fontWeight: FontWeight.w400,
+                    color: t.mutedForeground,
+                    fontFamilyFallback: chineseFontFamilyFallback,
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
     );
   }
 
@@ -1453,12 +1846,12 @@ class _TableDataPageState extends State<TableDataPage> {
     SortCriterion criterion,
   ) {
     return Padding(
-      padding: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.only(top: _filterGap),
       child: Row(
         children: [
-          const SizedBox(width: 22),
+          const SizedBox(width: _filterCheckWidth),
           SizedBox(
-            width: 130,
+            width: _filterColumnWidth,
             child: ComboBox<int>(
               items: [for (var i = 0; i < columns.length; i++) i],
               value: criterion.columnIndex < columns.length
@@ -1466,27 +1859,35 @@ class _TableDataPageState extends State<TableDataPage> {
                   : null,
               itemToString: (index) => columns[index],
               onChanged: (index) {
-                if (index != null) {
-                  setState(() => criterion.columnIndex = index);
-                }
+                if (index == null) return;
+                setState(() => criterion.columnIndex = index);
+                _touchDraft();
               },
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: _filterGap),
           SizedBox(
-            width: 96,
+            width: _filterOperatorWidth,
             child: ComboBox<bool>(
               items: const [true, false],
               value: criterion.ascending,
               itemToString: (asc) => asc ? '升序' : '降序',
               onChanged: (asc) {
-                if (asc != null) setState(() => criterion.ascending = asc);
+                if (asc == null) return;
+                setState(() => criterion.ascending = asc);
+                _touchDraft();
               },
             ),
           ),
-          const SizedBox(width: 6),
-          _panelIconButton(Icons.close, '删除排序准则',
-              () => _removeSortCriterion(criterion)),
+          const Expanded(child: SizedBox.shrink()),
+          SizedBox(
+            width: _filterTrailingWidth,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: _miniButton(t, Icons.close, '删除排序准则',
+                  () => _removeSortCriterion(criterion)),
+            ),
+          ),
         ],
       ),
     );
@@ -2137,6 +2538,19 @@ class _TableDataPageState extends State<TableDataPage> {
 
   // ── 工具标签行(筛选 & 排序 / 列 / 单元格编辑器) ──────────
 
+  /// 工具面板图标:黑色线稿 + 蓝色强调,不随选中态换色
+  CustomPainter _toolPanelIconPainter(_ToolPanel panel,
+      {required Color ink, required Color accent}) {
+    switch (panel) {
+      case _ToolPanel.cellEditor:
+        return _CellEditorIconPainter(line: ink, accent: accent);
+      case _ToolPanel.filter:
+        return _FilterSortIconPainter(line: ink, accent: accent);
+      case _ToolPanel.columns:
+        return _ColumnsIconPainter(line: ink, accent: accent);
+    }
+  }
+
   /// 三个工具面板的开关:自绘 Toggle 按钮(按下即切换,无动画无特效),
   /// 与 Navicat 的功能区页签对应;面板可同时展开
   Widget _toolTabs(AppPalette t) {
@@ -2160,6 +2574,12 @@ class _TableDataPageState extends State<TableDataPage> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    CustomPaint(
+                      size: const Size(16, 16),
+                      painter: _toolPanelIconPainter(
+                          panel, ink: bodyTextColor(context), accent: t.accent),
+                    ),
+                    const SizedBox(width: 5),
                     Text(
                       panel.label,
                       style: TextStyle(
@@ -2356,7 +2776,12 @@ class _TableDataPageState extends State<TableDataPage> {
     // 网格行高内即当前页内行号;列下标一律走 cols 换算
     final grid = DataGridView(
       columns: [
-        for (final i in cols) DataGridViewColumn(title: columns[i]),
+        for (final i in cols)
+          DataGridViewColumn(
+            title: columns[i],
+            subtitle: _columnTypes?[columns[i]],
+            subtitleGlyph: _typeGlyph(_columnTypes?[columns[i]]),
+          ),
       ],
       columnWidths: gridWidths,
       onColumnResize: (index, newWidth) {
@@ -2494,4 +2919,122 @@ class _TableDataPageState extends State<TableDataPage> {
 
   /// 转义字符串字面量中的单引号(翻倍)
   String _literal(String value) => value.replaceAll("'", "''");
+}
+
+// ── 工具面板图标(16x16 自绘线稿,黑色线稿 + 蓝色强调) ──────
+
+/// 单元格编辑器:方框 + 右上斜放的铅笔
+class _CellEditorIconPainter extends CustomPainter {
+  const _CellEditorIconPainter({required this.line, required this.accent});
+  final Color line;
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 右下留缺口给铅笔,方框不画满
+    final frame = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+          const Rect.fromLTWH(1.2, 5.2, 9.6, 9.6), const Radius.circular(1.6)));
+    canvas.drawPath(
+      frame,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4
+        ..color = line,
+    );
+    // 铅笔:笔身(圆头描边模拟胶囊) + 笔尖三角,整体 45° 斜放
+    final pencil = Path()
+      ..moveTo(8.0, 8.0)
+      ..lineTo(12.6, 3.4);
+    canvas.drawPath(
+      pencil,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0
+        ..strokeCap = StrokeCap.round
+        ..color = accent,
+    );
+    canvas.drawPath(
+      Path()
+        ..moveTo(6.6, 9.4)
+        ..lineTo(8.0, 8.0)
+        ..lineTo(9.4, 6.6)
+        ..close(),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..strokeJoin = StrokeJoin.round
+        ..color = accent,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CellEditorIconPainter old) =>
+      old.line != line || old.accent != accent;
+}
+
+/// 筛选 & 排序:左侧漏斗 + 右侧递减排序条
+class _FilterSortIconPainter extends CustomPainter {
+  const _FilterSortIconPainter({required this.line, required this.accent});
+  final Color line;
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final funnel = Path()
+      ..moveTo(1.4, 2.4)
+      ..lineTo(9.4, 2.4)
+      ..lineTo(6.4, 6.4)
+      ..lineTo(6.4, 10.4)
+      ..lineTo(4.4, 8.9)
+      ..lineTo(4.4, 6.4)
+      ..close();
+    canvas.drawPath(
+      funnel,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..strokeJoin = StrokeJoin.round
+        ..color = accent,
+    );
+    final bars = Paint()
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round
+      ..color = line;
+    canvas.drawLine(const Offset(11.0, 3.0), const Offset(15.0, 3.0), bars);
+    canvas.drawLine(const Offset(11.8, 7.0), const Offset(15.0, 7.0), bars);
+    canvas.drawLine(const Offset(12.6, 11.0), const Offset(15.0, 11.0), bars);
+  }
+
+  @override
+  bool shouldRepaint(_FilterSortIconPainter old) =>
+      old.line != line || old.accent != accent;
+}
+
+/// 列:蓝色外框 + 两条黑色列分隔线
+class _ColumnsIconPainter extends CustomPainter {
+  const _ColumnsIconPainter({required this.line, required this.accent});
+  final Color line;
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+          const Rect.fromLTWH(1.6, 2.4, 12.8, 11.2), const Radius.circular(1.4)),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = accent,
+    );
+    final dividers = Paint()
+      ..strokeWidth = 1.4
+      ..color = line;
+    canvas.drawLine(const Offset(5.9, 2.4), const Offset(5.9, 13.6), dividers);
+    canvas.drawLine(const Offset(10.1, 2.4), const Offset(10.1, 13.6), dividers);
+  }
+
+  @override
+  bool shouldRepaint(_ColumnsIconPainter old) =>
+      old.line != line || old.accent != accent;
 }
