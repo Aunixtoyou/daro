@@ -62,8 +62,14 @@ class ResultExportDialog extends StatefulWidget {
 }
 
 class _ResultExportDialogState extends State<ResultExportDialog> {
-  /// 结果集没有目标表,SQL(INSERT) 会凭空造表名,故只提供两种文本格式
-  static const _formats = [DbExportFormat.csv, DbExportFormat.json];
+  /// 结果集没有目标表,SQL(INSERT) 会凭空造表名,故只提供文本类格式
+  static const _formats = [
+    DbExportFormat.txt,
+    DbExportFormat.csv,
+    DbExportFormat.json,
+    DbExportFormat.xml,
+    DbExportFormat.html,
+  ];
 
   DbExportFormat _format = DbExportFormat.csv;
 
@@ -238,17 +244,11 @@ class _ResultExportDialogState extends State<ResultExportDialog> {
               ),
               const SizedBox(height: 10),
               Text(
-                switch (_format) {
-                  DbExportFormat.csv =>
-                    '逗号 / 分号 / 制表符分隔的纯文本,可用 Excel 直接打开。',
-                  DbExportFormat.json =>
-                    '对象数组,每条记录一个对象;结果集没有目标表,故不提供 SQL。',
-                  DbExportFormat.sql => '',
-                },
+                dbExportFormatHint(_format),
                 style: TextStyle(fontSize: 12, color: t.mutedForeground),
               ),
               const SizedBox(height: 12),
-              if (_format == DbExportFormat.csv) ...[
+              if (_format.delimited) ...[
                 FieldRow(
                   label: '分隔符:',
                   child: SizedBox(
@@ -293,7 +293,7 @@ class _ResultExportDialogState extends State<ResultExportDialog> {
                 _check('首行写入列名', _withHeader, (v) => _withHeader = v),
                 _check('写入 UTF-8 BOM(Excel 双击打开中文不乱码)', _bom,
                     (v) => _bom = v),
-              ] else
+              ] else if (_format == DbExportFormat.json)
                 _check('缩进美化(文件更大)', _prettyJson, (v) => _prettyJson = v),
               const SizedBox(height: 16),
               FieldRow(

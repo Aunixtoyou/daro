@@ -63,10 +63,11 @@ String csvEncodeRow(
     if (i > 0) buf.write(delim);
     final isNull = nullFlags != null && i < nullFlags.length && nullFlags[i];
     final raw = isNull ? style.nullAs : cells[i];
-    final needsQuote = isNull
+    // 空引号字符 = 向导里的「无文本识别符号」:一律原样输出
+    final quoted = q.isNotEmpty && (isNull
         ? style.nullAs.isNotEmpty && _containsSpecial(raw, delim, q)
-        : quoteAll || _containsSpecial(raw, delim, q);
-    if (!needsQuote) {
+        : quoteAll || _containsSpecial(raw, delim, q));
+    if (!quoted) {
       buf.write(raw);
     } else {
       buf
