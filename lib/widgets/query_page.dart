@@ -31,6 +31,11 @@ const double _numberColWidth = 44.0;
 /// 查询结果行数上限(超出截断并在结果面板提示)
 const int _resultLimit = 1000;
 
+/// 「加载更多」累积上限:超过此数不再续取,防止用户在千万行表上
+/// 反复点「加载更多」把客户端内存吃光(Navicat 亦有类似机制)。
+/// 达到上限后引导用户走「导出结果」流式落盘,不再驻留 UI 内存
+const int _maxAccumulatedRows = 50000;
+
 /// 错误提示色(功能强调色,主题无关,同工具栏「停止」)
 const Color _errorColor = Color(0xffd93025);
 
@@ -1020,31 +1025,34 @@ class _QueryPageState extends State<QueryPage> {
     );
   }
 
+  /// 状态栏文案:参考 Navicat / DBeaver / DataGrip 的通行做法——
+  /// 主信息是「执行结果 + 耗时」,行数用 `+` 后缀表示"还有更多"
+  /// (由 LIMIT N+1 探测得来,不跑 COUNT 浪费服务端性能);
+  /// DML 用「受影响 X 行」(与 MySQL/PG 服务端返回一致)。
   String get _statusText {
     if (_running) return '正在执行查询 ...';
     final n = _outcomes.length;
     if (n > 0) {
       if (_outcomes.any((o) => o.isError)) {
-        return '查询出错(耗时 $_elapsedMs ms)';
+        return '执行出错 · $_elapsedMs ms';
       }
       if (_stopped) {
-        return '已停止,已执行 $n/$_totalStatements 条语句(耗时 $_elapsedMs ms)';
+        return '已停止 · $n/$_totalStatements 条语句 · $_elapsedMs ms';
       }
-      // 单条语句显示明细文案(同旧版行为)
+      // 单条语句显示明细文案
       if (n == 1) {
         final r = _outcomes.single.result;
         if (r != null && r.isSelect) {
-          final truncated =
-              r.truncated ? '(达到 $_resultLimit 行上限,已截断)' : '';
-          return '已返回 ${r.rows.length} 行$truncated(耗时 $_elapsedMs ms)';
+          final suffix = r.truncated ? '+' : '';
+          return '执行成功 · ${r.rows.length}$suffix 行 · $_elapsedMs ms';
         }
         if (r != null) {
           return r.affectedRows > 0
-              ? '查询已执行,受影响 ${r.affectedRows} 行(耗时 $_elapsedMs ms)'
-              : '查询已执行(耗时 $_elapsedMs ms)';
+              ? '执行成功 · 受影响 ${r.affectedRows} 行 · $_elapsedMs ms'
+              : '执行成功 · $_elapsedMs ms';
         }
       }
-      return '已执行 $n 条语句(耗时 $_elapsedMs ms)';
+      return '执行成功 · $n 条语句 · $_elapsedMs ms';
     }
     return _message ?? '';
   }
@@ -1093,13 +1101,13 @@ class _QueryPageState extends State<QueryPage> {
     if (isError) {
       summary = o.error!;
     } else if (r != null && r.isSelect) {
-      final truncated =
-          r.truncated ? '(达到 $_resultLimit 行上限,已截断)' : '';
-      summary = '已返回 ${r.rows.length} 行$truncated';
+      // `+` 后缀表示服务端还有更多行(LIMIT N+1 探测,不跑 COUNT)
+      final suffix = r.truncated ? '+' : '';
+      summary = '${r.rows.length}$suffix 行';
     } else if (r != null && r.affectedRows > 0) {
-      summary = '查询已执行,受影响 ${r.affectedRows} 行';
+      summary = '受影响 ${r.affectedRows} 行';
     } else {
-      summary = '查询已执行';
+      summary = '执行成功';
     }
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -1120,8 +1128,8 @@ class _QueryPageState extends State<QueryPage> {
           const SizedBox(height: 2),
           Text(
             isError
-                ? '语句 $index 出错:$summary(耗时 ${o.elapsedMs} ms)'
-                : '语句 $index:$summary(耗时 ${o.elapsedMs} ms)',
+                ? '语句 $index 出错:$summary · ${o.elapsedMs} ms'
+                : '语句 $index:$summary · ${o.elapsedMs} ms',
             style: TextStyle(
               fontSize: 12.5,
               color: isError ? _errorColor : t.foreground,
@@ -1158,7 +1166,7 @@ class _QueryPageState extends State<QueryPage> {
       final affected = result?.affectedRows ?? 0;
       return Center(
         child: Text(
-          affected > 0 ? '查询已执行,受影响 $affected 行' : '查询已执行',
+          affected > 0 ? '执行成功 · 受影响 $affected 行' : '执行成功',
           style: TextStyle(fontSize: 12.5, color: t.mutedForeground),
         ),
       );
@@ -1190,11 +1198,14 @@ class _QueryPageState extends State<QueryPage> {
   /// 「加载更多」:对某条被截断的 SELECT 结果,用 offset 续取下一页并累加进结果。
   /// 期间以 [_loadingMoreIndex] 标记;切 tab / 停止会 bump _runGeneration,
   /// 使在途续取结果作废(不追加到已失效的 outcome)。
+  /// 累积到 [_maxAccumulatedRows] 后不再续取,引导用户走「导出结果」流式落盘。
   Future<void> _loadMore(int index) async {
     if (index >= _outcomes.length) return;
     final outcome = _outcomes[index];
     final cur = outcome.result;
     if (cur == null || !cur.isSelect) return;
+    // 累积上限已到:不再往内存里堆行,导出走流式路径
+    if (cur.rows.length >= _maxAccumulatedRows) return;
     final conn = _lookupConnection();
     if (conn == null) return;
     final generation = _runGeneration;
@@ -1230,9 +1241,11 @@ class _QueryPageState extends State<QueryPage> {
     }
   }
 
-  /// 结果被截断时的「加载更多」底栏(已加载行数 + 续取按钮)
+  /// 结果被截断时的「加载更多」底栏:简洁展示 `已加载 X+ 行`,
+  /// 达到累积上限后隐藏「加载更多」按钮并提示走导出
   Widget _loadMoreBar(AppPalette t, int index, QueryResult result) {
     final loading = _loadingMoreIndex == index;
+    final atCap = result.rows.length >= _maxAccumulatedRows;
     return Container(
       height: 30,
       decoration: BoxDecoration(
@@ -1243,16 +1256,19 @@ class _QueryPageState extends State<QueryPage> {
       child: Row(
         children: [
           Text(
-            '已加载 ${result.rows.length} 行(达到单次上限,可能还有更多)',
+            atCap
+                ? '已加载 ${result.rows.length} 行(达客户端上限,更多数据请导出)'
+                : '已加载 ${result.rows.length}+ 行',
             style: TextStyle(fontSize: 12, color: t.mutedForeground),
           ),
           const Spacer(),
-          ToolbarButton(
-            icon: Icons.expand_more,
-            text: loading ? '加载中…' : '加载更多',
-            enabled: !loading && !_running,
-            onTap: () => _loadMore(index),
-          ),
+          if (!atCap)
+            ToolbarButton(
+              icon: Icons.expand_more,
+              text: loading ? '加载中…' : '加载更多',
+              enabled: !loading && !_running,
+              onTap: () => _loadMore(index),
+            ),
         ],
       ),
     );
