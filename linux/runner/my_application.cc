@@ -6,6 +6,8 @@
 #endif
 
 #include "flutter/generated_plugin_registrant.h"
+// desktop_multi_window_plugin_set_window_created_callback:让子窗口引擎注册全部插件
+#include "desktop_multi_window/desktop_multi_window_plugin.h"
 
 struct _MyApplication {
   GtkApplication parent_instance;
@@ -74,6 +76,13 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+
+  // 子窗口(如「连接密码」独立窗口)由 desktop_multi_window 另起引擎,
+  // 这里补一次 fl_register_plugins,让子窗口里 window_manager 等插件可用。
+  desktop_multi_window_plugin_set_window_created_callback([](FlPluginRegistry*
+                                                                 registry) {
+    fl_register_plugins(registry);
+  });
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }

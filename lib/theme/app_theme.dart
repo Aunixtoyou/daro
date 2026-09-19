@@ -386,14 +386,35 @@ class Tokens {
 
   /// build 期间取色:注册对 [AppState] 的依赖,主题变化时自动重建。
   static AppPalette of(BuildContext context) {
-    final app = context.watch<AppState>();
-    return _paletteOf(app);
+    final app = _maybeApp(context, listen: true);
+    return app == null ? paletteOf(context) : _paletteOf(app);
   }
 
   /// 事件回调 / build 之外取色:不注册依赖,不会因 watch 时机触发断言。
   static AppPalette read(BuildContext context) {
-    final app = context.read<AppState>();
-    return _paletteOf(app);
+    final app = _maybeApp(context, listen: false);
+    return app == null ? paletteOf(context) : _paletteOf(app);
+  }
+
+  /// 没有 [AppState] 时的取色:独立子窗口是同进程里的另一个 Flutter 引擎,
+  /// 树里不挂 AppState,色板由子窗口根注入成 Provider(创建时即定稿)。
+  static AppPalette paletteOf(BuildContext context) {
+    try {
+      return Provider.of<AppPalette>(context, listen: false);
+    } catch (_) {
+      return Theme.of(context).brightness == Brightness.dark
+          ? AppTheme.dark
+          : AppTheme.light;
+    }
+  }
+
+  static AppState? _maybeApp(BuildContext context, {required bool listen}) {
+    try {
+      return listen ? context.watch<AppState>() : context.read<AppState>();
+    } catch (_) {
+      // ProviderNotFoundException:当前引擎没有主窗口的 AppState
+      return null;
+    }
   }
 
   static AppPalette _paletteOf(AppState app) {
@@ -414,4 +435,23 @@ Color bodyTextColor(BuildContext context) {
   return Theme.of(context).brightness == Brightness.dark
       ? foreground
       : const Color(0xff000000);
+}
+
+/// 应用 [ThemeData]:主窗口与「连接密码」等独立子窗口共用,
+/// 保证两处的中文回退字体、滚动条与弹层底色一致。
+ThemeData buildAppTheme(Brightness brightness, AppPalette palette) {
+  return ThemeData(
+    brightness: brightness,
+    scaffoldBackgroundColor: palette.background,
+    canvasColor: palette.background,
+    popupMenuTheme: PopupMenuThemeData(color: palette.popover),
+    // 全局滚动条：静止收窄，鼠标悬浮 / 拖动时恢复常规宽度
+    scrollbarTheme: ScrollbarThemeData(
+      thickness: scrollbarHoverThickness(),
+    ),
+    textTheme: (brightness == Brightness.dark
+            ? Typography.material2021().white
+            : Typography.material2021().black)
+        .apply(fontFamilyFallback: chineseFontFamilyFallback),
+  );
 }

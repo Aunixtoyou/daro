@@ -7,6 +7,8 @@
 #include <windowsx.h>
 
 #include "flutter/generated_plugin_registrant.h"
+// DesktopMultiWindowSetWindowCreatedCallback:让子窗口引擎注册全部插件
+#include "desktop_multi_window/desktop_multi_window_plugin.h"
 
 namespace {
 
@@ -154,6 +156,16 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  // 子窗口(如「连接密码」独立窗口)由 desktop_multi_window 另起 Flutter 引擎,
+  // 插件默认只注册到主窗口引擎;这里补一次 RegisterPlugins,
+  // 让子窗口里 window_manager 等插件可用。
+  DesktopMultiWindowSetWindowCreatedCallback([](void* controller) {
+    auto* sub_controller =
+        reinterpret_cast<flutter::FlutterViewController*>(controller);
+    if (sub_controller && sub_controller->engine()) {
+      RegisterPlugins(sub_controller->engine());
+    }
+  });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   // 创建与 Dart 端通信的 method channel,用于推送窗口按钮 hover 状态。

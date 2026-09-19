@@ -12,6 +12,7 @@ import '../data/db_types.dart';
 import '../data/drivers/db_driver.dart';
 import '../pages/connection_dialog_page.dart';
 import '../theme/app_theme.dart';
+import 'connection_password_window.dart';
 import 'create_database_dialog.dart';
 import 'create_schema_dialog.dart';
 import 'function_wizard_dialog.dart';
@@ -29,7 +30,6 @@ class DatabaseTree extends StatefulWidget {
 
 class _DatabaseTreeState extends State<DatabaseTree> {
   /// 树节点图标尺寸(连接/库/模式/分组):正文字号 12px,图标取 16px。
-  /// 不再复用对象面板的 [kObjectIconSize](其尺寸更大且服务于中栏网格)。
   static const double _treeIconSize = 16;
 
   /// 对象行图标尺寸(表/视图/函数):与树节点图标同尺寸。
@@ -128,7 +128,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     });
     switch (kind) {
       case NodeKind.connection:
-        if (hasDriver(conn)) app.connectionManager.expandConnection(conn);
+        if (hasDriver(conn)) _lazyExpandConnection(app, conn);
       case NodeKind.database:
         if (database != null) {
           app.connectionManager.expandDatabase(conn, database);
@@ -746,6 +746,29 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   }
 
 
+  /// 打开连接前的密码预检:类型需要密码且未保存时弹窗补录。
+  /// 密码写入内存连接;弹窗勾选「保存密码」时同时落盘,重启后无需再输。
+  /// 返回携带密码的连接;无需密码或用户取消时返回调用方应中止的信号
+  /// (返回值与入参相同对象 = 无需密码;null = 用户取消)。
+  Future<ConnectionInfo?> _ensurePassword(
+      AppState app, ConnectionInfo conn) async {
+    if (!connectionNeedsPassword(conn)) return conn;
+    if (conn.password.isNotEmpty) return conn;
+    final result =
+        await showConnectionPasswordDialog(context, conn: conn);
+    if (result == null || !mounted) return null;
+    return app.setConnectionPassword(conn, result.password, save: result.save) ??
+        conn.copyWith(password: result.password);
+  }
+
+  /// 首次展开连接节点:先补录密码再懒加载库列表;用户取消则不加载
+  Future<void> _lazyExpandConnection(
+      AppState app, ConnectionInfo conn) async {
+    final target = await _ensurePassword(app, conn);
+    if (target == null || !mounted) return;
+    app.connectionManager.expandConnection(target);
+  }
+
   /// 「打开连接」:真实连接服务器并获取数据库信息(非仅展开树)。
   /// 即使节点已展开 / 已有库列表缓存,也强制重新通信刷新;
   /// 驱动不存活自动重连。成功树中显示最新库列表,失败弹窗明确报错。
@@ -764,8 +787,11 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       );
       return;
     }
+    // 需要密码但未保存时先弹窗补录,填完再连;用户取消则不开连接
+    final target = await _ensurePassword(app, conn);
+    if (target == null || !mounted) return;
     final (ok, message) =
-        await app.connectionManager.forceExpandConnection(conn);
+        await app.connectionManager.forceExpandConnection(target);
     if (!mounted) return;
     if (ok) {
       // 连接成功后标记为已打开并记录日志
@@ -782,7 +808,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     }
   }
 
-  /// 「编辑连接」:以现有配置预填连接向导;确认后更新连接。
+  /// 「编辑连接」:以现有配置预填连接向导弹窗,确认后更新连接。
   /// 名称变化时迁移展开 / 选中状态,并重新加载元数据(参数可能已变)
   Future<void> _editConnectionNode(AppState app, ConnectionInfo conn) async {
     final result = await showDialog<ConnectionInfo>(

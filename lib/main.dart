@@ -3,11 +3,20 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 import 'app/app_state.dart';
+import 'app/sub_window.dart';
 import 'pages/main_page.dart';
 import 'theme/app_theme.dart';
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // desktop_multi_window 起的子窗口(如「连接密码」)自带入口
+  // 参数,走各自的 App,不加载主窗口与 AppState。
+  final subWindow = buildSubWindowApp(args);
+  if (subWindow != null) {
+    runApp(subWindow);
+    return;
+  }
 
   // 桌面窗口管理:隐藏系统标题栏,菜单 + 三个窗口按钮半自绘到同一行
   // (见 lib/widgets/top_menu.dart)。Snap Layouts hover 最大化按钮的菜单
@@ -73,8 +82,8 @@ class DbApp extends StatelessWidget {
               type: MaterialType.transparency,
               child: const MainPage(),
             ),
-            theme: _buildTheme(Brightness.light, app.effectiveLight),
-            darkTheme: _buildTheme(Brightness.dark, app.effectiveDark),
+            theme: buildAppTheme(Brightness.light, app.effectiveLight),
+            darkTheme: buildAppTheme(Brightness.dark, app.effectiveDark),
             themeMode: app.themeMode,
           ),
         ),
@@ -92,18 +101,5 @@ class DbApp extends StatelessWidget {
       case ThemeMode.system:
         return WidgetsBinding.instance.platformDispatcher.platformBrightness;
     }
-  }
-
-  ThemeData _buildTheme(Brightness brightness, AppPalette palette) {
-    return ThemeData(
-      brightness: brightness,
-      scaffoldBackgroundColor: palette.background,
-      canvasColor: palette.background,
-      popupMenuTheme: PopupMenuThemeData(color: palette.popover),
-      textTheme: (brightness == Brightness.dark
-              ? Typography.material2021().white
-              : Typography.material2021().black)
-          .apply(fontFamilyFallback: chineseFontFamilyFallback),
-    );
   }
 }

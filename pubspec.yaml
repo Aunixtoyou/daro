@@ -32,6 +32,9 @@ dependencies:
   pointycastle: ^4.0.0
   # Navicat 连接导入:解析 .ncx(此前仅作为 flutter_svg 的传递依赖,现显式声明)
   xml: ^7.0.1
+  desktop_multi_window: 0.3.1
+  # 独立子窗口用 FFI 调 DwmSetWindowAttribute 染原生标题栏(此前仅为传递依赖)
+  ffi: ^2.1.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
