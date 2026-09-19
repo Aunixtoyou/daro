@@ -109,6 +109,22 @@ class DdlOutcome {
   final bool rolledBack;
 }
 
+/// 对象面板 Ctrl+C 记下的表剪贴板:[tables] 为源表名,来源上下文一并记录,
+/// 粘贴时据此定位(跨 连接/库/模式 的粘贴不支持)
+class TableClipboard {
+  const TableClipboard({
+    required this.tables,
+    required this.connection,
+    required this.database,
+    this.schema,
+  });
+
+  final List<String> tables;
+  final String connection;
+  final String database;
+  final String? schema;
+}
+
 /// 连接树 / 对象面板中可选中的节点种类
 enum NodeKind { connection, database, schema, tableGroup, table }
 
@@ -318,6 +334,21 @@ class AppState extends ChangeNotifier {
       _migrateTabsConnection(oldConn.name, updated.name);
       await connectionManager.disconnect(oldConn.name);
     }
+    return updated;
+  }
+
+  /// 把「打开连接」时补录的密码写入内存中的连接。
+  /// 未勾选「保存密码」的连接密码为空,弹窗补录后即可正常连接与断线重连;
+  /// [save] 为 false 时密码只保留在本次会话,重启后需重新输入。
+  ConnectionInfo? setConnectionPassword(ConnectionInfo conn, String password,
+      {bool save = false}) {
+    final index = _connections.indexWhere((c) => c.name == conn.name);
+    if (index < 0) return null;
+    final updated = _connections[index].copyWith(password: password);
+    _connections[index] = updated;
+    _connectionsView = List.unmodifiable(_connections);
+    notifyListeners();
+    if (save) _persist();
     return updated;
   }
 
@@ -1114,6 +1145,30 @@ class AppState extends ChangeNotifier {
     selectionNotifier.value = Set<String>.from(selectedTables);
   }
 
+  /// 批量选中(框选):把选中集合整体替换为 [names];[additive] 为 true 时并入
+  /// 原有选中(Ctrl 框选)。不改动详情面板跟随对象——多选本身没有"当前项"语义。
+  /// 通过按项通知器精确重建,仅触发实际变化的表项。
+  void selectMany(Iterable<String> names, {bool additive = false}) {
+    final next = additive ? {...selectedTables, ...names} : names.toSet();
+    if (next.length == selectedTables.length &&
+        next.containsAll(selectedTables)) {
+      // 拖动过程中选框反复覆盖同一批表项:命中集合未变则整体跳过
+      return;
+    }
+
+    for (final old in selectedTables) {
+      if (!next.contains(old)) itemNotifierFor(old).value = false;
+    }
+    for (final name in next) {
+      itemNotifierFor(name).value = true;
+    }
+
+    selectedTables
+      ..clear()
+      ..addAll(next);
+    selectionNotifier.value = Set<String>.from(selectedTables);
+  }
+
   // ── 对象 DDL 操作(工具栏「新建 / 删除 / 设计」使用) ──
 
   /// 按数据库类型选择标识符引用方式(避免表名与关键字冲突)
@@ -1731,6 +1786,7 @@ class AppState extends ChangeNotifier {
     String oldName,
     String newName, {
     String? schema,
+    bool refresh = true,
   }) async {
     final newName2 = newName.trim();
     if (newName2.isEmpty) return DdlOutcome(false, '表名不能为空');
@@ -1741,7 +1797,9 @@ class AppState extends ChangeNotifier {
         : 'CREATE TABLE $newIdent AS SELECT * FROM $oldIdent';
     try {
       await connectionManager.runQuery(conn, sql, database: database, limit: 1);
-      await connectionManager.refreshDatabase(conn, database, schema: schema);
+      if (refresh) {
+        await connectionManager.refreshDatabase(conn, database, schema: schema);
+      }
       return DdlOutcome(true);
     } catch (e) {
       return DdlOutcome(false, e.toString());
@@ -1780,6 +1838,74 @@ class AppState extends ChangeNotifier {
     } catch (e) {
       return DdlOutcome(false, e.toString());
     }
+  }
+
+  // ── 表剪贴板(对象面板 Ctrl+C / Ctrl+V) ────────────────────────
+
+  /// 应用内表剪贴板:null = 尚未复制过。粘贴动作是「建表」而非贴文本,
+  /// 故不写系统剪贴板
+  TableClipboard? tableClipboard;
+
+  /// 记录 Ctrl+C 复制的表([schema] 为有模式层类型的路径)
+  void copyTablesToClipboard(
+    List<String> tables, {
+    required String connection,
+    required String database,
+    String? schema,
+  }) {
+    tableClipboard = TableClipboard(
+      tables: tables,
+      connection: connection,
+      database: database,
+      schema: schema,
+    );
+  }
+
+  /// 规划粘贴:给剪贴板里每张源表排定不冲突的新表名(`x_copy`,被占用则
+  /// `x_copy_2`…递增)。[taken] 为目标上下文当前已占用的表名;批次内互相
+  /// 避让。无剪贴板时返回空列表
+  List<(String src, String dst)> tablePastePlan(Set<String> taken) {
+    final cb = tableClipboard;
+    if (cb == null) return const [];
+    final used = {...taken};
+    final plan = <(String, String)>[];
+    for (final src in cb.tables) {
+      var dst = '${src}_copy';
+      for (var i = 2; used.contains(dst); i++) {
+        dst = '${src}_copy_$i';
+      }
+      used.add(dst);
+      plan.add((src, dst));
+    }
+    return plan;
+  }
+
+  /// 执行 [plan]:把剪贴板里的表按结构 + 数据克隆到其来源 连接/库/模式,
+  /// 返回失败项(`新表名: 原因`),全部成功时为空列表
+  Future<List<String>> pasteTables(List<(String src, String dst)> plan) async {
+    final cb = tableClipboard;
+    if (cb == null || plan.isEmpty) return const [];
+    final conn = connectionByName(cb.connection);
+    if (conn == null) {
+      return [for (final (_, dst) in plan) '$dst: 连接「${cb.connection}」不存在'];
+    }
+    final failed = <String>[];
+    var created = 0;
+    for (final (src, dst) in plan) {
+      final outcome = await copyTable(conn, cb.database, src, dst,
+          schema: cb.schema, refresh: false);
+      if (outcome.ok) {
+        created++;
+      } else {
+        failed.add('$dst: ${outcome.error}');
+      }
+    }
+    // 整批只重载一次对象列表
+    if (created > 0) {
+      await connectionManager
+          .refreshDatabase(conn, cb.database, schema: cb.schema);
+    }
+    return failed;
   }
 
   /// 转储单表结构:返回 CREATE TABLE DDL 文本(失败返回 null)。
@@ -1862,12 +1988,16 @@ class AppState extends ChangeNotifier {
     String? schema,
     required String filePath,
     required DbExportRequest request,
+    List<String>? columns,
     String? where,
     String? sortColumn,
     bool sortAscending = true,
     void Function(int done, int total)? onProgress,
     bool Function()? isCancelled,
   }) async {
+    if (columns != null && columns.isNotEmpty) {
+      request = request.copyWith(columns: columns);
+    }
     String? orderBy;
     var total = -1;
     try {
@@ -1938,6 +2068,120 @@ class AppState extends ChangeNotifier {
       },
       onProgress: onProgress,
       isCancelled: isCancelled,
+    );
+  }
+
+  /// 库(或模式下)的全部表名:必要时触发一次对象列表加载。
+  /// 加载失败抛出异常文本,由向导转成错误提示。
+  Future<List<String>> tablesInDatabase(
+    ConnectionInfo conn,
+    String database, {
+    String? schema,
+  }) async {
+    final cm = connectionManager;
+    final hasSchema = schema != null && schema.isNotEmpty;
+    var state = cm.tableStateOf(conn.name, database, schema: schema);
+    if (state.status != LoadStatus.loaded || state.tables == null) {
+      if (hasSchema) {
+        await cm.expandSchema(conn, database, schema);
+      } else {
+        await cm.expandDatabase(conn, database);
+      }
+      state = cm.tableStateOf(conn.name, database, schema: schema);
+    }
+    if (state.error != null) throw StateError(state.error!);
+    return [...?state.tables];
+  }
+
+  /// 批量导出多张表(导出向导第 5 步的执行体)。
+  ///
+  /// 逐表调用 [exportTableData]:每表开始前统计总行数并回调 [onTableStart],
+  /// 进度按**全部表**的累计行数上报(进度条跨表不回退)。
+  /// [where] / [sortColumn] 只作用于 [whereTable](表数据页带入的当前视图),
+  /// 其余表整表导出。单表失败时 [continueOnError] 决定是否继续下一张。
+  Future<BatchExportResult> exportTablesBatch({
+    required ConnectionInfo conn,
+    required String database,
+    String? schema,
+    required List<ExportJob> jobs,
+    required DbExportRequest request,
+    String? where,
+    String? sortColumn,
+    bool sortAscending = true,
+    String? whereTable,
+    bool continueOnError = true,
+    void Function(ExportJob job, int totalRows)? onTableStart,
+    void Function(int rowsDone, int rowsTotal)? onProgress,
+    void Function(String line)? onLog,
+    bool Function()? isCancelled,
+  }) async {
+    var rowsDone = 0;
+    var rowsTotal = 0;
+    var failed = 0;
+    var cancelled = false;
+    String? firstError;
+
+    for (final job in jobs) {
+      if (isCancelled?.call() ?? false) {
+        cancelled = true;
+        onLog?.call('[EXP] Cancelled by user');
+        break;
+      }
+      int total;
+      try {
+        total = await connectionManager.countTable(conn, database, job.table,
+            schema: schema, where: job.table == whereTable ? where : null);
+      } catch (e) {
+        total = -1;
+      }
+      rowsTotal += total > 0 ? total : 0;
+      onTableStart?.call(job, total);
+      onLog?.call('[EXP] Export table [${job.table}]');
+
+      final result = await exportTableData(
+        conn: conn,
+        database: database,
+        table: job.table,
+        schema: schema,
+        filePath: job.filePath,
+        request: request,
+        columns: job.columns,
+        where: job.table == whereTable ? where : null,
+        sortColumn: job.table == whereTable ? sortColumn : null,
+        sortAscending: sortAscending,
+        onProgress: (done, _) {
+          onProgress?.call(rowsDone + done, rowsTotal);
+        },
+        isCancelled: isCancelled,
+      );
+      if (result.cancelled) {
+        cancelled = true;
+        onLog?.call('[EXP] Cancelled by user');
+        break;
+      }
+      rowsDone += result.rowsWritten;
+      onProgress?.call(rowsDone, rowsTotal);
+
+      if (result.error != null) {
+        failed++;
+        firstError ??= '${job.table}: ${result.error}';
+        onLog?.call('[ERR] ${job.table} 失败:${result.error}');
+        if (!continueOnError) {
+          onLog?.call('[EXP] Stopped on error');
+          break;
+        }
+        continue;
+      }
+      onLog?.call('[EXP] Export to - ${job.filePath}');
+    }
+
+    if (failed == 0 && !cancelled) onLog?.call('[EXP] Finished successfully');
+    return BatchExportResult(
+      rowsWritten: rowsDone,
+      tablesDone: jobs.length - failed,
+      tablesFailed: failed,
+      cancelled: cancelled,
+      error: firstError,
     );
   }
 

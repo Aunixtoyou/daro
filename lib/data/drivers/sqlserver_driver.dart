@@ -230,6 +230,31 @@ class SqlServerDriver implements DatabaseDriver {
   }
 
   @override
+  Future<Map<String, int>> listTableRowEstimates(String database,
+      {String? schema}) async {
+    final qdb = _quoted(database);
+    final sf = schema == null ? '' : "AND s.name = '${_literal(schema)}' ";
+    // sys.partitions.rows 由存储引擎维护(增删行时更新),读目录不扫描数据;
+    // index_id 0 = 堆、1 = 聚集索引,二者取一即表本身的行数
+    final r = await _runSql(
+      "SELECT t.name AS OBJ_NAME, SUM(p.rows) AS ROWS "
+      "FROM $qdb.sys.tables t "
+      "JOIN $qdb.sys.schemas s ON s.schema_id = t.schema_id "
+      "JOIN $qdb.sys.partitions p "
+      "  ON p.object_id = t.object_id AND p.index_id IN (0, 1) "
+      "WHERE 1 = 1 $sf "
+      "GROUP BY t.name",
+    );
+    final out = <String, int>{};
+    for (final row in r.rows) {
+      final name = row['OBJ_NAME']?.toString();
+      final rows = parseRowCount(row['ROWS']);
+      if (name != null && rows != null) out[name] = rows;
+    }
+    return out;
+  }
+
+  @override
   Future<Map<String, String>> listFunctionComments(String database,
       {String? schema}) {
     final qdb = _quoted(database);

@@ -41,6 +41,7 @@ class TableListState {
     this.tableComments = const {},
     this.viewComments = const {},
     this.functionComments = const {},
+    this.rowEstimates = const {},
     this.categoryErrors,
     this.error,
   });
@@ -64,6 +65,14 @@ class TableListState {
   Map<String, String>? tableComments;
   Map<String, String>? viewComments;
   Map<String, String>? functionComments;
+
+  /// 对象名 → **估算行数**(读系统目录 / 统计信息,不扫描数据)。
+  /// 与对象列表同批加载:一条目录 SQL 覆盖整库,代价与列表同级,因此无需用户
+  /// 手动触发。取不到估算值的对象不带键(SQLite 未跑 ANALYZE、PG 刚建表未
+  /// autoanalyze、Access 无目录统计),界面显示横杠。
+  /// 可空字段:热重载后旧实例上为 null,读取处一律用 `?[name]` 兜底;
+  /// [refreshDatabase] 重载列表时一并重取。
+  Map<String, int>? rowEstimates;
 
   /// 整体加载失败(会话无法定位 / 表列表都拉不到)时的错误;
   /// 为 null 表示库可正常打开
@@ -299,23 +308,28 @@ class ConnectionManager extends ChangeNotifier {
     final functions = await load(ObjectCategory.function);
     final procedures = await load(ObjectCategory.procedure);
     final users = await load(ObjectCategory.user);
-    // 对象注释:补全增强信息,读取失败静默降级为空 map(不影响对象列表,
-    // 也不记入 categoryErrors —— 注释缺失不是需要用户重试的错误)
-    Future<Map<String, String>> comments(
-        Future<Map<String, String>> Function() query) async {
+    // 可选增强元数据(对象注释 / 估算行数):读取失败静默降级为空 map ——
+    // 不影响对象列表,也不记入 categoryErrors(缺失不是需要用户重试的错误)
+    Future<Map<String, V>> optionalMap<V>(
+        Future<Map<String, V>> Function() query) async {
       try {
         return await query();
       } catch (_) {
-        return const {};
+        return <String, V>{};
       }
     }
 
-    final tableComments = await comments(
+    final tableComments = await optionalMap(
         () => driver.listTableComments(database, schema: schema));
-    final viewComments = await comments(
+    final viewComments = await optionalMap(
         () => driver.listViewComments(database, schema: schema));
-    final functionComments = await comments(
+    final functionComments = await optionalMap(
         () => driver.listFunctionComments(database, schema: schema));
+    // 估算行数:一条目录 / 统计信息查询覆盖全部表,故随列表一起拉。
+    // 读不到(引擎无此统计、账号无权限)同样留空 → 界面显示横杠,
+    // 绝不回退成 COUNT(*):大表全扫会卡住列表并白耗服务端性能
+    final rowEstimates = await optionalMap(
+        () => driver.listTableRowEstimates(database, schema: schema));
     state
       ..tables = tables
       ..views = views
@@ -326,6 +340,7 @@ class ConnectionManager extends ChangeNotifier {
       ..tableComments = tableComments
       ..viewComments = viewComments
       ..functionComments = functionComments
+      ..rowEstimates = rowEstimates
       ..categoryErrors = errors;
   }
 
@@ -430,6 +445,8 @@ class ConnectionManager extends ChangeNotifier {
 
   /// 统计表的总行数(服务端分页的"分页针对全表"总数依据);
   /// [where] 非空时统计筛选后的行数。连接失效时自动重连一次。
+  /// 这是**精确**行数,会全表扫描,只用于单表分页;对象列表的「行」列走驱动
+  /// 估算值([DatabaseDriver.listTableRowEstimates]),不在此扫全表。
   Future<int> countTable(
     ConnectionInfo conn,
     String database,
@@ -655,31 +672,53 @@ class ConnectionManager extends ChangeNotifier {
   /// 强制刷新对象列表(表 / 视图 / 函数 / 过程 / 用户)。
   /// [schema] 为空刷新库级(默认模式)状态,非空刷新该模式的独立状态。
   /// DDL 操作(新建 / 删除)后调用,使对象面板与连接树重新加载最新列表。
+  /// 列表已在显示时走**静默重载**:旧内容保留到新列表就绪后一次性替换,避免闪白。
   Future<void> refreshDatabase(ConnectionInfo conn, String database,
       {String? schema}) async {
     final state = tableStateOf(conn.name, database, schema: schema);
-    state
-      ..status = LoadStatus.idle
-      ..tables = null
-      ..views = null
-      ..materializedViews = null
-      ..functions = null
-      ..procedures = null
-      ..users = null
-      ..tableComments = null
-      ..viewComments = null
-      ..functionComments = null
-      ..categoryErrors = null
-      ..error = null;
-    notifyListeners();
-    if (schema == null) {
-      await expandDatabase(conn, database);
-    } else {
-      await expandSchema(conn, database, schema);
+    if (state.status != LoadStatus.loaded) {
+      state
+        ..status = LoadStatus.idle
+        ..tables = null
+        ..views = null
+        ..materializedViews = null
+        ..functions = null
+        ..procedures = null
+        ..users = null
+        ..tableComments = null
+        ..viewComments = null
+        ..functionComments = null
+        ..rowEstimates = null
+        ..categoryErrors = null
+        ..error = null;
+      notifyListeners();
+      if (schema == null) {
+        await expandDatabase(conn, database);
+      } else {
+        await expandSchema(conn, database, schema);
+      }
+      // 重载完成:结构版本号 +1,使 SQL 补全的列缓存下次构建时失效
+      // (ALTER TABLE 加/删列后,列补全即时反映新结构)
+      state.revision = (state.revision ?? 0) + 1;
+      return;
     }
-    // 重载完成:结构版本号 +1,使 SQL 补全的列缓存下次构建时失效
-    // (ALTER TABLE 加/删列后,列补全即时反映新结构)
+
+    // 已有列表:静默重载——保留旧内容直到新列表就绪后整体替换(_loadObjectLists
+    // 全部查询完成才写入),面板与树不会出现"闪白 + 工具栏短暂禁用 + 滚动/选中丢失"。
+    try {
+      final driver = await _driverFor(conn);
+      await driver.useDatabase(database);
+      await _loadObjectLists(state, driver, database, schema: schema);
+      state.error = null;
+    } catch (e) {
+      await _drivers.remove(conn.name)?.close();
+      state
+        ..status = LoadStatus.error
+        ..categoryErrors = null
+        ..error = e.toString();
+    }
     state.revision = (state.revision ?? 0) + 1;
+    notifyListeners();
   }
 
   /// 关闭并移除某连接的驱动(如删除连接时)

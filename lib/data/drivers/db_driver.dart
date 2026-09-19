@@ -154,6 +154,15 @@ abstract class DatabaseDriver {
   Future<Map<String, String>> listViewComments(String database,
       {String? schema});
 
+  /// 表名 → **估算行数**(读系统目录 / 统计信息,绝不扫描数据)。
+  ///
+  /// 一次查询覆盖整库(或 [schema] 模式)的全部表,代价与 [listTables] 同级,
+  /// 故随对象列表一起拉取。键须与 [listTables] 一致;取不到估算值的引擎
+  /// (Access)、从未统计过的表(SQLite 未跑 ANALYZE、PG 刚建表)一律**不带键**,
+  /// 由界面显示横杠。读取失败由调用方(ConnectionManager)降级为「无估算值」。
+  Future<Map<String, int>> listTableRowEstimates(String database,
+      {String? schema});
+
   /// 函数名 → 函数注释([schema] 语义同 [listTableComments],键与 [listFunctions] 一致)
   Future<Map<String, String>> listFunctionComments(String database,
       {String? schema});
@@ -254,6 +263,15 @@ abstract class DatabaseDriver {
 
 /// 当前已实现驱动的数据库类型 id(见 db_types.dart)
 const kSupportedDriverTypes = {'mysql', 'mariadb', 'postgresql', 'sqlite', 'sqlserver', 'access'};
+
+/// 打开前需要密码的连接类型(「是否需要密码」判断的唯一入口)。
+/// 文件型 SQLite / Access 无密码概念;SQL Server 的 Windows 身份验证
+/// (authMethod == 'windows')走系统凭据,也不需要密码。
+bool connectionNeedsPassword(ConnectionInfo conn) => switch (conn.typeId) {
+      'mysql' || 'mariadb' || 'postgresql' => true,
+      'sqlserver' => conn.authMethod != 'windows',
+      _ => false,
+    };
 
 /// 有独立模式层(schema)的数据库类型:库节点下渲染模式层级,
 /// 右键库节点提供「新建模式」等模式级操作。
@@ -372,3 +390,8 @@ String orderByClauseSql(String? orderBy) =>
 
 /// 把驱动返回的 COUNT(*) 标量值解析为 int(int 原样,字符串按数字解析,失败回退 0)
 int parseCountValue(Object? v) => v is int ? v : (int.tryParse('$v') ?? 0);
+
+/// 把目录 / 统计信息里的行数标量解析为 int:不可解析或 NULL 返回 null,
+/// 语义是「无估算值」(界面显示横杠),与 [parseCountValue] 的 0 兜底区分
+int? parseRowCount(Object? v) =>
+    v == null ? null : (v is num ? v.toInt() : num.tryParse('$v')?.round());

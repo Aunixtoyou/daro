@@ -214,6 +214,154 @@ void main() {
       // 取消在页写完(2 行)之后判定:已写出的内容保留
       expect(r.rowsWritten, 2);
     });
+
+    test('TXT:与 CSV 共用编码,默认制表符', () async {
+      final path = '${tmp.path}/out.txt';
+      await exportTable(
+        target: const ExportTarget(typeId: 'mysql', database: 'd', table: 't'),
+        request: const DbExportRequest(
+          format: DbExportFormat.txt,
+          csv: DelimitedStyle(delimiter: '\t', eol: '\n'),
+        ),
+        filePath: path,
+        load: (limit, offset) async => _page(['id', 'name'], [
+          ['1', 'a\tb'],
+          ['2', 'c']
+        ], nulls: [
+          [false, false],
+          [false, true]
+        ]),
+      );
+      // 含分隔符的字段被引号包裹(制表符本身原样保留),真 NULL 输出空串
+      expect(File(path).readAsStringSync(), 'id\tname\n1\t"a\tb"\n2\t\n');
+    });
+
+    test('列筛选:按请求顺序取子集并同步切片 nullMask', () async {
+      final path = '${tmp.path}/picked.csv';
+      await exportTable(
+        target: const ExportTarget(typeId: 'mysql', database: 'd', table: 't'),
+        request: const DbExportRequest(
+          format: DbExportFormat.csv,
+          csv: DelimitedStyle(nullAs: r'\N'),
+          columns: ['name', 'id'],
+        ),
+        filePath: path,
+        load: (limit, offset) async => _page(['id', 'name', 'secret'], [
+          ['1', 'a', 'x'],
+          ['2', 'NULL', 'y']
+        ], nulls: [
+          [false, false, false],
+          [false, true, false]
+        ]),
+      );
+      // 列序跟请求走,未勾选的 secret 不出现,第二行 name 仍是真 NULL
+      expect(File(path).readAsStringSync(), 'name,id\r\na,1\r\n\\N,2\r\n');
+    });
+
+    test('列筛选:覆盖全部列时恒等直返(零拷贝)', () async {
+      final path = '${tmp.path}/allcols.csv';
+      await exportTable(
+        target: const ExportTarget(typeId: 'mysql', database: 'd', table: 't'),
+        request: const DbExportRequest(
+          format: DbExportFormat.csv,
+          columns: ['id', 'name'],
+        ),
+        filePath: path,
+        load: (limit, offset) async => _page(['id', 'name'], [
+          ['1', 'a']
+        ], nulls: [
+          [false, false]
+        ]),
+      );
+      expect(File(path).readAsStringSync(), 'id,name\r\n1,a\r\n');
+    });
+
+    test('XML:table / row / field 结构,NULL 为空元素 + null 属性', () async {
+      final path = '${tmp.path}/out.xml';
+      await exportTable(
+        target: const ExportTarget(typeId: 'mysql', database: 'd', table: 't'),
+        request: const DbExportRequest(
+            format: DbExportFormat.xml, csv: DelimitedStyle(eol: '\n')),
+        filePath: path,
+        load: (limit, offset) async => _page(['a'], [
+          ['<x&y>'],
+          ['NULL']
+        ], nulls: [
+          [false],
+          [true]
+        ]),
+      );
+      final xml = File(path).readAsStringSync();
+      expect(xml, startsWith('<?xml version="1.0" encoding="UTF-8"?>\n'));
+      expect(xml, contains('<table name="t">'));
+      expect(xml, contains('  <row><field name="a">&lt;x&amp;y&gt;</field></row>'));
+      expect(xml, contains('<field name="a" null="true" />'));
+      expect(xml, endsWith('</table>\n'));
+    });
+
+    test('HTML:整页文档 + 表头开关注重 <thead>,NULL 走 td.null', () async {
+      final path = '${tmp.path}/out.html';
+      await exportTable(
+        target: const ExportTarget(typeId: 'mysql', database: 'd', table: 't'),
+        request: const DbExportRequest(
+            format: DbExportFormat.html, csv: DelimitedStyle(eol: '\n')),
+        filePath: path,
+        load: (limit, offset) async => _page(['id', 'name'], [
+          ['1', '<b>']
+        ], nulls: [
+          [false, false]
+        ]),
+      );
+      final html = File(path).readAsStringSync();
+      expect(html, startsWith('<!DOCTYPE html>'));
+      expect(html, contains('<thead><tr><th>id</th><th>name</th></tr></thead>'));
+      expect(html, contains('<tr><td>1</td><td>&lt;b&gt;</td></tr>'));
+      expect(html, endsWith('</body>\n</html>\n'));
+    });
+
+    test('追加:分隔文本二次写入不再出表头', () async {
+      final path = '${tmp.path}/append.csv';
+      const target =
+          ExportTarget(typeId: 'mysql', database: 'd', table: 't');
+      Future<void> run() => exportTable(
+            target: target,
+            request: const DbExportRequest(
+                format: DbExportFormat.csv, append: true),
+            filePath: path,
+            load: (limit, offset) async => _page(['id'], [
+              ['1']
+            ], nulls: [
+              [false]
+            ]),
+          );
+      // 首次:文件不存在,append 无对象可追,正常写表头
+      await run();
+      expect(File(path).readAsStringSync(), 'id\r\n1\r\n');
+      await run();
+      expect(File(path).readAsStringSync(), 'id\r\n1\r\n1\r\n');
+    });
+
+    test('追加:JSON 不受开关影响,始终整档重写', () async {
+      final path = '${tmp.path}/append.json';
+      const target =
+          ExportTarget(typeId: 'mysql', database: 'd', table: 't');
+      Future<void> run() => exportTable(
+            target: target,
+            request: const DbExportRequest(
+                format: DbExportFormat.json, append: true),
+            filePath: path,
+            load: (limit, offset) async => _page(['id'], [
+              ['1']
+            ], nulls: [
+              [false]
+            ]),
+          );
+      await run();
+      await run();
+      expect(jsonDecode(File(path).readAsStringSync()), [
+        {'id': '1'}
+      ]);
+    });
   });
 
   group('结果集导出(内存)', () {

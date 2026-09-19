@@ -138,6 +138,25 @@ class MariadbDriver implements DatabaseDriver {
           "AND TABLE_TYPE = 'VIEW'");
 
   @override
+  Future<Map<String, int>> listTableRowEstimates(String database,
+      {String? schema}) async {
+    final conn = await _get();
+    // 与 MySQL 驱动同口径:TABLE_ROWS 是存储引擎的统计值,读元数据不扫描数据
+    final rs = await conn.execute(
+      "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES "
+      "WHERE TABLE_SCHEMA = '${_literal(database)}' "
+      "AND TABLE_TYPE = 'BASE TABLE' AND TABLE_ROWS IS NOT NULL",
+    );
+    final out = <String, int>{};
+    for (final row in rs.rows) {
+      final name = row.colAt(0);
+      final rows = parseRowCount(row.colAt(1));
+      if (name != null && rows != null) out[name] = rows;
+    }
+    return out;
+  }
+
+  @override
   Future<Map<String, String>> listFunctionComments(String database,
           {String? schema}) =>
       _objectComments("SELECT ROUTINE_NAME, ROUTINE_COMMENT "

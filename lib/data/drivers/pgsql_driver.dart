@@ -161,6 +161,28 @@ class PgsqlDriver implements DatabaseDriver {
           "AND c.relkind = 'v'");
 
   @override
+  Future<Map<String, int>> listTableRowEstimates(String database,
+      {String? schema}) async {
+    final conn = _get();
+    // reltuples 是统计信息里的估算行数(由 autoanalyze 增量维护,不扫描数据);
+    // -1 表示该表从未统计过 → 不返回键,界面显示横杠。分区表的父表 reltuples
+    // 恒为 -1 / 0,同样落进「无估算值」一档。
+    final result = await conn.execute(
+      "SELECT c.relname, c.reltuples::bigint FROM pg_class c "
+      "JOIN pg_namespace n ON n.oid = c.relnamespace "
+      "WHERE n.nspname = ${_lit(schema ?? _schemaOrPublic)} "
+      "AND c.relkind IN ('r', 'm') AND c.reltuples >= 0",
+    );
+    final out = <String, int>{};
+    for (final row in result) {
+      final name = row[0]?.toString();
+      final rows = parseRowCount(row[1]);
+      if (name != null && rows != null) out[name] = rows;
+    }
+    return out;
+  }
+
+  @override
   Future<Map<String, String>> listFunctionComments(String database,
           {String? schema}) =>
       _objectComments(

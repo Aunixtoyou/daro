@@ -130,6 +130,26 @@ class MysqlDriver implements DatabaseDriver {
           "AND TABLE_TYPE = 'VIEW'");
 
   @override
+  Future<Map<String, int>> listTableRowEstimates(String database,
+      {String? schema}) async {
+    final conn = await _get();
+    // TABLE_ROWS 取自存储引擎的统计信息(InnoDB 随 ANALYZE 刷新,可能滞后;
+    // MyISAM 恰为精确值),读元数据不扫描数据,代价与列表查询同级
+    final rs = await conn.execute(
+      "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES "
+      "WHERE TABLE_SCHEMA = '${_literal(database)}' "
+      "AND TABLE_TYPE = 'BASE TABLE' AND TABLE_ROWS IS NOT NULL",
+    );
+    final out = <String, int>{};
+    for (final row in rs.rows) {
+      final name = row.colAt(0);
+      final rows = parseRowCount(row.colAt(1));
+      if (name != null && rows != null) out[name] = rows;
+    }
+    return out;
+  }
+
+  @override
   Future<Map<String, String>> listFunctionComments(String database,
           {String? schema}) =>
       _objectComments("SELECT ROUTINE_NAME, ROUTINE_COMMENT "

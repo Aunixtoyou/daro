@@ -97,6 +97,28 @@ class SqliteDriver implements DatabaseDriver {
       const {};
 
   @override
+  Future<Map<String, int>> listTableRowEstimates(String database,
+      {String? schema}) async {
+    final db = _get();
+    // SQLite 目录里没有行数,唯一来源是 ANALYZE 产出的 sqlite_stat1:
+    // stat 首段即该表的估算行数(每个索引一行,取最大值)。未跑过 ANALYZE 就
+    // 没有这张表 → 返回空 map(界面显示横杠),绝不为凑数字去 COUNT(*) 扫全表。
+    final analyzed = db.select(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1'",
+    );
+    if (analyzed.isEmpty) return const {};
+    final out = <String, int>{};
+    for (final row in db.select('SELECT tbl, stat FROM sqlite_stat1')) {
+      final tbl = row['tbl']?.toString();
+      final stat = row['stat']?.toString();
+      if (tbl == null || stat == null || stat.isEmpty) continue;
+      final rows = parseRowCount(stat.split(' ').first);
+      if (rows != null && rows > (out[tbl] ?? -1)) out[tbl] = rows;
+    }
+    return out;
+  }
+
+  @override
   Future<Map<String, String>> listFunctionComments(String database,
           {String? schema}) async =>
       const {};

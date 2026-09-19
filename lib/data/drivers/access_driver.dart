@@ -110,6 +110,11 @@ class AccessDriver implements DatabaseDriver {
       const {};
 
   @override
+  Future<Map<String, int>> listTableRowEstimates(String database,
+          {String? schema}) async =>
+      const {};
+
+  @override
   Future<Map<String, String>> listFunctionComments(String database,
           {String? schema}) async =>
       const {};
