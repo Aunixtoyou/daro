@@ -1,34 +1,48 @@
 import 'package:base_ui_flutter/base_ui_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../app/app_state.dart';
 import '../data/db_data.dart';
 import '../data/db_types.dart';
 import '../data/drivers/db_driver.dart';
 import '../theme/app_theme.dart';
 import '../widgets/connection_form_page.dart';
 
-/// "选择一个连接类型"对话框(连接向导入口)。
+/// 「新建 / 编辑连接」弹窗的客户区尺寸(逻辑像素)。
 ///
-/// 设计为以 base-ui `DialogBox` 承载(见 [Ribbon._openConnectionWindow])。
+/// 两步向导共用一个尺寸:写死一次比每步按内容重排更稳(选类型与填表单内容高度差很多)。
+const Size kConnectionEditorContentSize = Size(960, 620);
+
+/// 连接向导的两步内容体:与弹窗外壳分离,[ConnectionDialogPage] 负责标题、
+/// 关闭按钮与遮罩,这里只有步骤内容。
 /// 内部维护一个两步状态机:
 ///   1. `select` 步:展示数据库类型网格/列表,选择后点「下一步」切到下一步
-///   2. `form` 步:连接配置表单(参见 [ConnectionFormPage]),
-///                  可点「上一步」回到 select 步
+///   2. `form` 步:连接配置表单(参见 [ConnectionFormPage]),可点「上一步」回退
 ///
-/// 传入 [initial] 时为「编辑连接」模式:跳过类型选择直接进入表单,
-/// 表单预填该连接现有配置,标题变为「编辑连接」。
-///
-/// 通过 [Navigator.pop] 回传被选中的数据库类型 id(取消则无返回值)。
-class ConnectionDialogPage extends StatefulWidget {
-  const ConnectionDialogPage({super.key, this.initial});
+/// 传入 [initial] 时为「编辑连接」模式:跳过类型选择直接进入表单,表单预填该连接
+/// 现有配置。结果一律经 [onResult] 上报,null 表示取消。
+class ConnectionWizard extends StatefulWidget {
+  const ConnectionWizard({
+    super.key,
+    required this.onResult,
+    required this.onTestConnection,
+    this.initial,
+  });
 
   /// 编辑已有连接时传入的初始配置;新建连接时为 null
   final ConnectionInfo? initial;
 
+  /// 用户点「确定」时收到连接信息,点「取消」或关闭窗口时收到 null
+  final ValueChanged<ConnectionInfo?> onResult;
+
+  /// 由宿主提供的「测试连接」实现:内容体不碰 AppState,便于单独排版与测试
+  final Future<(bool, String)> Function(ConnectionInfo) onTestConnection;
+
   @override
-  State<ConnectionDialogPage> createState() => _ConnectionDialogPageState();
+  State<ConnectionWizard> createState() => _ConnectionWizardState();
 }
 
-class _ConnectionDialogPageState extends State<ConnectionDialogPage> {
+class _ConnectionWizardState extends State<ConnectionWizard> {
   /// 当前选中的数据库类型 id(select 步)
   String? _selectedId;
 
@@ -99,45 +113,37 @@ class _ConnectionDialogPageState extends State<ConnectionDialogPage> {
     setState(() => _selectedType = null);
   }
 
-  /// 「确定」:关闭弹窗并回传连接信息(类型 + 表单数据)
-  void _onConfirm(ConnectionInfo info) {
-    Navigator.of(context).pop(info);
-  }
-
-  /// 「取消」:关闭弹窗
-  void _onCancel() {
-    Navigator.of(context).pop();
-  }
-
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    // FocusTraversalGroup:Tab / 方向键在弹窗控件间移动焦点
+    // FocusTraversalGroup:Tab / 方向键在控件间移动焦点
     return FocusTraversalGroup(
       policy: WidgetOrderTraversalPolicy(),
-      child: DialogBox(
-        title: widget.initial == null ? '新建连接' : '编辑连接',
-        width: 960,
-        onClose: _onCancel,
-        // select 步才有独立 footer(取消/下一步);form 步自带底部按钮
-        footer: _selectedType == null ? _footer() : null,
-        // 内容区由 DialogBox 的 Flexible 提供可用高度,内部 Expanded 吸收收缩,
-        // 避免弹窗内容超出可用高度导致 RenderFlex 溢出
-        child: _selectedType != null
-            ? ConnectionFormPage(
-                type: _selectedType!,
-                // 编辑模式无类型选择步可回退,隐藏「上一步」
-                onBack: widget.initial == null ? _onBack : null,
-                onCancel: _onCancel,
-                onConfirm: _onConfirm,
-                initial: widget.initial,
-              )
-            : _selectStep(context, t),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 这一步的高度由宿主给的 Expanded 吸收,内容超出走各自的内部滚动
+          Expanded(
+            child: _selectedType != null
+                ? ConnectionFormPage(
+                    type: _selectedType!,
+                    // 编辑模式无类型选择步可回退,隐藏「上一步」
+                    onBack: widget.initial == null ? _onBack : null,
+                    onCancel: () => widget.onResult(null),
+                    onConfirm: widget.onResult,
+                    onTestConnection: widget.onTestConnection,
+                    initial: widget.initial,
+                  )
+                : _selectStep(context, t),
+          ),
+          // select 步的底部按钮(form 步自带底部按钮,不重复渲染)
+          if (_selectedType == null) _footer(),
+        ],
       ),
     );
   }
 
-  /// select 步:类型选择内容(标题说明 + 搜索 + 网格 + 底部按钮)
+  /// select 步:类型选择内容(标题说明 + 搜索 + 网格)
   Widget _selectStep(BuildContext context, AppPalette t) {
     final all = _filter(kAllDbTypes);
 
@@ -210,22 +216,54 @@ class _ConnectionDialogPageState extends State<ConnectionDialogPage> {
       onDoubleSelect: _onDoubleSelect,
     );
   }
+
+  /// select 步底部按钮:留白与 form 步一致,两步切换时按钮不跳位
   Widget _footer() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.end,
-      children: [
-        Button(
-          text: '取消',
-          onPressed: _onCancel,
-        ),
-        const SizedBox(width: 8),
-        Button(
-          text: '下一步',
-          onPressed: _selectedId != null && kSupportedDriverTypes.contains(_selectedId)
-              ? _onNext
-              : null,
-        ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          Button(
+            text: '取消',
+            onPressed: () => widget.onResult(null),
+          ),
+          const SizedBox(width: 8),
+          Button(
+            text: '下一步',
+            onPressed: _selectedId != null &&
+                    kSupportedDriverTypes.contains(_selectedId)
+                ? _onNext
+                : null,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 「新建 / 编辑连接」弹窗宿主:以 base-ui `DialogBox` 承载 [ConnectionWizard],
+/// 结果经 [Navigator.pop] 回传(取消为 null)。
+class ConnectionDialogPage extends StatelessWidget {
+  const ConnectionDialogPage({super.key, this.initial});
+
+  /// 编辑已有连接时传入的初始配置;新建连接时为 null
+  final ConnectionInfo? initial;
+
+  @override
+  Widget build(BuildContext context) {
+    final manager = Provider.of<AppState>(context, listen: false).connectionManager;
+    return DialogBox(
+      title: initial == null ? '新建连接' : '编辑连接',
+      width: kConnectionEditorContentSize.width,
+      // 两步向导都有可变高度语义的区域,不固定就会被 DialogBox 的收缩排版压成一小块。
+      height: kConnectionEditorContentSize.height,
+      onClose: () => Navigator.of(context).pop(),
+      child: ConnectionWizard(
+        initial: initial,
+        onTestConnection: manager.testConnection,
+        onResult: (result) => Navigator.of(context).pop(result),
+      ),
     );
   }
 }
@@ -352,4 +390,3 @@ class _TypeGrid extends StatelessWidget {
     );
   }
 }
-

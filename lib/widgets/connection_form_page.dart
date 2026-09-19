@@ -2,8 +2,6 @@ import 'package:base_ui_flutter/base_ui_flutter.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
-import '../app/app_state.dart';
 import '../data/connection_defaults.dart';
 import '../data/db_data.dart';
 import '../data/db_types.dart';
@@ -21,6 +19,7 @@ class ConnectionFormPage extends StatefulWidget {
     this.onBack,
     required this.onCancel,
     required this.onConfirm,
+    required this.onTestConnection,
     this.initial,
   });
 
@@ -36,6 +35,9 @@ class ConnectionFormPage extends StatefulWidget {
 
   /// 点击「确定」时回调,携带表单收集到的连接信息
   final ValueChanged<ConnectionInfo> onConfirm;
+
+  /// 点击「测试连接」时由宿主执行:表单不自己取 AppState,连库交给弹窗宿主
+  final Future<(bool, String)> Function(ConnectionInfo) onTestConnection;
 
   /// 编辑已有连接时传入的初始配置(新建时为空,表单使用默认值)
   final ConnectionInfo? initial;
@@ -93,14 +95,14 @@ class _ConnectionFormPageState extends State<ConnectionFormPage> {
   /// 测试连接是否进行中(防止重复点击)
   bool _testing = false;
 
-  /// 「测试连接」:用表单当前值真连一次,连上即断
+  /// 「测试连接」:把当前值整理成配置,交宿主真连一次(连上即断)
   Future<void> _testConnection() async {
     if (_testing) return;
     setState(() => _testing = true);
     _setStatus('正在连接 ${_hostController.text.trim()}...');
 
-    final manager = context.read<AppState>().connectionManager;
-    final (isSuccess, message) = await manager.testConnection(ConnectionInfo(
+    final (isSuccess, message) =
+        await widget.onTestConnection(ConnectionInfo(
       name: '',
       typeId: widget.type.id,
       host: _isFileBased
