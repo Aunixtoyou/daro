@@ -6,10 +6,10 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 import '../app/app_state.dart';
-import '../app/version.g.dart';
 import '../data/db_data.dart';
 import '../pages/connection_dialog_page.dart';
 import '../theme/app_theme.dart';
+import 'about_dialog.dart';
 import 'navicat_export_dialog.dart';
 import 'navicat_import_dialog.dart';
 import 'schema_sync_dialog.dart';
@@ -331,7 +331,7 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
     await showSchemaSyncDialog(context, app: context.read<AppState>());
   }
 
-  /// 点击"新建连接":以模态弹窗(base-ui `DialogBox`)弹出"选择一个连接类型"窗口。
+  /// 点击"新建连接":以模态弹窗(base-ui `DialogBox`)弹出"选择一个连接类型"向导。
   /// 与 Ribbon 的"连接"按钮共用同一向导,完成后把新连接加入连接树。
   Future<void> _openConnectionWindow(BuildContext context) async {
     final result = await showDialog<ConnectionInfo>(
@@ -422,17 +422,8 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
     );
   }
 
-  /// "关于"对话框:版本与版权信息
-  void _showAbout(BuildContext context) {
-    MessageBox.show(
-      context,
-      title: '关于 daro',
-      // 版本号来自 pubspec.yaml(由 tool/gen_version.py 生成 version.g.dart),勿在此硬编码
-      message: 'daro\n桌面数据库管理工具\n\n版本 $kAppVersion',
-      buttons: MessageBoxButtons.ok,
-      tokens: Tokens.read(context).toDesktopTokens(),
-    );
-  }
+  /// "关于"对话框:启动画面式弹窗(见 about_dialog.dart)
+  void _showAbout(BuildContext context) => showDaroAboutDialog(context);
 }
 
 /// 最大化按钮:复用 window_manager 的 WindowCaptionButton 渲染图标,

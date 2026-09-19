@@ -15,6 +15,7 @@ import '../widgets/table_data_page.dart';
 import '../widgets/query_page.dart';
 import '../widgets/table_designer_page.dart';
 import '../widgets/routine_design_page.dart';
+import '../widgets/view_design_page.dart';
 
 class MainPage extends StatefulWidget {
   const MainPage({super.key});
@@ -96,6 +97,19 @@ class _MainPageState extends State<MainPage> {
                                             0,
                                             tab.title.length - suffix.length)
                                         : tab.title;
+                                    if (category == ObjectCategory.view) {
+                                      // 视图设计页(Navicat 风格:定义 / 规则 / 高级 / 注释 / SQL 预览)
+                                      // 实体化视图不走此页:驱动无定义可读,且保存会误 DROP/CREATE
+                                      return ViewDesignPage(
+                                        name: name,
+                                        connection: tab.connection!,
+                                        database: tab.database!,
+                                        category: category,
+                                        schema: tab.schema,
+                                        isNew: isNew,
+                                        comment: tab.routineComment ?? '',
+                                      );
+                                    }
                                     return RoutineDesignPage(
                                       name: name,
                                       connection: tab.connection!,

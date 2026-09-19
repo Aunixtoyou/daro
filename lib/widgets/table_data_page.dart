@@ -1959,10 +1959,12 @@ class _TableDataPageState extends State<TableDataPage> {
                             children: [
                               SizedBox(
                                 width: 22,
+                                // 被动指示器:切换由行级 Listener 统一处理。
+                                // 若这里再挂 onChanged,点勾选框会按下/抬起各
+                                // 切换一次,互相抵消 → 看起来"取消不了"。
                                 child: CheckBox(
                                   value: checked,
-                                  onChanged: (value) => _toggleColumnVisible(
-                                      index, value ?? true),
+                                  onChanged: null,
                                 ),
                               ),
                               Expanded(

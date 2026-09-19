@@ -788,7 +788,7 @@ class _RoutineDesignPageState extends State<RoutineDesignPage> {
             'sql': CodeHighlightThemeMode(mode: langSql),
           },
           theme: {
-            ...(isDark ? _sqlDarkTheme : _sqlLightTheme),
+            ...(isDark ? sqlDarkTheme : sqlLightTheme),
             'root': TextStyle(color: t.foreground),
           },
         ),
@@ -951,7 +951,7 @@ class _RoutineFindPanelState extends State<_RoutineFindPanel> {
 
 /// SQL 语法高亮配色(与查询页一致:明亮近似 SSMS / VS Code Light+,
 /// 暗黑近似 VS Code Dark+;中调色主题无关)
-const Map<String, TextStyle> _sqlLightTheme = {
+const Map<String, TextStyle> sqlLightTheme = {
   'keyword': TextStyle(color: Color(0xff0000ff)),
   'literal': TextStyle(color: Color(0xff001080)),
   'name': TextStyle(color: Color(0xff001080)),
@@ -972,7 +972,7 @@ const Map<String, TextStyle> _sqlLightTheme = {
   'title': TextStyle(color: Color(0xff795e26)),
 };
 
-const Map<String, TextStyle> _sqlDarkTheme = {
+const Map<String, TextStyle> sqlDarkTheme = {
   'keyword': TextStyle(color: Color(0xff569cd6)),
   'literal': TextStyle(color: Color(0xff569cd6)),
   'name': TextStyle(color: Color(0xff9cdcfe)),

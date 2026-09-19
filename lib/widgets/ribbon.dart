@@ -8,7 +8,7 @@ import '../pages/connection_dialog_page.dart';
 import '../theme/app_theme.dart';
 import 'object_category_icon.dart';
 
-// 顶部工具栏:每个按钮使用独立的图标与配色,可点击并有悬停提示。
+// 顶部工具栏:每个按钮使用独立的图标,可点击并有悬停提示。
 // 使用 base_ui_flutter 的 Button(ghost 无边框变体)实现,相当于一个无边框按钮组,
 // 按钮内容为「图标 + 文字」的 widget。
 //
@@ -18,33 +18,17 @@ import 'object_category_icon.dart';
 class Ribbon extends StatelessWidget {
   const Ribbon({super.key});
 
-  // 各功能按钮的强调色:选用在明/暗背景下都清晰的中调色
-  static const _accents = <Color>[
-    Color(0xff2f80ed), // 连接
-    Color(0xff0ea5e9), // 新建查询
-    Color(0xff0d9488), // 表
-    Color(0xff7c3aed), // 视图
-    Color(0xffe11d48), // 实体化视图
-    Color(0xffea580c), // 函数
-    Color(0xff0891b2), // 过程
-    Color(0xffca8a04), // 角色
-    Color(0xff16a34a), // 查询
-  ];
-
-  /// 分类按钮定义:ObjectCategory 枚举 / 配色索引。
+  /// 分类按钮定义:ObjectCategory 枚举。
   /// 文字取 category.label、能力匹配取 category.name、图标查
   /// [ObjectCategoryIcon.assetOf](均与连接树分组同源,避免同一分类在不同入口显示不同名)。
-  static const _categoryButtons = <({
-    ObjectCategory category,
-    int accentIndex,
-  })>[
-    (category: ObjectCategory.table, accentIndex: 2),
-    (category: ObjectCategory.view, accentIndex: 3),
-    (category: ObjectCategory.materializedView, accentIndex: 4),
-    (category: ObjectCategory.function, accentIndex: 5),
-    (category: ObjectCategory.procedure, accentIndex: 8),
-    (category: ObjectCategory.user, accentIndex: 6),
-    (category: ObjectCategory.query, accentIndex: 7),
+  static const _categoryButtons = <({ObjectCategory category})>[
+    (category: ObjectCategory.table),
+    (category: ObjectCategory.view),
+    (category: ObjectCategory.materializedView),
+    (category: ObjectCategory.function),
+    (category: ObjectCategory.procedure),
+    (category: ObjectCategory.user),
+    (category: ObjectCategory.query),
   ];
 
   @override
@@ -83,12 +67,11 @@ class Ribbon extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   // 「连接」「新建查询」:自绘 SVG 图标 + 右下角绿色「+」徽章
-                  _button(context, (c) => _badgedIcon('assets/icons/ui/connection.svg'),
-                      '连接', _accents[0],
+                  _button(context,
+                      _badgedIcon('assets/icons/ui/connection.svg'), '连接',
                       onTap: () => _openConnectionWindow(context)),
-                  _button(context, (c) => _badgedIcon('assets/icons/ui/query.svg'),
-                      '新建查询', _accents[1],
-                      onTap: () => app.newQuery()),
+                  _button(context, _badgedIcon('assets/icons/ui/query.svg'),
+                      '新建查询', onTap: () => app.newQuery()),
                   // 新建查询右侧分割线
                   SizedBox(
                     height: 40,
@@ -103,10 +86,10 @@ class Ribbon extends StatelessWidget {
                   // 图标与连接树 / 对象面板同源(ObjectCategoryIcon),
                   // 文字取 category.label(同样同源,避免同名不同称)
                   for (final b in visibleButtons)
-                    _button(context,
-                        (c) => ObjectCategoryIcon(
-                            category: b.category, size: 26),
-                        b.category.label, _accents[b.accentIndex],
+                    _button(
+                        context,
+                        ObjectCategoryIcon(category: b.category, size: 26),
+                        b.category.label,
                         active: activeCategory == b.category,
                         onTap: () => app.showObjectCategory(b.category)),
                 ],
@@ -121,20 +104,21 @@ class Ribbon extends StatelessWidget {
 
   // 单个工具栏按钮:无边框(ghost)变体,内容为图标 + 文字。
   // 未传入 onTap 的按钮也保持可点击(启用),避免被禁用置灰。
-  // active 为 true 时显示背景高亮,与左侧连接树分组节点选中联动。
-  // iconBuilder 接收按钮强调色 [color] 的 active 态派生色,由调用方构造图标。
-  Widget _button(BuildContext context, Widget Function(Color color) iconBuilder,
-      String text, Color color,
+  // active 为 true 时显示统一的浅蓝背景(主题 accent 混入 control,明暗自适应),
+  // 与左侧连接树分组节点选中联动;图标与文字不随选中态换色。
+  Widget _button(BuildContext context, Widget icon, String text,
       {VoidCallback? onTap, bool active = false}) {
     // ribbon 按钮为「图标 + 文字」竖排,横向留白由按钮 padding 提供;
     // 默认 controlPaddingX=12 会让整体偏宽,这里压到 4,
     // 使「实体化视图」等长标签在 66px 内容宽内单行放下、且外框比默认更窄。
+    final t = Tokens.of(context);
     final dt = TokenScope.maybeOf(context) ?? DesktopTokens.winForm;
     return Container(
       padding: active ? const EdgeInsets.only(bottom: 2) : null,
       decoration: active
           ? BoxDecoration(
-              color: color.withValues(alpha: 0.10),
+              color: Color.alphaBlend(
+                  t.accent.withValues(alpha: 0.16), t.control),
             )
           : null,
       child: Button(
@@ -147,7 +131,7 @@ class Ribbon extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              iconBuilder(active ? color : color.withValues(alpha: 0.7)),
+              icon,
               const SizedBox(height: 1),
               Text(
                 text,
@@ -156,8 +140,7 @@ class Ribbon extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 12,
                   height: 1.2,
-                  // 非激活按钮文字也用主前景色;
-                  // 选中态不加粗,仅靠背景高亮区分
+                  // 选中态不加粗、不换色,仅靠背景高亮区分
                   color: bodyTextColor(context),
                   fontWeight: FontWeight.w500,
                   // 与全局字体机制一致:Button 内部 DefaultTextStyle 用的是 Segoe UI
@@ -176,7 +159,7 @@ class Ribbon extends StatelessWidget {
     );
   }
 
-  /// 点击"连接":以模态弹窗(base-ui `DialogBox`)弹出"选择一个连接类型"窗口。
+  /// 点击"连接":以模态弹窗(base-ui `DialogBox`)弹出"选择一个连接类型"向导。
   /// 完成连接向导后,把新建的连接加入连接树。
   Future<void> _openConnectionWindow(BuildContext context) async {
     final result = await showDialog<ConnectionInfo>(
