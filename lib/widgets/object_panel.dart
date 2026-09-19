@@ -1,11 +1,11 @@
 import 'package:base_ui_flutter/base_ui_flutter.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../app/app_state.dart';
 import '../app/connection_manager.dart';
 import '../data/db_data.dart';
-import '../data/db_types.dart';
 import '../data/drivers/db_driver.dart';
 import '../data/routine_sql.dart';
 import '../theme/app_theme.dart';
@@ -36,6 +36,26 @@ class _ObjectPanelState extends State<ObjectPanel> {
   /// 订阅 ConnectionManager:表列表加载完成后重建面板
   ConnectionManager? _listenedManager;
 
+  /// 对象列表的键盘焦点(F2 改名 / Ctrl+C 复制 / Ctrl+V 粘贴)
+  final FocusNode _listFocus = FocusNode();
+
+  /// 列表模式纵向滚动控制器:框选要把选框矩形按当前滚动偏移换算成内容坐标
+  final ScrollController _itemsScroll = ScrollController();
+
+  /// 网格模式横向滚动控制器(网格纵向不滚动,列排满高度才向右开新列)
+  final ScrollController _gridScrollX = ScrollController();
+
+  /// 正在内联改名的表名(null = 无编辑中项)
+  String? _renaming;
+
+  /// 框选起手时是否按住 Ctrl(按下即定,拖动途中再按 Ctrl 不改变本次语义)
+  bool _marqueeAdditive = false;
+
+  /// 网格几何:列数 / 行数。由 [_buildGrid] 的 LayoutBuilder 每次 build 刷新,
+  /// 供框选与改名单元格按 [_gridCellWidth] / [_itemHeight] 反算索引
+  int _gridCols = 1;
+  int _gridRows = 1;
+
   /// 工具栏搜索框输入文本(小写),用于过滤当前分类的对象列表
   String _objectSearchText = '';
 
@@ -60,6 +80,9 @@ class _ObjectPanelState extends State<ObjectPanel> {
   @override
   void dispose() {
     _listenedManager?.removeListener(_onManagerChanged);
+    _listFocus.dispose();
+    _itemsScroll.dispose();
+    _gridScrollX.dispose();
     super.dispose();
   }
 
@@ -410,18 +433,8 @@ class _ObjectPanelState extends State<ObjectPanel> {
           text: '删除$label',
           enabled: hasSelection,
           onPressed: hasSelection
-              ? () {
-                  if (category == ObjectCategory.query) {
-                    _deleteQueries(selected, connection, database);
-                  } else if (category == ObjectCategory.backup) {
-                    _showStub('删除$label');
-                  } else {
-                    _deleteObjects(category, selected.toList(),
-                        connection: connection,
-                        database: database,
-                        schema: schema);
-                  }
-                }
+              ? () => _deleteSelected(category, selected,
+                  connection: connection, database: database, schema: schema)
               : null,
         ),
         if (category == ObjectCategory.table) ...[
@@ -522,6 +535,10 @@ class _ObjectPanelState extends State<ObjectPanel> {
       controlColor: t.surface,
       controlHoverColor: Color.alphaBlend(hoverBlend, t.surface),
       controlPressedColor: Color.alphaBlend(pressedBlend, t.surface),
+      // 尺寸令牌一并收紧:条高 = controlHeight + compactSpacing * 2 ≈ 28
+      controlHeight: 22,
+      compactSpacing: 3,
+      fontSize: 12,
     );
   }
 
@@ -573,6 +590,28 @@ class _ObjectPanelState extends State<ObjectPanel> {
       message: '$action 功能开发中,敬请期待',
       okText: '知道了',
     );
+  }
+
+  /// 「删除」的统一入口(工具栏按钮与 Del 快捷键共用同一口径):
+  /// 查询分类删除本地已保存项,备份分类仍是占位,其余分类走真实 DDL(DROP)。
+  void _deleteSelected(
+    ObjectCategory category,
+    Set<String> selected, {
+    required String connection,
+    required String database,
+    String? schema,
+  }) {
+    if (selected.isEmpty) return;
+    // 拷一份:删除流程会清空 AppState 的选中集合,不能迭代它自己
+    final names = Set<String>.of(selected);
+    if (category == ObjectCategory.query) {
+      _deleteQueries(names, connection, database);
+    } else if (category == ObjectCategory.backup) {
+      _showStub('删除${category.label}');
+    } else {
+      _deleteObjects(category, names.toList(),
+          connection: connection, database: database, schema: schema);
+    }
   }
 
   /// 删除选中的已保存查询(确认后执行,并清空面板选中)
@@ -729,17 +768,21 @@ class _ObjectPanelState extends State<ObjectPanel> {
       rawItems,
       category,
       grid,
+      state: state,
     );
   }
 
-  /// 搜索过滤 + 网格 / 列表渲染(表与查询面板共用);过滤后无匹配时留白
+  /// 搜索过滤 + 网格 / 列表渲染(表与查询面板共用);过滤后无匹配时留白。
+  /// [state] 为当前上下文的对象列表状态,列表模式据此显示「行」「注释」两列
+  /// (查询分类来自本地保存的 SQL,无状态可传,两列一律留空)。
   Widget _renderItems(
     AppPalette t,
     AppState app,
     List<String> rawItems,
     ObjectCategory category,
-    bool grid,
-  ) {
+    bool grid, {
+    TableListState? state,
+  }) {
     // 应用搜索过滤(_objectSearchText 已小写,子串匹配)
     final items = _objectSearchText.isEmpty
         ? rawItems
@@ -754,9 +797,18 @@ class _ObjectPanelState extends State<ObjectPanel> {
     // 回写顺序列表供 Shift 范围选择(与可见项一致)
     app.setObjectTables(items);
 
-    return grid
-        ? _buildGrid(t, items, category)
-        : _buildList(t, items, category);
+    return _itemSurface(
+      app: app,
+      category: category,
+      grid: grid,
+      // 可见项(已过滤)决定 F2 / Ctrl+C 的作用范围;
+      // 未过滤的 rawItems 用于粘贴命名避重
+      visible: items,
+      all: rawItems,
+      child: grid
+          ? _buildGrid(t, items, category)
+          : _buildList(t, items, category, state),
+    );
   }
 
   /// 按连接名取 ConnectionInfo(重试时需要)
@@ -764,60 +816,138 @@ class _ObjectPanelState extends State<ObjectPanel> {
     return app.connections.firstWhere((c) => c.name == connection);
   }
 
-  /// 多列网格(详细布局,默认):按列优先排布,与设计稿一致
+  /// 多列网格(详细布局,默认):**列高 = 可视区高度**,第一列从上到下排满
+  /// 再向右开第二列(资源管理器式列优先),列数超出可视宽度时横向滚动。
+  /// 纵向不滚动——旧实现按 `ceil(数量/列数)` 定行数,对象少时会摊成「一行几个」,
+  /// 看上去就是横着排。
   Widget _buildGrid(AppPalette t, List<String> items, ObjectCategory category) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        const itemWidth = 210.0;
-        const itemHeight = 28.0;
-
-        final cols = (constraints.maxWidth / itemWidth).floor().clamp(1, 8);
-
-        final rows = (items.length / cols).ceil();
+        var rows = (constraints.maxHeight / _itemHeight).floor();
+        if (rows < 1) rows = 1;
+        var cols = (items.length / rows).ceil();
+        if (cols < 1) cols = 1;
+        // 框选命中测试按列优先反算索引,需要当前网格几何
+        _gridCols = cols;
+        _gridRows = rows;
 
         return Container(
           color: t.background,
           child: ListView.builder(
+            controller: _gridScrollX,
+            scrollDirection: Axis.horizontal,
             // ignore: deprecated_member_use
             cacheExtent: 500,
-            itemExtent: itemHeight,
+            itemExtent: _gridCellWidth,
             addAutomaticKeepAlives: false,
             addRepaintBoundaries: true,
-            itemCount: rows,
-            itemBuilder: (context, rowIndex) {
-              return Row(
+            itemCount: cols,
+            itemBuilder: (context, col) => SizedBox(
+              width: _gridCellWidth,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  for (int col = 0; col < cols; col++)
+                  for (int rowIndex = 0; rowIndex < rows; rowIndex++)
                     _buildCell(
                       context,
                       col,
                       rows,
                       rowIndex,
                       items,
-                      itemWidth,
                       category,
                     ),
                 ],
-              );
-            },
+              ),
+            ),
           ),
         );
       },
     );
   }
 
-  /// 单列列表:每行一个对象(图标 + 名称),行高与网格单元格一致
-  Widget _buildList(AppPalette t, List<String> items, ObjectCategory category) {
+  /// 列表模式(详情视图):固定表头 名称 / 行 / 注释 + 单列对象行。
+  /// 「行」为展开库时一并拉到的**估算**行数(读目录统计信息,不扫描数据),
+  /// 引擎取不到估算值的对象无键(界面显示横杠);
+  /// 「注释」用展开库时一并拉到的对象注释,空注释留空。
+  Widget _buildList(
+    AppPalette t,
+    List<String> items,
+    ObjectCategory category,
+    TableListState? state,
+  ) {
+    final comments = switch (category) {
+      ObjectCategory.table => state?.tableComments,
+      ObjectCategory.view || ObjectCategory.materializedView =>
+        state?.viewComments,
+      ObjectCategory.function => state?.functionComments,
+      _ => null,
+    };
+    // 只有表 / 视图 / 物化视图有行数语义(函数 / 用户 / 本地查询没有)
+    final hasRows = switch (category) {
+      ObjectCategory.table ||
+      ObjectCategory.view ||
+      ObjectCategory.materializedView =>
+        true,
+      _ => false,
+    };
+    final estimates = hasRows ? state?.rowEstimates : null;
+
     return Container(
       color: t.background,
-      child: ListView.builder(
-        itemExtent: 28,
-        itemCount: items.length,
-        itemBuilder: (context, index) =>
-            _buildObjectItem(context, items[index], category),
+      child: Column(
+        children: [
+          _listHeader(t),
+          Expanded(
+            child: ListView.builder(
+              controller: _itemsScroll,
+              itemExtent: _itemHeight,
+              itemCount: items.length,
+              itemBuilder: (context, index) {
+                final name = items[index];
+                return _buildObjectItem(
+                  context,
+                  name,
+                  category,
+                  meta: _RowMeta(
+                    hasRows: hasRows,
+                    rows: estimates?[name],
+                    comment: comments?[name] ?? '',
+                  ),
+                  editing: _renaming == name,
+                  onCommitRename: _commitRename,
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
+
+  /// 列表模式表头:与数据行共用 [_listColumns],列起点严格对齐
+  Widget _listHeader(AppPalette t) {
+    return SizedBox(
+      height: _listHeaderHeight,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: t.surface,
+          border: Border(bottom: BorderSide(color: t.divider)),
+        ),
+        child: _listColumns(
+          name: _listHeaderCell(t, '名称'),
+          rows: _listHeaderCell(t, '行(估算)'),
+          comment: _listHeaderCell(t, '注释'),
+        ),
+      ),
+    );
+  }
+
+  Widget _listHeaderCell(AppPalette t, String text) => Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: _rowFontSize, color: t.mutedForeground),
+      );
 
   Widget _buildCell(
     BuildContext context,
@@ -825,7 +955,6 @@ class _ObjectPanelState extends State<ObjectPanel> {
     int rows,
     int rowIndex,
     List<String> items,
-    double itemWidth,
     ObjectCategory category,
   ) {
     final index = col * rows + rowIndex;
@@ -833,16 +962,336 @@ class _ObjectPanelState extends State<ObjectPanel> {
     // 空白补位
     if (index >= items.length) {
       return SizedBox(
-        width: itemWidth,
-        height: 28,
+        width: _gridCellWidth,
+        height: _itemHeight,
       );
     }
 
+    final name = items[index];
     return SizedBox(
-      width: itemWidth,
+      width: _gridCellWidth,
       child: RepaintBoundary(
-        child: _buildObjectItem(context, items[index], category),
+        child: _buildObjectItem(
+          context,
+          name,
+          category,
+          editing: _renaming == name,
+          onCommitRename: _commitRename,
+        ),
       ),
+    );
+  }
+
+  // ── 交互外壳:键盘(F2 改名 / Ctrl+C / Ctrl+V)+ 鼠标框选 ──────────
+
+  /// 把网格 / 列表内容包进可聚焦、可框选的交互层:
+  /// 点内容区取得键盘焦点(编辑中点到编辑格以外则收起编辑器),
+  /// 按住左键拖动按几何算出命中项交给 [AppState.selectMany]。
+  Widget _itemSurface({
+    required AppState app,
+    required ObjectCategory category,
+    required bool grid,
+    required List<String> visible,
+    required List<String> all,
+    required Widget child,
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Focus(
+          focusNode: _listFocus,
+          onKeyEvent: (node, event) =>
+              _onListKey(app, category, visible, all, event),
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (event) {
+              final editing = _renaming;
+              if (editing != null) {
+                // 编辑器自己不响应"点别处",靠失焦提交;点编辑格以内则保留光标
+                if (!_pointerInEditingRow(
+                    event.localPosition, editing, visible, grid)) {
+                  FocusManager.instance.primaryFocus?.unfocus();
+                }
+                return;
+              }
+              if (!_listFocus.hasFocus) _listFocus.requestFocus();
+            },
+            child: MarqueeSelector(
+              canStart: (event) {
+                if (_renaming != null) return false;
+                // 滚动条命中带让给滚动条:拖滚动条不该顺手改选中。
+                // 网格横向滚动 → 底缘,列表纵向滚动 → 右缘;无溢出时不让,
+                // 否则等于凭空挖一条点不动的死区。
+                final sc = grid ? _gridScrollX : _itemsScroll;
+                if (!sc.hasClients || sc.position.maxScrollExtent <= 0) {
+                  return true;
+                }
+                return grid
+                    ? event.localPosition.dy <
+                        constraints.maxHeight - _scrollBarHitWidth
+                    : event.localPosition.dx <
+                        constraints.maxWidth - _scrollBarHitWidth;
+              },
+              onMarqueeStart: () => _marqueeAdditive = app.ctrlPressed,
+              onMarqueeUpdate: (band) => app.selectMany(
+                _itemsInBand(band, visible, grid),
+                additive: _marqueeAdditive,
+              ),
+              onMarqueeEnd: () => _marqueeAdditive = false,
+              child: child,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 对象列表快捷键:F2 把单选中的表转入内联改名,Ctrl+C 复制选中表,
+  /// Ctrl+V 把它们按 `原名_copy` 克隆回当前 连接 / 库 / 模式(结构 + 数据)。
+  /// F2 / 复制粘贴只对表分类生效；Del 对所有分类生效,等价于点工具栏「删除{分类}」。
+  /// 内联编辑器持有焦点时一律放行(Ctrl+C 归文本框)。
+  KeyEventResult _onListKey(
+    AppState app,
+    ObjectCategory category,
+    List<String> visible,
+    List<String> all,
+    KeyEvent event,
+  ) {
+    if (event is! KeyDownEvent || _renaming != null) {
+      return KeyEventResult.ignored;
+    }
+    final connection = app.objectConnection;
+    final database = app.objectDatabase;
+    if (connection == null || database == null) return KeyEventResult.ignored;
+
+    final isTable = category == ObjectCategory.table;
+    final key = event.logicalKey;
+
+    if (key == LogicalKeyboardKey.delete) {
+      if (app.selectedTables.isEmpty) return KeyEventResult.ignored;
+      _deleteSelected(category, app.selectedTables,
+          connection: connection,
+          database: database,
+          schema: app.objectSchema);
+      return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.f2) {
+      if (!isTable || app.selectedTables.length != 1) {
+        return KeyEventResult.ignored;
+      }
+      final name = app.selectedTables.first;
+      // 改名要落库:未连接时不进入编辑态(与右键菜单的禁用口径一致)
+      if (!visible.contains(name) ||
+          !app.connectionManager.isConnected(connection)) {
+        return KeyEventResult.ignored;
+      }
+      setState(() => _renaming = name);
+      return KeyEventResult.handled;
+    }
+
+    if (!isTable || !app.ctrlPressed) return KeyEventResult.ignored;
+    if (key == LogicalKeyboardKey.keyC) {
+      _copyTables(app, visible, connection, database);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.keyV) {
+      _pasteTables(app, all, connection, database);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  /// 指针是否落在正在改名的那一格(视口坐标)。列表模式整行通栏,只比纵向;
+  /// 网格纵向不滚动,横向列位要减去横向滚动偏移。
+  bool _pointerInEditingRow(
+    Offset p,
+    String name,
+    List<String> items,
+    bool grid,
+  ) {
+    final index = items.indexOf(name);
+    if (index < 0) return false;
+    if (!grid) {
+      final offset = _itemsScroll.hasClients ? _itemsScroll.offset : 0.0;
+      // 列表模式的表头固定在 ListView 上方,视口 y 比内容 y 多出这一段
+      final top = index * _itemHeight - offset + _listHeaderHeight;
+      return p.dy >= top && p.dy < top + _itemHeight;
+    }
+    final row = index % _gridRows;
+    final col = index ~/ _gridRows;
+    final top = row * _itemHeight;
+    if (p.dy < top || p.dy >= top + _itemHeight) return false;
+    final offsetX = _gridScrollX.hasClients ? _gridScrollX.offset : 0.0;
+    final left = col * _gridCellWidth - offsetX;
+    return p.dx >= left && p.dx < left + _gridCellWidth;
+  }
+
+  /// 选框矩形(视口坐标)命中哪些对象项:
+  /// 列表按行号直取(纵向滚动 + 固定表头要换算成内容坐标);
+  /// 网格按列优先反算(`index = col * rows + row`),纵向即视口、横向减滚动偏移。
+  List<String> _itemsInBand(Rect band, List<String> items, bool grid) {
+    if (items.isEmpty) return const [];
+
+    if (!grid) {
+      final hasScroll = _itemsScroll.hasClients;
+      final offset = hasScroll ? _itemsScroll.offset : 0.0;
+      final viewportHeight = hasScroll
+          ? _itemsScroll.position.viewportDimension
+          : double.infinity;
+      // 先扣掉固定表头那段,选框才落在 ListView 自己的坐标系里
+      final content = band.shift(const Offset(0, -_listHeaderHeight));
+      final top = content.top + offset;
+      final bottom = content.bottom + offset;
+      // 选框完全落在视口外(上下两端)时无命中
+      if (bottom <= offset || top >= offset + viewportHeight) return const [];
+      final lastRow = items.length - 1;
+      final firstRow = (top / _itemHeight).floor().clamp(0, lastRow);
+      final endRow = ((bottom / _itemHeight).ceil() - 1).clamp(0, lastRow);
+      return [for (var r = firstRow; r <= endRow; r++) items[r]];
+    }
+
+    final offsetX = _gridScrollX.hasClients ? _gridScrollX.offset : 0.0;
+    final viewportWidth = _gridScrollX.hasClients
+        ? _gridScrollX.position.viewportDimension
+        : double.infinity;
+    final gridHeight = _gridRows * _itemHeight;
+    // 选框完全落在网格可视区外时无命中(纵向已排满,横向可能还有列)
+    if (band.bottom <= 0 || band.top >= gridHeight) return const [];
+    if (band.right <= offsetX || band.left >= offsetX + viewportWidth) {
+      return const [];
+    }
+
+    final lastRow = _gridRows - 1;
+    final firstRow = (band.top / _itemHeight).floor().clamp(0, lastRow);
+    final endRow = ((band.bottom / _itemHeight).ceil() - 1).clamp(0, lastRow);
+    final firstCol =
+        ((band.left + offsetX) / _gridCellWidth).floor().clamp(0, _gridCols - 1);
+    final lastCol =
+        ((band.right + offsetX) / _gridCellWidth).ceil().clamp(0, _gridCols) - 1;
+    return [
+      for (var c = firstCol; c <= lastCol; c++)
+        for (var r = firstRow; r <= endRow; r++)
+          if (c * _gridRows + r < items.length) items[c * _gridRows + r],
+    ];
+  }
+
+  /// 内联改名收口:编辑器卸载 → 焦点收回列表;传入原名(Esc / 未改动)即取消。
+  Future<void> _commitRename(String oldName, String input) async {
+    if (_renaming == null) return;
+    setState(() => _renaming = null);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _listFocus.requestFocus();
+    });
+    final newName = input.trim();
+    if (newName.isEmpty || newName == oldName) return;
+    final app = context.read<AppState>();
+    final connection = app.objectConnection;
+    final database = app.objectDatabase;
+    final conn = app.connectionByName(connection);
+    if (conn == null || database == null) return;
+    final outcome = await app.renameTable(
+      conn,
+      database,
+      oldName,
+      newName,
+      schema: app.objectSchema,
+    );
+    if (outcome.ok) {
+      // 列表刷新后新名保持选中,详情面板与工具栏跟着走
+      app.selectTable(newName);
+      return;
+    }
+    if (!mounted) return;
+    MessageBox.show(
+      context,
+      title: '重命名表',
+      message: '重命名失败:\n${outcome.error}',
+      type: MessageBoxType.error,
+      okText: '知道了',
+    );
+  }
+
+  /// Ctrl+C:选中表记入应用内剪贴板,状态栏给一句回执
+  void _copyTables(
+    AppState app,
+    List<String> visible,
+    String connection,
+    String database,
+  ) {
+    final names = [
+      for (final n in visible)
+        if (app.selectedTables.contains(n)) n,
+    ];
+    if (names.isEmpty) return;
+    app.copyTablesToClipboard(
+      names,
+      connection: connection,
+      database: database,
+      schema: app.objectSchema,
+    );
+    app.logTreeAction('已复制 ${names.length} 张表,Ctrl+V 粘贴为副本');
+  }
+
+  /// Ctrl+V:确认后按 [AppState.tablePastePlan] 排定的新名逐表克隆;
+  /// 失败项弹窗列出原因,成功只在状态栏回执
+  Future<void> _pasteTables(
+    AppState app,
+    List<String> all,
+    String connection,
+    String database,
+  ) async {
+    final cb = app.tableClipboard;
+    if (cb == null) return;
+    final conn = app.connectionByName(connection);
+    if (conn == null || !app.connectionManager.isConnected(connection)) {
+      _showPasteNotice('请先打开连接「$connection」再粘贴。');
+      return;
+    }
+    if (cb.connection != connection ||
+        cb.database != database ||
+        cb.schema != app.objectSchema) {
+      _showPasteNotice(
+        '粘贴只能回到复制时的连接 / 数据库 / 模式:\n'
+        '${cb.connection} · ${cb.database}${cb.schema == null ? '' : ' · ${cb.schema}'}',
+      );
+      return;
+    }
+    final plan = app.tablePastePlan(all.toSet());
+    if (plan.isEmpty) return;
+    final result = await MessageBox.show(
+      context,
+      title: '粘贴表',
+      message: '将粘贴创建 ${plan.length} 张表(结构 + 数据):\n'
+          '${plan.map((e) => '${e.$1} → ${e.$2}').join('\n')}',
+      type: MessageBoxType.question,
+      buttons: MessageBoxButtons.okCancel,
+      okText: '粘贴',
+    );
+    if (result != MessageBoxResult.ok || !mounted) return;
+    final failed = await app.pasteTables(plan);
+    if (!mounted) return;
+    _listFocus.requestFocus();
+    if (failed.isEmpty) {
+      app.logTreeAction('已粘贴创建 ${plan.length} 张表');
+      return;
+    }
+    MessageBox.show(
+      context,
+      title: '粘贴表',
+      message: '粘贴失败:\n${failed.join('\n')}',
+      type: MessageBoxType.error,
+      okText: '知道了',
+    );
+  }
+
+  void _showPasteNotice(String message) {
+    if (!mounted) return;
+    MessageBox.show(
+      context,
+      title: '粘贴表',
+      message: message,
+      type: MessageBoxType.info,
+      okText: '知道了',
     );
   }
 
@@ -885,9 +1334,74 @@ class _ObjectPanelState extends State<ObjectPanel> {
   Widget _blank(AppPalette t) => Container(color: t.background);
 }
 
-/// 对象实例图标尺寸:与连接树分组节点图标共用 [kObjectIconSize]
-/// (db_types.dart 定义,调整时只改一处)
-const double _objectIconSize = kObjectIconSize;
+/// 对象实例图标尺寸:面板自有尺寸(连接树分组节点用 database_tree 的独立尺寸)
+const double _objectIconSize = 16;
+
+/// 对象项行高与网格单元格宽度:渲染与框选 / 改名格命中测试共用,
+/// 改了这里框选才会跟着对齐
+const double _itemHeight = 22;
+const double _gridCellWidth = 176;
+
+/// 对象行与表头的字号:与 [_itemHeight] 配套的紧凑密度
+const double _rowFontSize = 12;
+
+/// 内容区右缘让给滚动条的命中带宽度:在此范围内按下不起框选(拖滚动条)
+const double _scrollBarHitWidth = 12;
+
+/// 列表模式表头高度与「行」列宽度:表头与数据行共用同一套列宽才能对齐;
+/// 表头固定在列表上方不随滚动,框选命中测试要把这段高度从选框里扣掉
+const double _listHeaderHeight = 20;
+const double _rowsColWidth = 88;
+
+/// 估算行数的展示:无统计值 → 横杠;不足一万原样;过万 / 过亿折成
+/// 「约 1.2 万」「约 3.4 亿」——既守住「行」列宽度,也让人一眼看出是约数
+String _formatRowEstimate(int? rows) {
+  if (rows == null) return '-';
+  if (rows < 10000) return '$rows';
+  final aboveHundredMillion = rows >= 100000000;
+  final scaled = (rows / (aboveHundredMillion ? 100000000 : 10000) * 10)
+      .round() /
+      10;
+  final text =
+      scaled % 1 == 0 ? '${scaled.round()}' : scaled.toStringAsFixed(1);
+  return '约$text${aboveHundredMillion ? '亿' : '万'}';
+}
+
+/// 列表模式一行的三列骨架(表头与数据行共用,故列起点必然对齐):
+/// 名称 flex 3 / 行固定 [_rowsColWidth] / 注释 flex 2,左右各 8 内边距。
+/// 行图标的缩进放在名称列**内部**,不参与列宽分配。
+Widget _listColumns({
+  required Widget name,
+  required Widget rows,
+  required Widget comment,
+}) {
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 8),
+    child: Row(
+      children: [
+        Expanded(flex: 3, child: name),
+        SizedBox(width: _rowsColWidth, child: rows),
+        Expanded(flex: 2, child: comment),
+      ],
+    ),
+  );
+}
+
+/// 列表模式某行的列元数据(网格模式传 null,只画名称)
+class _RowMeta {
+  const _RowMeta({
+    required this.hasRows,
+    required this.rows,
+    required this.comment,
+  });
+
+  /// 该分类是否有「行数」语义(函数 / 用户 / 本地查询没有,列留空)
+  final bool hasRows;
+
+  /// 引擎目录里的估算行数;null = 取不到统计值 → 显示横杠
+  final int? rows;
+  final String comment;
+}
 
 /// 对象实例图标:与对应分组节点同源的自绘 SVG(assets/icons/ui/*);
 /// 尺寸与连接树分组节点图标一致(单一数据源 ObjectCategoryIcon)
@@ -895,118 +1409,174 @@ Widget _objectItemIcon(BuildContext context, ObjectCategory category) =>
     ObjectCategoryIcon(category: category, size: _objectIconSize);
 
 /// 单个表项:ValueListenableBuilder 监听按项独立通知器,仅重建变化的 1~2 项;
-/// 行交互(选中 PointerDown 零延迟 / 双击独立手势 / hover)由 base-ui 的
-/// [ListItem] 承担,不再自绘手势与状态。
+/// 行交互(选中 PointerDown 零延迟 / 双击独立手势)自绘,不引入 Material 墨水。
+/// [editing] 为真时该行改由 base-ui [InlineEditor] 就地改名(不再有选中与双击手势,
+/// 提交 / 取消经 [onCommitRename] 上抛,传入原名即取消)。
+/// [meta] 非空(列表模式)时,行按 [_listColumns] 三列排布并显示行数与注释;
+/// 为空(网格模式)时只显示图标 + 名称。
 Widget _buildObjectItem(
   BuildContext context,
   String name,
-  ObjectCategory category,
-) {
+  ObjectCategory category, {
+  bool editing = false,
+  _RowMeta? meta,
+  Future<void> Function(String oldName, String input)? onCommitRename,
+}) {
   final t = Tokens.of(context);
   final app = context.read<AppState>();
   final notifier = app.itemNotifierFor(name);
 
   return ValueListenableBuilder<bool>(
-      valueListenable: notifier,
-      builder: (context, selected, _) {
-        // 选中走 Listener.onPointerDown:一旦注册 onDoubleTap,
-        // 手势竞技场会被 DoubleTapGestureRecognizer hold 住约 300ms,
-        // onTap 必须等竞技场解决后才触发,这就是单击卡顿的来源
-        return Listener(
-          behavior: HitTestBehavior.opaque,
-          onPointerDown: (event) {
-            app.selectTable(name);
-            // 右键表实例 → 表上下文菜单(打开 / 删除 / 清空 / 设计 / 转储SQL / 复制重命名);
-            // 右键函数 / 过程 → 例程菜单(设计 / 删除)。
-            // 仅当面板已关联连接与库时弹出(正常浏览对象时必然满足)
-            if (event.buttons == kSecondaryMouseButton &&
-                app.objectConnection != null &&
-                app.objectDatabase != null) {
-              ConnectionInfo? conn;
-              for (final c in app.connections) {
-                if (c.name == app.objectConnection) {
-                  conn = c;
-                  break;
-                }
-              }
-              if (conn != null) {
-                if (category == ObjectCategory.table) {
-                  showTableContextMenu(
-                    context: context,
-                    app: app,
-                    conn: conn,
-                    database: app.objectDatabase!,
-                    table: name,
-                    schema: app.objectSchema,
-                    position: event.position,
-                  );
-                } else if (category == ObjectCategory.function ||
-                    category == ObjectCategory.procedure) {
-                  showRoutineContextMenu(
-                    context: context,
-                    app: app,
-                    category: category,
-                    conn: conn,
-                    database: app.objectDatabase!,
-                    name: name,
-                    schema: app.objectSchema,
-                    position: event.position,
-                  );
-                }
-              }
-            }
-          },
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            // 双击:表 / 视图 / 实体化视图打开数据页;函数 / 过程打开设计页
-            onDoubleTap: switch (category) {
-              ObjectCategory.table ||
-              ObjectCategory.view ||
-              ObjectCategory.materializedView => () => app.openTable(
-                    name,
-                    connection: app.objectConnection!,
-                    database: app.objectDatabase!,
-                    schema: app.objectSchema,
-                  ),
-              ObjectCategory.function ||
-              ObjectCategory.procedure => () => app.designRoutine(
-                    name,
-                    connection: app.objectConnection!,
-                    database: app.objectDatabase!,
-                    category: category,
-                    schema: app.objectSchema,
-                  ),
-              _ => null,
-            },
-            child: SizedBox(
-              height: 28,
-              child: ColoredBox(
-                color: selected ? t.treeSelectedBg : Colors.transparent,
-                child: Row(
-                  children: [
-                    const SizedBox(width: 10),
-                    // 对象实例图标:与对应分组节点同源的 PNG
-                    _objectItemIcon(context, category),
-                    const SizedBox(width: 7),
-                    Expanded(
-                      child: Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: t.foreground,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+    valueListenable: notifier,
+    builder: (context, selected, _) {
+      if (editing && onCommitRename != null) {
+        return SizedBox(
+          height: _itemHeight,
+          child: ColoredBox(
+            color: selected ? t.treeSelectedBg : Colors.transparent,
+            child: InlineEditor(
+              initialValue: name,
+              height: _itemHeight,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+              onCommit: (input) => onCommitRename(name, input),
+              // Esc 以原名回传 → 宿主判为"未改动"即取消
+              onCancel: () => onCommitRename(name, name),
             ),
           ),
         );
-      },
-    );
+      }
+      // 选中走 Listener.onPointerDown:一旦注册 onDoubleTap,
+      // 手势竞技场会被 DoubleTapGestureRecognizer hold 住约 300ms,
+      // onTap 必须等竞技场解决后才触发,这就是单击卡顿的来源
+      return Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: (event) {
+          app.selectTable(name);
+          // 右键表实例 → 表上下文菜单(打开 / 删除 / 清空 / 设计 / 转储SQL / 复制重命名);
+          // 右键函数 / 过程 → 例程菜单(设计 / 删除)。
+          // 仅当面板已关联连接与库时弹出(正常浏览对象时必然满足)
+          if (event.buttons == kSecondaryMouseButton &&
+              app.objectConnection != null &&
+              app.objectDatabase != null) {
+            ConnectionInfo? conn;
+            for (final c in app.connections) {
+              if (c.name == app.objectConnection) {
+                conn = c;
+                break;
+              }
+            }
+            if (conn != null) {
+              if (category == ObjectCategory.table) {
+                showTableContextMenu(
+                  context: context,
+                  app: app,
+                  conn: conn,
+                  database: app.objectDatabase!,
+                  table: name,
+                  schema: app.objectSchema,
+                  position: event.position,
+                );
+              } else if (category == ObjectCategory.function ||
+                  category == ObjectCategory.procedure) {
+                showRoutineContextMenu(
+                  context: context,
+                  app: app,
+                  category: category,
+                  conn: conn,
+                  database: app.objectDatabase!,
+                  name: name,
+                  schema: app.objectSchema,
+                  position: event.position,
+                );
+              }
+            }
+          }
+        },
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          // 双击:表 / 视图 / 实体化视图打开数据页;函数 / 过程打开设计页
+          onDoubleTap: switch (category) {
+            ObjectCategory.table ||
+            ObjectCategory.view ||
+            ObjectCategory.materializedView =>
+              () => app.openTable(
+                    name,
+                    connection: app.objectConnection!,
+                    database: app.objectDatabase!,
+                    schema: app.objectSchema,
+                  ),
+            ObjectCategory.function || ObjectCategory.procedure => () =>
+                app.designRoutine(
+                  name,
+                  connection: app.objectConnection!,
+                  database: app.objectDatabase!,
+                  category: category,
+                  schema: app.objectSchema,
+                ),
+            _ => null,
+          },
+          child: SizedBox(
+            height: _itemHeight,
+            child: ColoredBox(
+              color: selected ? t.treeSelectedBg : Colors.transparent,
+              child: _rowContent(context, t, name, category, meta),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+/// 对象项内容行:[meta] 为空(网格模式)只画图标 + 名称;
+/// 非空(列表模式)按 [_listColumns] 排成 名称 / 行 / 注释 三列,
+/// 图标缩进留在名称列内部,使表头与数据行的列起点一致
+Widget _rowContent(
+  BuildContext context,
+  AppPalette t,
+  String name,
+  ObjectCategory category,
+  _RowMeta? meta,
+) {
+  final nameText = Text(
+    name,
+    maxLines: 1,
+    overflow: TextOverflow.ellipsis,
+    style: TextStyle(fontSize: _rowFontSize, color: t.foreground),
+  );
+  final nameCell = Row(
+    children: [
+      // 对象实例图标:与对应分组节点同源的 PNG
+      _objectItemIcon(context, category),
+      const SizedBox(width: 6),
+      Expanded(child: nameText),
+    ],
+  );
+  if (meta == null) {
+    return Row(children: [
+      const SizedBox(width: 8),
+      Expanded(child: nameCell),
+    ]);
+  }
+  return _listColumns(
+    name: nameCell,
+    // 估算行数:无统计值显示横杠,过万折成「约 N 万」;有值用正文色突出
+    rows: Text(
+      meta.hasRows ? _formatRowEstimate(meta.rows) : '',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        fontSize: _rowFontSize,
+        color: meta.rows == null ? t.mutedForeground : t.foreground,
+      ),
+    ),
+    comment: Text(
+      meta.comment,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(fontSize: _rowFontSize, color: t.mutedForeground),
+    ),
+  );
 }
 
 /// 对象面板工具栏最右侧的可展开搜索框(base-ui [ExpandableSearch]):

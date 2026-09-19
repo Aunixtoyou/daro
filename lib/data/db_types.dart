@@ -1,10 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-/// 对象图标尺寸(px):连接树分组节点与对象面板对象实例图标共用,
-/// 调整时只改此处,两处 UI 自动同步
-const double kObjectIconSize = 19.97;
-
 /// 连接类型条目:用于"选择一个连接类型"对话框里的每一个图标卡片。
 ///
 /// [label] 支持两行(如"阿里云 云数据库\nRDS MySQL 版"),渲染时按 \n 自动分行。

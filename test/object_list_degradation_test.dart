@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:daro/app/app_state.dart';
 import 'package:daro/app/connection_manager.dart';
 import 'package:daro/data/db_data.dart';
@@ -85,7 +87,44 @@ class _FakeDriver implements DatabaseDriver {
   }
 
   @override
+  Future<Map<String, int>> listTableRowEstimates(String database,
+          {String? schema}) async =>
+      const {'a': 3};
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+/// 表列表查询可挂起的驱动:用于观察「重载进行中」界面看到的状态
+class _GatedDriver extends _FakeDriver {
+  _GatedDriver() : super(failing: const {});
+
+  /// 驱动当前返回的表列表
+  List<String> tables = const ['a', 'b'];
+
+  /// true 时下一次 listTables 挂起,直到 [release]
+  bool hold = false;
+
+  Completer<void>? _release;
+
+  @override
+  Future<List<String>> listTables(String database, {String? schema}) async {
+    if (hold) {
+      final completer = _release = Completer<void>();
+      await completer.future;
+    }
+    return tables;
+  }
+
+  @override
+  Future<int> countTable(String database, String table,
+          {String? schema, String? where}) async =>
+      7;
+
+  void release() {
+    _release?.complete();
+    _release = null;
+  }
 }
 
 ConnectionInfo get _conn => const ConnectionInfo(
@@ -174,6 +213,66 @@ void main() {
       expect(state.categoryErrorOf(ObjectCategory.function), contains('1142'));
       expect(state.categoryErrorOf(ObjectCategory.user), contains('1142'));
       expect(state.categoryErrorOf(ObjectCategory.procedure), isNull);
+    });
+  });
+
+  group('对象列表重载:不闪白', () {
+    test('已加载时重载期间保留旧列表,新列表就绪后一次性替换且只通知一次',
+        () async {
+      final manager = ConnectionManager();
+      final driver = _GatedDriver();
+      manager.attachDriverForTest('c', driver);
+      await manager.expandDatabase(_conn, 'bfin');
+      final state = manager.tableStateOf('c', 'bfin');
+      expect(state.tables, ['a', 'b']);
+
+      driver.hold = true;
+      driver.tables = const ['a', 'b', 'c_copy'];
+      var notified = 0;
+      manager.addListener(() => notified++);
+
+      final reloading = manager.refreshDatabase(_conn, 'bfin');
+      await pumpEventQueue();
+
+      // 重载进行中:面板仍是旧列表。置空 + 退到 idle 会让它闪白一次,
+      // 顺带丢掉滚动位置与选中项
+      expect(state.status, LoadStatus.loaded);
+      expect(state.tables, ['a', 'b']);
+      expect(notified, 0);
+
+      driver.release();
+      await reloading;
+
+      expect(state.status, LoadStatus.loaded);
+      expect(state.tables, ['a', 'b', 'c_copy']);
+      expect(notified, 1);
+    });
+
+    test('列表原本未加载时仍走整重载,拉完即为新列表', () async {
+      final manager = ConnectionManager();
+      final driver = _GatedDriver();
+      driver.tables = const ['x', 'y'];
+      manager.attachDriverForTest('c', driver);
+
+      await manager.refreshDatabase(_conn, 'bfin');
+      final state = manager.tableStateOf('c', 'bfin');
+
+      expect(state.status, LoadStatus.loaded);
+      expect(state.tables, ['x', 'y']);
+    });
+
+    test('静默重载后结构版本号 +1、估算行数随重载刷新且不留空档', () async {
+      final manager = ConnectionManager();
+      manager.attachDriverForTest('c', _GatedDriver());
+      await manager.expandDatabase(_conn, 'bfin');
+      final state = manager.tableStateOf('c', 'bfin');
+      expect(state.rowEstimates, {'a': 3});
+      final revision = state.revision ?? 0;
+
+      await manager.refreshDatabase(_conn, 'bfin');
+
+      expect(state.revision, revision + 1);
+      expect(state.rowEstimates, {'a': 3});
     });
   });
 }
