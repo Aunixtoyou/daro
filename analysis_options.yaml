@@ -12,6 +12,10 @@
 analyzer:
   exclude:
     - build/**
+    # base-ui-flutter 是独立子模块(自带 analysis_options 与 example 子包),
+    # 由子模块内 `cd base-ui-flutter && flutter analyze` 单独把关;
+    # 若不排除,根目录 analyze 会扫进 example/(CI 上从未 pub get)报出成百条解析错误
+    - base-ui-flutter/**
     - android/**
     - ios/**
     - web/**
