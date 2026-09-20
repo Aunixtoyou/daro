@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- 连接分组(折叠态):实心文件夹,背板 + 左上标签深金、前面板亮金,
+       外缘一条暗金细描边把轮廓在明亮 / 暗黑主题下都立住(参考 Navicat 连接分组图标) -->
+  <path d="M4.6 4.4h4.9l1.9 2.4h8a2.2 2.2 0 0 1 2.2 2.2v1.4H2.4V6.6a2.2 2.2 0 0 1 2.2-2.2z" fill="#d98e1f"/>
+  <rect x="2.4" y="8" width="19.2" height="12" rx="2.2" fill="#f7c64b"/>
+  <rect x="2.4" y="8" width="19.2" height="1.9" rx=".95" fill="#ffdd7a"/>
+  <path d="M4.6 4.4h4.9l1.9 2.4h8a2.2 2.2 0 0 1 2.2 2.2" fill="none" stroke="#a8690f" stroke-width=".9" opacity=".5"/>
+  <rect x="2.4" y="8" width="19.2" height="12" rx="2.2" fill="none" stroke="#a8690f" stroke-width=".9" opacity=".45"/>
+</svg>

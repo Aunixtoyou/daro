@@ -1,0 +1,65 @@
+name: CI
+
+# 每次 push / PR 跑三道轻量检查,不构建安装包(那归 release.yml)。
+#
+# 为什么单独有 CI:release.yml 只在打 tag 时跑,而 `lib/mcp/` 的纯 Dart 约束
+# (docs/mcp-design-brief.html §6 W1)必须**在 PR 阶段**就被卡住 —— 一旦有人
+# 顺手 import 了带 Flutter 的文件,Phase-2 的 stdio 宿主(`dart compile exe`)
+# 会在离根因两层远的地方炸掉。
+#
+# 说明:
+#   - base-ui-flutter 是 git submodule,要 recursive 拉取(pubspec 走 path 依赖)。
+#   - 跑在 ubuntu-22.04(与 release.yml 的 Linux job 同版本)。若某个测试
+#     依赖 Windows 专有行为而在此失败,把 runs-on 改成 windows-latest,
+#     不要跳过测试。
+#   - `flutter analyze` 是硬门禁:本仓 analysis_options.yaml 未启 flutter_lints,
+#     所以它只抓真实错误/警告,不会被风格噪音淹掉。
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # 与 release.yml / 本机 .metadata 对齐,避免 CI 与本地行为漂移。
+  FLUTTER_VERSION: "3.47.0"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: 纯 Dart 约束 + 静态分析 + 单测
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: 安装系统依赖（sqlite3 运行库,供单测加载）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: false
+
+      - name: 依赖解析
+        run: flutter pub get
+
+      # 传递闭包校验:比 grep "package:flutter" lib/mcp 更严,能抓住间接依赖。
+      - name: MCP 纯 Dart 校验
+        run: dart run tool/check_mcp_purity.dart
+
+      - name: 静态分析
+        run: flutter analyze
+
+      - name: 单元测试
+        run: flutter test

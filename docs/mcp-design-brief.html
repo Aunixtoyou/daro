@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>MCP 服务 · 设计简报（Phase-1）</title>
+<style>
+  :root{--fg:#1f2328;--muted:#5b6570;--line:#d8dee4;--bg:#fff;--surface:#f6f8fa;--ok:#1a7f37;--warn:#9a6700;--bad:#b42318;--accent:#0b5cad;}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 40px 64px;font:13px/1.65 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--fg);background:var(--bg);max-width:1180px}
+  h1{font-size:22px;margin:0 0 4px}
+  h2{font-size:15px;margin:30px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  h3{font-size:13px;margin:18px 0 6px;color:var(--accent)}
+  .sub{color:var(--muted);margin:0 0 18px}
+  table{border-collapse:collapse;width:100%;margin:8px 0 4px;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--surface);font-weight:600;white-space:nowrap}
+  td code,code{font:12px/1.5 Consolas,"Cascadia Mono",monospace;background:var(--surface);padding:1px 4px;border-radius:3px}
+  .ok{color:var(--ok);font-weight:600}.warn{color:var(--warn);font-weight:600}.bad{color:var(--bad);font-weight:600}
+  .tag{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;border:1px solid var(--line);color:var(--muted);margin-right:4px}
+  ul{margin:6px 0;padding-left:20px}
+  li{margin:2px 0}
+  .box{border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--surface);padding:10px 14px;margin:10px 0;border-radius:0 4px 4px 0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .kv{font-size:12.5px;color:var(--muted)}
+  .num{color:var(--muted);font-variant-numeric:tabular-nums}
+  pre{font:12px/1.55 Consolas,"Cascadia Mono",monospace;background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:10px 12px;overflow:auto;margin:8px 0}
+</style>
+</head>
+<body>
+
+<h1>MCP 服务 · 设计简报</h1>
+<p class="sub">daro（Flutter 桌面数据库管理工具）· 分支 <code>master@1d9f29c</code> · Phase-1 MVP · 2026-09-20 · 对标实证来源：<code>t8y2/dbx</code>（packages/mcp-server + docs/content/docs/mcp.cn.mdx，本机已核对原文）</p>
+
+<div class="box">
+<strong>一句话目标：</strong>让 Claude Code / Cursor / VS Code / 千问办公这类 agent 能在<strong>用户设定的权限范围内</strong>读 daro 已配置的连接、浏览结构、跑查询，并可选地把结果直接摊在 daro 界面上。
+<br><strong>已拍板（2026-09-20，D1–D12 全部按推荐采纳）：</strong>
+<span class="tag">D1 先内嵌 Streamable HTTP</span>
+<span class="tag">D2 自写薄协议层</span>
+<span class="tag">D3 Phase-1 十工具</span>
+<span class="tag">D4 专用实例 + MCP 池</span>
+<span class="tag">D5 全局+连接级</span>
+<span class="tag">D6 白名单判定</span>
+<span class="tag">D7 不回显密码</span>
+<span class="tag">D8 四个配置 Tab</span>
+<span class="tag">D9 带 UI 桥</span>
+<span class="tag">D10 不引入 id</span>
+<span class="tag">D11 分档超时</span>
+<span class="tag">D12 现成件规避</span>
+<br><strong>结构：</strong>§1 对标拆解 · §2 daro 实测证据 · §3 七条已实测痛点 · §4 形态推荐 · §5 字段/工具/错误码契约 · §6 接线点 · §7 决策定稿 · §8 验收。
+<br><strong>实施顺序（按 §6 依赖排）：</strong>① W1 目录 + CI 纯 Dart 断言 → ② W2/W3 策略模型与判定（纯函数 + 单测，先把判定钉死再碰网络）→ ③ W4 <code>McpDriverPool</code> → ④ <code>mcp_tools.dart</code> + §5.3 错误码 + P1/P2 超时取消 → ⑤ W5 HTTP 宿主 → ⑥ W6/W7 设置对话框与配置生成 → ⑦ W14 密码弹窗 → ⑧ W12 改名守卫（<span class="warn">必须与 ② 同批</span>）→ ⑨ W9 状态栏指示 → ⑩ W8 测试补齐 → ⑪ W10 文档。每步收尾跑 <code>flutter analyze</code> + <code>flutter test</code>。
+</div>
+
+<h2>1. 对标拆解：DBX 的 MCP 到底是怎么搭的</h2>
+<table>
+<tr><th>维度</th><th>DBX 实际做法（已核对原文）</th><th>对 daro 的含义</th></tr>
+<tr><td><strong>进程形态</strong></td><td>独立 <strong>Rust 二进制</strong> <code>dbx-mcp</code>，外面套一层极薄 Node 启动器发成 <code>@dbx-app/mcp-server</code>（平台二进制走 <code>optionalDependencies</code>）。客户端用 <strong>stdio</strong> 拉起（<code>npx -y @dbx-app/mcp-server</code>）。Node 只为兼容 npm/npx 配置，<span class="kv">不含任何数据库逻辑</span></td><td>MCP server <strong>不是 app 的一部分</strong>。app 与 server 的关系是「共享存储 + 共享策略」，不是 IPC</td></tr>
+<tr><td><strong>连接来源</strong></td><td>直接读 DBX 连接存储 <code>%APPDATA%\com.dbx.app\dbx.db</code>，在 Rust 进程内<strong>自己建连执行</strong>；文档明写「DBX does not need to remain open」</td><td>所以 <code>dbx_open_table</code> / <code>dbx_execute_and_show</code> 是仅有的两个要求桌面端在跑的工具，其余 16 个不需要</td></tr>
+<tr><td><strong>策略归属</strong></td><td>策略由 <strong>app 的「设置 → MCP」写盘</strong>，server <strong>每次请求重新读取</strong>。旧环境变量 <code>DBX_MCP_ALLOW_WRITES</code> 被明确禁止放宽中央策略</td><td>这是它最值钱的设计：<span class="ok">改权限不必重启 MCP 客户端</span>。daro 必须照抄这条语义</td></tr>
+<tr><td><strong>执行模式</strong></td><td>三档：<code>只读</code> / <code>数据读写</code> / <code>完全访问</code>，配一张「能力 × 模式」矩阵（即截图那张）。<code>WHERE TRUE</code>、<code>1=1</code>、<code>_id {$exists:true}</code> 仍按高风险处理</td><td>矩阵照抄；「无法可靠分类的请求需要完全访问」这句文案也值得抄</td></tr>
+<tr><td><strong>范围收窄</strong></td><td>连接 allowlist（全部/指定）→ 数据库范围（全部/指定/禁止）→ 连接默认执行权限 → 单库覆盖；生效顺序<strong>由小到大回退：单库 → 连接 → 全局</strong>。越界返回 <code>DATABASE_OUT_OF_SCOPE</code>。连接只读、生产库保护、DB 账号权限是<strong>任何模式都压不住的硬上限</strong></td><td>Phase-1 只做「连接 allowlist + 连接级 mode + 全局默认」，单库覆盖列 Phase-2（§7 D5）</td></tr>
+<tr><td><strong>工具 allowlist</strong></td><td>可只暴露选定工具，<strong>服务端每次调用强校验</strong>，「即使客户端缓存了旧工具列表也会被拒」；开启连接作用域后，改连接的工具与 UI 工具直接隐藏</td><td>隐藏 ≠ 授权。daro 侧必须同样在服务端判</td></tr>
+<tr><td><strong>传输</strong></td><td>stdio 默认；<strong>可选 Streamable HTTP</strong>：桌面端可直接托管，<strong>默认关闭</strong>，开后默认仅监听 <code>127.0.0.1:5225/mcp</code> + 本地生成 Bearer Token，进程内托管、异常自动拉起、轮换 Token 立即失效；绑非回环地址需同时满足 <code>ALLOW_REMOTE=1</code> + <code>--http-allow-remote</code> + Host/Origin 白名单三个条件</td><td><span class="ok">App 内嵌 HTTP 是 DBX 已经验证过的形态</span>，不是我方独创的取巧路径（§4 的推荐依据）</td></tr>
+<tr><td><strong>结果规模</strong></td><td><code>max_rows</code> 1–1000，默认 100，<strong>越界夹取而非报错</strong>；MongoDB/多语句脚本恒 ≤100</td><td>与 daro 现有 <code>sql_row_cap</code>（服务端 LIMIT 下推）语义天然对齐</td></tr>
+<tr><td><strong>有状态会话</strong></td><td><code>dbx_open_session</code> 固定一条后端连接（保留 <code>USE</code>/临时表/会话变量），空闲 30min 回收、最多 32 并发；显式事务<strong>只支持本地原生 MySQL</strong>，其余返回 <code>TRANSACTION_UNSUPPORTED</code> 而不是静默退化成自动提交</td><td>原先判断「会话是 Phase-2 炫技」<span class="bad">已撤回</span>：P4 证明 daro 同样需要池，只是<strong>不需要把池暴露成工具</strong>（§3 P4、§7 D4）</td></tr>
+<tr><td><strong>批量执行</strong></td><td><code>dbx_execute_batch</code>：方言感知拆句（字符串/注释/存储过程里的分号不破坏批次）、默认首错即停、<code>continue_on_error</code>、<code>use_transaction</code>（要求多语句、与 session 互斥、MySQL 含 DDL 直接拒绝因为隐式提交）</td><td>daro 已有 <code>lib/data/sql_split.dart</code> 同能力，Phase-2 几乎白送</td></tr>
+<tr><td><strong>客户端接入页</strong></td><td>按客户端分 Tab 给可复制 JSON（Claude Code / Cursor / TRAE / VS Code / Windsurf / Codex / OpenCode / Cherry Studio）+「重新检查」状态探测；明写「DBX 只检测和提示 MCP 状态，安装与升级仍由 npm 完成」</td><td>配置生成 + 状态检测是<strong>必须做的 UI</strong>，否则用户接不上</td></tr>
+<tr><td><strong>工具总数</strong></td><td>18 个（连接 5 / 结构 5 / 执行 3 / 会话事务 4 / MQ-Redis 3 中按构建裁剪 / UI 2）</td><td>daro Phase-1 建议 <strong>10 个</strong>（§5.2）</td></tr>
+</table>
+
+<h2>2. daro 侧实测证据（决定形态的事实）</h2>
+<table>
+<tr><th>#</th><th>事实</th><th>取证方式</th><th>结论</th></tr>
+<tr><td class="num">E1</td><td>驱动层<strong>零 Flutter 依赖</strong></td><td>逐文件 <code>grep -c package:flutter</code>：<code>drivers/{access,db_driver,mariadb,mysql,odbc_query,pgsql,sqlite,sqlserver}_driver.dart</code> 全部 = <strong>0</strong>；<code>table_design.dart</code> / <code>sql_split.dart</code> / <code>db_data.dart</code> = <strong>0</strong></td><td class="ok">DBX「独立二进制复用 dbx-core」的前提在 daro 等价成立：MCP 能直接吃 <code>DatabaseDriver</code>，不必为 agent 重写数据访问</td></tr>
+<tr><td class="num">E2</td><td><code>lib/data</code> 只有 2 个文件碰 Flutter</td><td><code>db_types.dart:1-2</code>（material + flutter_svg，类型图标/颜色）、<code>sql_completions.dart:3</code>（widgets，补全浮层）</td><td>MCP 侧不 import 这两个即可，<strong>零重构</strong></td></tr>
+<tr><td class="num">E3</td><td>接口面已覆盖 DBX 大部分工具</td><td><code>lib/data/drivers/db_driver.dart:120-262</code>：<code>listDatabases / listSchemas / listTables / listViews / listTableComments / listTableRowEstimates / listFunctions / listProcedures / describeTable / readTableDesign / getDefinition / previewTable / countTable / executeQuery / useDatabase / useSchema / serverSessionId / killSession</code></td><td class="ok">18 个 DBX 工具里 daro Phase-1 要的 10 个<strong>全部有现成 backing 方法</strong>（§5.2 逐条映射）</td></tr>
+<tr><td class="num">E4</td><td>「另开专用驱动实例」已有先例与教训</td><td><code>lib/data/schema_sync.dart:1-14</code> 头注释：比对/部署<strong>不复用</strong> <code>ConnectionManager</code> 里连接树共享的长连接，因为反复 <code>useDatabase</code> 会改上下文、PG 家族还会断开重连，「既拖慢比对也会打乱树与查询页的运行上下文」</td><td class="bad">直接复用 UI 活连接跑 agent 的 SQL 会互相污染会话。MCP 必须走专用驱动实例（§7 D4、P4）</td></tr>
+<tr><td class="num">E5</td><td><code>connections.json</code> 是<strong>全量覆写</strong></td><td><code>lib/data/connection_store.dart:59-69</code> <code>save()</code> 整文件 <code>writeAsString</code>；<code>:31-45</code> <code>load()</code> 损坏时静默返回空</td><td class="bad">若 sidecar 也写连接（<code>add_connection</code>），会与 app 内存态互相踩（后写者覆盖前者）。DBX 用 SQLite 有事务，我们没这保护 → Phase-1 <strong>不给 agent 写连接的权限</strong></td></tr>
+<tr><td class="num">E6</td><td>密码明文落盘</td><td><code>lib/data/connection_store.dart:21-22</code> 注释自认「当前以明文保存，后续可换加密存储」</td><td>与 DBX 读 <code>dbx.db</code> 同级风险（本机单机）。硬约束：<strong>MCP 任何输出不得回显 password</strong>（§7 D7、P3）</td></tr>
+<tr><td class="num">E7</td><td>纯 Dart exe 的打包隐患</td><td><code>pubspec.yaml</code>：<code>sqlite3_flutter_libs: 0.5.42</code> 锁定注释「0.6.0+ 是 EOL 占位包，不再捆绑 sqlite3.dll」→ 现在 SQLite 能跑是靠 <strong>Flutter 插件把 dll 拷进 build 目录</strong>（<code>installer/windows/installer.iss:97</code> 打包注释里也点名 <code>sqlite3.dll</code>）</td><td class="warn"><code>dart compile exe</code> 出的独立 exe <strong>不会自动带 sqlite3.dll</strong>，且 <code>pubspec</code> 含 <code>flutter: sdk: flutter</code> 时 <code>dart pub get</code> 走不通（需借 <code>flutter pub get</code> 产出的 <code>package_config.json</code>）。这是 stdio exe 的<strong>未验证构建链</strong>，须先做 spike（§4 排序依据）</td></tr>
+<tr><td class="num">E8</td><td>本机工具链</td><td>Dart SDK <strong>3.13.0 stable</strong> / Flutter <strong>3.47.0 stable</strong></td><td>满足 <code>dart_mcp_server</code> 的 SDK 门槛（见 D2）</td></tr>
+<tr><td class="num">E9</td><td>没有「设置」页</td><td><code>lib/widgets/top_menu.dart:261-293</code> 菜单只有 文件/视图/… ；全仓唯一的设置形态是 <code>theme_customize_dialog.dart</code> + <code>theme_store.dart</code>（对话框级）</td><td>「设置 → MCP」需要一个宿主：要么新建设置对话框/页，要么先挂「更多」菜单下单点（§6 W6）</td></tr>
+<tr><td class="num">E10</td><td>Dart 官方 MCP 包现状</td><td><code>dart_mcp_server</code>（publisher <code>tools.dart.dev</code>，repo <code>dart-lang/ai</code>）<strong>1.1.2</strong>，页面自述「still experimental and is likely to evolve quickly」，<strong>只提 stdio</strong>，要求 Dart ≥ 3.9.0-163.0.dev</td><td>官方包只覆盖 stdio，而 stdio 恰是 daro 的<strong>构建链风险项</strong>（E7）→ 用它并不能省掉最难的部分（§7 D2）</td></tr>
+</table>
+
+<h2>3. 已实测痛点（P1–P7，全部会改变设计）</h2>
+<div class="box">
+本节是<strong>对自己上一版的纠偏</strong>：P1/P2 把超时与取消从「可选字段」升为<strong>前置条件</strong>（§5.1、§5.3）；P3 给 §4 的宿主顺序补了一条比构建链更硬的论据；P4 <span class="bad">撤回</span>「会话整体推到 Phase-2」的判断——池必须进 Phase-1；P5/P6 要求把「不支持」「改名脱钩」写成契约而不是异常文本；P7 是流程摩擦，不是技术风险。
+</div>
+<table>
+<tr><th>#</th><th>痛点</th><th>取证（可直接跳转）</th><th>对设计的强制影响</th></tr>
+
+<tr><td><strong>P1</strong></td><td><strong><code>executeQuery</code> 根本没有语句超时</strong>，且行数封顶不是无条件生效</td><td><code>db_driver.dart:219-220</code> 接口签名只有 <code>sql / limit / offset</code>，<strong>无 timeout 形参</strong>；全仓只有握手级超时（<code>mysql_driver.dart:28 timeoutMs=10000</code>、<code>pgsql_driver.dart:43</code>、<code>sqlserver_driver.dart:35</code>）。而 <code>sql_row_cap.dart:19-30</code> 的 <code>_blockers</code>（<code>LIMIT/FETCH/INTO/FOR/LOCK/PROCEDURE/INSERT/UPDATE/DELETE</code>）一命中就返回 null <strong>不改写</strong>，注释原话「宁可退回旧行为也不能把用户的语句改坏」</td><td>人用 UI 时旁边有「停止」按钮，agent 没有 → 一条语句能把 daro 挂几十秒且拿不到结果。① <code>queryTimeoutSecs</code> 是<strong>前置条件</strong>不是可选项；② 封顶被拒的语句必须在结果里回 <code>rowCapApplied:false</code>，让 agent 知道自己面对的是未封顶语句；③ 超时默认值不能一档通用（§7 D11）</td></tr>
+
+<tr><td><strong>P2</strong></td><td><strong>超时了也未必取消得掉</strong></td><td><code>db_driver.dart:222-232</code>：取消要<strong>第二条临时连接</strong>下发 <code>KILL</code>/<code>pg_cancel_backend</code>，且「需要服务端权限（MySQL CONNECTION_ADMIN、PG 同用户/管理员、SQL Server ALTER SERVER STATE）」；<code>SQLite / Access</code> 等本地文件型 <code>serverSessionId()</code> <strong>返回 null，没有带外取消这条路</strong></td><td>超时后只能<strong>尽力而为</strong>：结果必须带 <code>cancelAttempted</code> + 失败原因；取消失败或无法取消时，<strong>该专用驱动实例直接销毁不回池</strong>（绝不能把一条仍在跑语句的连接放回池里被下一个请求复用）。这条直接写进 §5.3 错误契约</td></tr>
+
+<tr><td><strong>P3</strong></td><td><strong>密码经常是不存的</strong>，stdio 形态下没人可弹</td><td><code>connection_store.dart:21-22</code>「密码仅当向导勾选『保存密码』时才会写入」→ <code>ConnectionInfo.password</code> 常态为空；<code>db_driver.dart:270 connectionNeedsPassword()</code> 是打开前是否需要密码的唯一入口；UI 侧靠 <code>connection_password_window.dart:10</code>（<code>desktop_multi_window</code> 独立子窗口）+ <code>app_state.dart:463 setConnectionPassword()</code> 补录</td><td><strong>内嵌形态能弹</strong>：agent 命中空密码连接时在 daro 里弹一次密码窗，人输完继续，一次授权长期可用；<strong>stdio exe 无交互面</strong>，只有「已保存密码」的连接可用（<code>full</code> 模式下让 agent 传密码 = 把明文密码写进 agent 的对话历史，不可接受）。→ 这是比 E7 构建链<strong>更硬的 D1 论据</strong>（§7 D1）</td></tr>
+
+<tr><td><strong>P4</strong></td><td><strong>「另开专用驱动实例」= 每次调用重做握手</strong>，慢到不可用</td><td><code>connection_manager.dart:99</code> <code>_drivers</code> 是 <code>连接名 → 长连接</code>（唯一的池，MCP 不能借）；每次新建实例 = 一次 TCP + TLS + 认证（握手超时都定在 10s，见 P1 取证）。agent 一轮对话连打 10 个工具就是 10 次握手</td><td class="bad">撤回上一版把 session 整体推到 Phase-2 的判断。Phase-1 必须有 <code>McpDriverPool</code>：键 = <code>连接名|数据库|模式</code>、空闲 TTL 回收、并发上限、<strong>上限外直接返回 <code>POOL_EXHAUSTED</code> 而不是排队到超时</strong>。DBX 的 30min/32 并发不是炫技，是被同一个问题逼出来的。暴露成工具的 <code>open_session</code> / 显式事务仍留 Phase-2</td></tr>
+
+<tr><td><strong>P5</strong></td><td><strong>声明的数据库类型远多于有驱动的类型</strong></td><td><code>connection_defaults.dart</code> 里 <strong>31 个</strong> <code>case</code>（含 <code>aliyun-rds-*</code> / <code>aliyun-polardb-*</code> / <code>aliyun-oceanbase-*</code>）、<code>db_types.dart</code> 列 10 类，但 <code>db_driver.dart:265 kSupportedDriverTypes</code> 只有 <strong>6 个</strong>；<code>createDriver()</code>（<code>:364-381</code>）对 <code>aliyun-rds-postgres</code> 这类<strong>没有 case</strong> → 返回 null；走到 <code>connection_manager.dart:134</code> 是 <code>throw UnsupportedError('暂不支持 ${conn.typeId} 类型的连接')</code></td><td>MCP 侧必须先过 <code>hasDriver()</code>；不可用的连接在 <code>daro_list_connections</code> 里就带 <code>supported:false</code> 返回（<strong>别让 agent 调用时才发现</strong>），并把中文异常转成结构化 <code>DRIVER_UNSUPPORTED</code> —— 否则 agent 拿到一段人话错误会反复重试同一连接</td></tr>
+
+<tr><td><strong>P6</strong></td><td><strong>一切按「连接名」索引，没有稳定 id</strong> → 改名同时孤儿化活驱动与策略</td><td><code>db_data.dart:23-50</code> <code>ConnectionInfo</code> 字段全集（<code>name/typeId/host/port/username/password/database/authMethod/group/isLive</code>）<strong>无 id</strong>；<code>connection_manager.dart:99</code> 按名索引；<code>ConnGroup</code>（<code>:113</code>）同样「分组名即标识」（与 <code>docs/connection-group-design-brief.html</code> 同一病根）</td><td>策略里的 <code>connections[].name</code> 与池键都会因改名脱钩，且<strong>脱钩方向是静默失效</strong>（旧名条目变成永久无效授权残留）。Phase-1 最低成本：<code>ConnectionInfo.copyWith</code> 改名路径上检测「该名字在策略/池里」→ 提示并同步迁移；根治要引入 <code>id</code>（§7 D10）</td></tr>
+
+<tr><td><strong>P7</strong></td><td><strong>设置页需要的新组件必须进 submodule</strong>，一次改动两笔提交</td><td><code>AGENTS.md</code> 强制规则「禁止在 daro 中创建自定义 UI 组件」+ 组件速查表里<strong>没有</strong>「可复制配置代码块」；<code>base-ui-flutter</code> 是 git submodule（<code>.gitmodules</code>），新增组件按规则要走 <code>src/&lt;命名空间&gt;/</code> + barrel export + <code>CHANGELOG.md</code> + example 演示页，再回主仓 bump 指针</td><td>纯流程摩擦，但会真实拖慢 W7。可先降级用 base-ui 现成件规避（<code>Input</code> 只读 + <code>Button</code>「复制」），把 <code>CodeBlock</code> 组件推到确有第二个使用方时（§7 D12）</td></tr>
+</table>
+
+<h2>4. 推荐形态：core 纯 Dart，宿主先内嵌 HTTP、后加 stdio</h2>
+<pre>lib/mcp/                      ← 纯 Dart 纪律：本目录禁止 import package:flutter（CI 用 grep 卡死）
+  mcp_policy.dart             策略模型 + 判定（模式 / allowlist / 只读分类 / 夹取），每次调用重读盘
+  mcp_errors.dart             错误码契约（§5.3）：结构化 code + 给 agent 的下一步建议，杜绝中文异常外泄
+  mcp_pool.dart               McpDriverPool（P4）：键=连接名|库|模式，空闲 TTL 回收 + 并发上限 + 脏实例销毁
+  mcp_protocol.dart           JSON-RPC 2.0 + MCP 握手（initialize / tools.list / tools.call / notifications）
+  mcp_http_host.dart          Phase-1 宿主：HttpServer 监听 127.0.0.1:port /mcp + Bearer 校验
+  mcp_tools.dart              10 个工具 → DatabaseDriver 调用 + 结果封装（列/行、truncated、超时/取消标记）
+lib/widgets/mcp_settings_dialog.dart   设置 → MCP：模式矩阵 / 连接 allowlist / 工具 allowlist / HTTP 开关 / 客户端配置 Tab / 重新检查
+bin/daro_mcp.dart             Phase-2：stdio 宿主（同一 core，仅换壳；受 P3 约束）</pre>
+<div class="grid">
+<div class="box"><strong>Phase-1 = App 内嵌 Streamable HTTP</strong>（§7 D1 推荐 A）<br>
+<span class="ok">+ 密码可弹窗</span>：P3 是本轮最强的论据 —— 空密码连接能在 daro 里弹一次窗让人补录，stdio exe 根本没有人可弹<br>
+<span class="ok">+ 零构建链风险</span>：不碰 <code>dart compile exe</code> 与 sqlite3.dll（E7）<br>
+<span class="ok">+ 零双写风险</span>：连接与策略都由 app 进程独占读写（E5）<br>
+<span class="ok">+ 元数据缓存可复用</span>，但执行仍走 <code>McpDriverPool</code> 的专用实例，不碰树上那条长连接（E4 + P4）<br>
+<span class="ok">+ 白送 UI 桥</span>：<code>daro_open_table</code> / 结果直接进当前标签页 —— 这是 DBX 要靠 Desktop bridge 才有的能力，我们天然可用，是<strong>唯一差异化卖点</strong><br>
+<span class="warn">−</span> app 必须开着；只支持 stdio 的老客户端连不上</div>
+<div class="box"><strong>Phase-2 = 同一 core 加 stdio exe</strong><br>
+先做 30 分钟 spike：<code>flutter pub get</code> 后 <code>dart compile exe bin/daro_mcp.dart</code> 能否跑通 + 手工放 <code>sqlite3.dll</code> 后 SQLite 连接是否可用。跑通才立项，跑不通就永久停在「内嵌 HTTP + 文档说明」。<br>
+落地后的价值是<strong>app 不必开着</strong>（对齐 DBX 主路径）；代价是 P3 直接生效 —— 只有已保存密码的连接可用，<code>connectionNeedsPassword()</code> 为真且密码为空的连接要在 <code>daro_list_connections</code> 里标 <code>passwordMissing:true</code> 并给 <code>PASSWORD_REQUIRED</code>，<span class="bad">不接受 agent 传密码</span>（会把明文密码写进对话历史）。</div>
+</div>
+
+<h2>5. 实体字段与工具清单</h2>
+<h3>5.1 新增实体 <code>McpPolicy</code>（落盘 <code>mcp_policy.json</code>，与 connections.json 同目录）</h3>
+<table>
+<tr><th>字段</th><th>类型 / 默认</th><th>说明</th></tr>
+<tr><td><code>schemaVersion</code></td><td><code>int</code> / <code>1</code></td><td>策略格式版本。DBX 有明确语义：「升级时未带策略版本的旧规则继续使用旧上限语义，<strong>不会放大权限</strong>」→ 抄这条，避免旧文件被新默认值悄悄放宽</td></tr>
+<tr><td><code>enabled</code></td><td><code>bool</code> / <code>false</code></td><td class="warn">默认关闭（对齐 DBX「HTTP 服务默认关闭」）。用户不主动开，agent 一律连不上</td></tr>
+<tr><td><code>http</code></td><td><code>{host, port, token}</code> / <code>127.0.0.1:5225, ''</code></td><td>仅回环免鉴权可选；绑非回环必须同时有非空 <code>token</code> + 显式 <code>allowRemote</code>（照抄 DBX 的三条件门）。Token 一键轮换，旧值立即失效</td></tr>
+<tr><td><code>defaultMode</code></td><td>enum <code>readonly | readWrite | full</code> / <code>readonly</code></td><td>全局默认档，即截图那一列的三选一</td></tr>
+<tr><td><code>connectionScope</code></td><td><code>{all: bool, names: [String]}</code></td><td>MCP 可见连接 allowlist。<code>all=true</code> 含以后新增的连接（DBX 原语义）</td></tr>
+<tr><td><code>connections[]</code></td><td><code>{name, mode?, databaseScope}</code></td><td>连接级覆盖。<code>mode</code> 为空 = 继承全局。<code>databaseScope = {all} | {include:[…]} | {deny}</code>；越界返回 <code>DATABASE_OUT_OF_SCOPE</code><br><span class="warn">注意</span>：daro 的 <code>ConnectionInfo</code> 无 id、按 name 索引（与分组简报同一约定）→ <strong>连接改名会让策略脱钩</strong>（P6），改名对话框需提示「该连接已授权给 MCP」（§7 D6 / D10）</td></tr>
+<tr><td><code>tools</code></td><td><code>[String]</code> / 全选</td><td>工具 allowlist。<span class="bad">服务端每次调用强校验</span>，UI 隐藏只是展示；不在名单内的连接变更类 / UI 类工具在收窄模式下自动隐藏（对齐 DBX）</td></tr>
+<tr><td><code>maxRows</code> / <code>hardRowCap</code></td><td><code>100</code> / <code>1000</code></td><td>默认与上限，越界<strong>夹取不报错</strong>（DBX 原语义）。落到 <code>executeQuery(limit:)</code> 即由 <code>sql_row_cap</code> 下推服务端 LIMIT。<span class="warn">P1</span>：该下推<strong>不是无条件</strong>的（<code>sql_row_cap.dart:19-30</code> 的 <code>_blockers</code> 命中即不改写），故结果里必须回 <code>rowCapApplied:false</code>，让 agent 知道这条语句没封顶、别指望行数少就是全量</td></tr>
+<tr><td><code>queryTimeoutSecs</code></td><td>按模式分档：<code>readonly 30</code> / <code>readWrite 60</code> / <code>full 300</code></td><td class="bad"><strong>前置条件，不是可选项（P1）</strong>——<code>executeQuery</code> 接口本身没有 timeout 形参，MCP 侧必须自己包 <code>Future.timeout</code>。超时后走 <code>serverSessionId()</code> + <code>killSession()</code> 带外取消（<code>db_driver.dart:222-232</code>），但<span class="warn">取消需要服务端权限、SQLite/Access 压根返回 null</span> → 结果必须带 <code>cancelAttempted</code> 与原因，<strong>取消不掉就销毁该驱动实例</strong>（P2）</td></tr>
+<tr><td><code>poolIdleTtlSecs</code> / <code>poolMaxDrivers</code></td><td><code>600</code> / <code>8</code></td><td class="bad"><strong>P4 逼出来的字段</strong>：MCP 专用驱动实例的缓存 TTL 与并发上限。超出上限<strong>直接返回 <code>POOL_EXHAUSTED</code></strong>，不排队（排队会让 agent 等到超时还拿不到原因）。池键 = <code>连接名|数据库|模式</code>，与 <code>connection_manager.dart:99</code> 的树上长连接<strong>完全隔离</strong></td></tr>
+<tr><td><code>passwordPrompt</code></td><td><code>askInApp</code> / <code>deny</code></td><td><strong>P3</strong>：内嵌宿主默认 <code>askInApp</code> —— 命中 <code>connectionNeedsPassword()</code> 且密码为空的连接时，在 daro 里弹 <code>showConnectionPasswordDialog</code> 让人补录（复用现成独立子窗口），人取消才返回 <code>PASSWORD_REQUIRED</code>。stdio 宿主强制 <code>deny</code>，且<strong>任何宿主都不接受 agent 传密码</strong></td></tr>
+<tr><td><code>audit</code> <span class="tag">建议 Phase-1 就带</span></td><td><code>{enabled, path}</code></td><td>每次工具调用一行 JSONL（连接/库/语句摘要/模式判定/行数/耗时/取消结果）。成本极低，但事后能回答「谁删了我的表」；P1/P2 的超时与取消是否真的生效，也只能靠它取证</td></tr>
+<tr><td colspan="2" class="kv">派生不变量</td><td colspan="2">① 策略是<strong>上限</strong>而非授权：DB 账号本身的权限、驱动 <code>isLive</code> 与 <code>kSupportedDriverTypes</code>（<code>db_driver.dart:265</code>）永远压不过策略。② 任何模式都不得回显 <code>password</code>。③ 策略改动<strong>无需重启</strong> MCP 客户端 —— server 侧每次调用重读盘（DBX 核心语义）。</td></tr>
+</table>
+
+<h3>5.2 Phase-1 工具面（10 个，逐条给出 daro 现成 backing）</h3>
+<table>
+<tr><th>工具</th><th>参数</th><th>复用的现有 API</th><th>最低模式</th></tr>
+<tr><td><code>daro_list_connections</code></td><td>—</td><td><code>ConnectionStore.load</code> + scope 过滤 + <code>hasDriver()</code> + <code>connectionNeedsPassword()</code></td><td>readonly</td></tr>
+<tr><td><code>daro_list_databases</code></td><td>connection</td><td><code>listDatabases()</code></td><td>readonly</td></tr>
+<tr><td><code>daro_list_schemas</code></td><td>connection, database</td><td><code>listSchemas()</code>，按 <code>kSchemaLayerTypes</code> 决定是否返回</td><td>readonly</td></tr>
+<tr><td><code>daro_list_tables</code></td><td>connection, database, schema?, kind=table|view</td><td><code>listTables</code> + <code>listViews</code> + <code>listTableComments</code> + <code>listTableRowEstimates</code></td><td>readonly</td></tr>
+<tr><td><code>daro_describe_table</code></td><td>…, table</td><td><code>describeTable()</code>（列/类型/可空/PK/默认/注释）；<code>readTableDesign()</code> 补索引与外键</td><td>readonly</td></tr>
+<tr><td><code>daro_get_schema_context</code></td><td>connection, database, schema?, tables?</td><td>上述三件的<strong>紧凑拼装</strong>（一表一行、类型缩写、总字数预算）。DBX 专门有这条，因为它决定 agent 能不能一次喂对上下文</td><td>readonly</td></tr>
+<tr><td><code>daro_execute_query</code></td><td>connection, database, sql, max_rows?, offset?</td><td><code>executeQuery()</code> + <code>sql_row_cap</code> 封顶 + 只读分类 + 超时取消</td><td>按语句分类（<code>lib/mcp/mcp_sql_classify.dart</code>）</td></tr>
+<tr><td><code>daro_preview_table</code></td><td>…, table, limit?, where?, orderBy?</td><td><code>previewTable()</code> / <code>countTable()</code></td><td>readonly</td></tr>
+<tr><td><code>daro_list_routines</code> / <code>daro_get_routine_source</code></td><td>…, name, kind</td><td><code>listFunctions</code> / <code>listProcedures</code> / <code>getDefinition()</code></td><td>readonly</td></tr>
+<tr><td><code>daro_open_table</code> <span class="tag">UI 桥</span></td><td>connection, database, table</td><td>直接驱动 <code>AppState</code> 选中并打开表标签页</td><td>readonly</td></tr>
+</table>
+<p class="kv"><strong>返回体统一约定（P3 / P5）</strong>：<code>daro_list_connections</code> 每条连接带 <code>supported</code>（<code>hasDriver()</code> 结果）与 <code>passwordMissing</code>（<code>connectionNeedsPassword() &amp;&amp; password.isEmpty</code>）两个布尔位，让 agent <strong>在选连接时就知道哪条根本不能用</strong>，而不是调用后拿到异常；两者为 false 的连接仍在列表里出现（用户可能只是没装驱动），但 <code>daro_list_databases</code> 起会直接返回 §5.3 的结构化错误码。</p>
+
+<p class="kv"><strong>Phase-2 明确延后</strong>：<code>daro_execute_batch</code>（复用 <code>sql_split.dart</code>）、<code>daro_open_session</code> 与显式事务（<span class="warn">注意：底层池 <code>McpDriverPool</code> 已提到 Phase-1，见 P4；Phase-2 延后的是「把池暴露成工具 + 事务语义」</span>）、<code>daro_get_definition</code> 视图设计、连接增删改（受 E5 双写风险约束）、Navicat 导入导出、结构同步。Redis / MongoDB / Kafka 类工具 daro 无对应驱动，<strong>不做</strong>（P5 的另一面：<code>db_types.dart</code> 里那 4 类是纯占位）。</p>
+
+<h3>5.3 错误码契约（P1 / P2 / P3 / P4 / P5 的落点）</h3>
+<div class="box">
+<strong>为什么单列一节：</strong>本仓现在的失败路径是<strong>中文异常文本</strong>（<code>connection_manager.dart:134</code> 的 <code>UnsupportedError('暂不支持 …')</code>、<code>sqlserver_driver.dart:61</code> 的「连接超时(10 秒无响应)…」）。给人看很友好，给 agent 看是灾难——它读不出「该重试 / 该换连接 / 该问用户」，于是反复重试同一条死路。MCP 侧一律返回 <code>{code, message, retryable, hint}</code> 四元组，<code>message</code> 保留中文原文（对齐既有约定：中文提示保留原始堆栈）。
+</div>
+<table>
+<tr><th>code</th><th>触发条件</th><th><code>retryable</code></th><th>给 agent 的 hint（写进工具 description 与错误响应）</th></tr>
+<tr><td><code>CONNECTION_NOT_VISIBLE</code></td><td>连接不在 allowlist / <code>connectionScope</code> 内</td><td class="num">false</td><td>「该连接未授权给 MCP，请让用户在 设置 → MCP 中添加」——不要换名重试</td></tr>
+<tr><td><code>DRIVER_UNSUPPORTED</code></td><td><code>hasDriver()</code> 为 false（P5：<code>connection_defaults.dart</code> 里 31 个 case / 去重 19 个 typeId，仅 6 个有驱动）</td><td class="num">false</td><td>「daro 当前不支持该引擎的驱动，换 <code>daro_list_connections</code> 中 <code>supported:true</code> 的连接」</td></tr>
+<tr><td><code>PASSWORD_REQUIRED</code></td><td>P3：需要密码但未保存，且内嵌弹窗被用户取消 / stdio 宿主</td><td class="num">false</td><td>「请让用户在 daro 里打开该连接一次并勾选保存密码」——<strong>绝不提示 agent 代传密码</strong></td></tr>
+<tr><td><code>DATABASE_OUT_OF_SCOPE</code></td><td>库不在该连接的 <code>databaseScope</code>（抄 DBX 同名码）</td><td class="num">false</td><td>先调 <code>daro_list_databases</code> 拿允许名单</td></tr>
+<tr><td><code>MODE_DENIED</code></td><td>语句分类出的最低模式 &gt; 当前生效模式（§7 D6 白名单判定）</td><td class="num">false</td><td>「当前为只读档，该语句需要 数据读写 / 完全访问」</td></tr>
+<tr><td><code>WHERE_TOO_BROAD</code></td><td>写档下 <code>UPDATE/DELETE</code> 无 WHERE 或 <code>WHERE TRUE</code>/<code>1=1</code>（抄 DBX 的高风险口径）</td><td class="num">false</td><td>「补上可收窄的过滤条件，或让用户切到完全访问档」</td></tr>
+<tr><td><code>TOOL_NOT_ALLOWED</code></td><td>不在 <code>tools</code> 名单内（服务端每次强校验）</td><td class="num">false</td><td>客户端缓存了旧工具列表，刷新 <code>tools/list</code></td></tr>
+<tr><td><code>QUERY_TIMEOUT</code></td><td>P1：超过 <code>queryTimeoutSecs</code></td><td class="warn">视 <code>cancelAttempted</code></td><td>响应里必带 <code>cancelAttempted</code> / <code>cancelReason</code>；取消失败时 hint 写「服务端查询可能仍在执行，请勿立即重跑同一语句」</td></tr>
+<tr><td><code>CANCEL_FAILED</code></td><td>P2：<code>killSession</code> 因权限或引擎（SQLite/Access 无会话）无法取消</td><td class="num">false</td><td>「该驱动实例已销毁，重试会新建连接；本地文件库无法中途取消，请缩小查询范围」</td></tr>
+<tr><td><code>POOL_EXHAUSTED</code></td><td>P4：并发专用实例数达 <code>poolMaxDrivers</code></td><td class="num">true</td><td>带 <code>retryAfterMs</code>；<strong>服务端不排队</strong>，避免 agent 等到 <code>QUERY_TIMEOUT</code> 还拿不到真因</td></tr>
+<tr><td><code>ROW_CAP_NOT_APPLIED</code> <span class="tag">warning</span></td><td>P1：<code>sql_row_cap</code> 的 <code>_blockers</code> 命中，未下推 LIMIT</td><td>—</td><td>随正常结果一起返回，提示「行数少不代表是全量」</td></tr>
+<tr><td><code>CONNECTION_FAILED</code></td><td>握手/认证失败（沿用 <code>mysql_driver.dart:83-91</code> 已区分的 RST 与超时两类）</td><td class="num">true</td><td>保留原始堆栈（对齐 <code>release 0.5.1</code> 的既有约定），hint 里区分「网络不可达」与「凭据错误」</td></tr>
+</table>
+
+<h2>6. 接线点清单（按改动顺序）</h2>
+<table>
+<tr><th>#</th><th>位置</th><th>改动</th></tr>
+<tr><td>W1</td><td><code>lib/mcp/</code>（新目录）</td><td>纯 Dart。加一条 CI 断言：<code>grep -r "package:flutter" lib/mcp</code> 必须为空（守住 E1/E2 的成果，否则半年后又会长出 Flutter 依赖）</td></tr>
+<tr><td>W2</td><td><code>lib/data/mcp_policy_store.dart</code>（新）</td><td>照 <code>connection_store.dart:23-70</code> 同款：<code>getApplicationSupportDirectory()</code> + 损坏时返回默认策略<strong>不抛异常</strong>（保证应用绝不因策略文件坏掉而起不来）；写盘全量覆写 + <code>flush:true</code></td></tr>
+<tr><td>W3</td><td><code>lib/mcp/mcp_policy.dart</code></td><td>判定函数纯函数化，便于单测：<code>isVisible(connection)</code> / <code>databaseInScope()</code> / <code>modeFor()</code>（单库→连接→全局回退）/ <code>classify(sql)</code>（§7 D6 白名单）/ <code>clampRows()</code> / <code>timeoutFor(mode)</code>（P1）</td></tr>
+<tr><td>W4</td><td><code>lib/mcp/mcp_pool.dart</code>（新，<strong>Phase-1 必做</strong>）</td><td><code>McpDriverPool</code>：键 <code>连接名|库|模式</code> → 专用 <code>DatabaseDriver</code>；<code>poolIdleTtlSecs</code> 定时清扫、<code>poolMaxDrivers</code> 上限外直接 <code>POOL_EXHAUSTED</code>（P4）；<strong>超时/取消失败/连接级错误的实例一律 <code>close()</code> 后丢弃，不回池</strong>（P2）。建实例的入口参照 <code>schema_sync.dart</code> 的 <code>SyncDriverFactory</code>（E4），但<strong>不写进 <code>connection_manager.dart:99</code> 的 <code>_drivers</code></strong>——那是树上长连接，混进去就会把用户的运行上下文带偏</td></tr>
+<tr><td>W5</td><td><code>lib/mcp/mcp_http_host.dart</code></td><td><code>dart:io HttpServer</code>，仅 <code>/mcp</code> 一个端点；<code>enabled=false</code> 或端口占用时不启动并在设置页显示原因（DBX FAQ 的 <code>ERR_CONNECTION_REFUSED</code> / 端口占用两条要能在 UI 上自解释）；异常退出由 app 侧重拉</td></tr>
+<tr><td>W6</td><td><code>lib/widgets/top_menu.dart:261-293</code> + 新 <code>mcp_settings_dialog.dart</code></td><td>daro 现在<strong>没有设置页</strong>（E9）。Phase-1 建议先在「文件」或「更多」菜单加一项 <code>MCP 服务…</code> 开对话框（与 <code>theme_customize_dialog.dart</code> 同形态），<strong>不预先建整页设置框架</strong>；等设置项 ≥3 个再抽 <code>SettingsPage</code> + 左侧分类栏（对齐截图里 DBX 的 外观/编辑器/…/MCP 结构）</td></tr>
+<tr><td>W7</td><td>设置页内「客户端配置」区</td><td>分 Tab 输出可直接复制的配置：<strong>Claude Code</strong>(<code>.mcp.json</code>) / <strong>Cursor</strong>(<code>.cursor/mcp.json</code>) / <strong>VS Code</strong>(<code>.vscode/mcp.json</code>) / <strong>千问办公</strong> + 一段通用 JSON。每段带「复制」与「重新检查」（探测 <code>GET /mcp</code> 健康 + 最近一次握手时间）。<strong>不做</strong>自动写客户端配置文件（DBX 明确「只检测和提示，安装升级不归它管」，同理我方不去改别人的 config）</td></tr>
+<tr><td>W8</td><td><code>test/mcp_policy_test.dart</code> / <code>mcp_pool_test.dart</code>（新）</td><td>纯 Dart 单测，覆盖：只读分类（含 <code>WHERE TRUE</code> / <code>1=1</code> 判高风险）、模式回退、<code>DATABASE_OUT_OF_SCOPE</code>、行数夹取、Token 校验、scope 隐藏工具；再加池的<strong>复用次数断言</strong>（同键 N 次调用只握手一次，P4）与<strong>脏实例不回池</strong>（P2）。<span class="warn">另加一条工具清单快照测试</span> —— 本仓已有先例：<code>test/navicat_export_test.dart:9-49</code> 用属性顺序快照钉死契约，工具清单同样钉死，避免改名悄悄破坏 agent 侧提示词</td></tr>
+<tr><td>W9</td><td><code>lib/widgets/status_bar.dart</code></td><td>状态栏加一枚 MCP 指示：未启用 / 监听 <code>127.0.0.1:5225</code> / 当前并发调用数；点开即设置页。让用户随时知道「有 agent 正在动我的库」</td></tr>
+<tr><td>W10</td><td><code>AGENTS.md</code> + <code>README.md</code></td><td>补「MCP 服务」小节：形态、默认关闭、三档模式矩阵、以及<strong>组件归属规则</strong>（<code>lib/mcp</code> 属可复用纯 Dart 层，不得进 <code>base-ui-flutter</code>；设置页 UI 一律用 base-ui 的 <code>Button</code>/<code>Input</code>/<code>CheckBox</code>/<code>GroupBox</code>，禁 Material，遵守零动画与 <code>Listener.onPointerDown</code> 规范）</td></tr>
+<tr><td>W11</td><td><code>installer/windows/installer.iss:96-98</code></td><td>Phase-1 无需改（<code>recursesubdirs</code> 整目录打包，无新产物）。Phase-2 若出 <code>daro-mcp.exe</code> + <code>sqlite3.dll</code>，落进 <code>build/windows/.../runner/Release</code> 即自动进包，另需在 <code>portable_zip.ps1</code> 同步</td></tr>
+<tr><td>W12</td><td><code>lib/widgets/connection_form_page.dart</code> 改名路径</td><td><strong>P6</strong>：<code>AGENTS.md</code>「连接分组」一节已把这条不变量写死——「分组变更<strong>不改连接名</strong>，因此不触发标签迁移与驱动重连」，反过来说明<strong>改连接名本来就要牵动标签迁移 + 驱动重连</strong>。MCP 策略是这件事的<strong>第三个连带项</strong>：改名时检测旧名是否出现在 <code>McpPolicy.connectionScope</code> / <code>connections[]</code> / 活池键里 → 提示「该连接已授权给 MCP，改名会使授权失效」并同步迁移策略条目。<span class="ok">接线成本≈0（挂在既有改名路径上）</span>，但必须在 MCP 落地同批做，否则先授权的连接一改名就静默失效</td></tr>
+<tr><td>W13</td><td><code>base-ui-flutter/lib/src/misc/</code>（子仓）</td><td><strong>P7</strong>：设置页需要「可复制配置代码块」。按 AGENTS.md 强制规则不能在 daro 侧自造 → 要么进子仓（新组件 + barrel export + <code>CHANGELOG.md</code> + example 演示页，再回主仓 bump submodule 指针，<strong>两笔提交</strong>），要么按 §7 D12 用现成 <code>Input</code>(只读) + <code>Button</code> 规避。建议先规避</td></tr>
+<tr><td>W14</td><td>内嵌宿主的密码弹窗接线</td><td><strong>P3</strong>：<code>mcp_http_host.dart</code> 命中空密码连接时，经 <code>AppState</code> 调 <code>showConnectionPasswordDialog</code>（<code>connection_password_window.dart:10</code>，独立子窗口）→ 结果回 <code>setConnectionPassword</code>（<code>app_state.dart:463</code>）→ 再继续执行该次调用。<strong>必须有等待超时（建议 120s）</strong>：agent 侧在等人，人不在就是干挂；超时返回 <code>PASSWORD_REQUIRED</code></td></tr>
+</table>
+
+<h2>7. 决策（D1–D12 已拍板 · 全部按推荐采纳）</h2>
+<table>
+<tr><th>编号</th><th>决策</th><th>选项</th><th>定稿结论</th></tr>
+<tr><td><strong>D1</strong></td><td>宿主形态与先后</td><td>A 先 App 内嵌 Streamable HTTP，Phase-2 再补 stdio exe / B 直接照抄 DBX 先做 stdio exe / C 两个一起上</td><td><span class="ok">✅ 定稿 A</span>。<span class="bad">本轮新增的最强论据是 P3</span>：连接密码常态不落盘（<code>connection_store.dart:21-22</code>），内嵌宿主能弹 <code>showConnectionPasswordDialog</code> 让人补录后继续，stdio exe <strong>没有任何交互面</strong>，只能服务「勾了保存密码」的那部分连接。次级论据才是 E7 构建链（<code>flutter: sdk: flutter</code> 下 <code>dart compile exe</code> + sqlite3.dll 不随纯 Dart exe 走）与 E5 双写风险。core 保持纯 Dart，Phase-2 换壳只是一层 stdio 循环 + 先做 spike</td></tr>
+<tr><td><strong>D2</strong></td><td>MCP 协议层自己写还是引包</td><td>A 自写薄层（<code>initialize</code> / <code>tools/list</code> / <code>tools/call</code> / notifications，约 400 行，零依赖）/ B 引 <code>dart_mcp_server</code></td><td><span class="ok">✅ 定稿 A</span>。E10：官方包自述 experimental 且「likely to evolve quickly」，还<strong>只覆盖 stdio</strong> —— 而 stdio 恰是 D1 里被排到 Phase-2 的风险项，引它省不掉最难的部分，反而把协议版本节奏交给上游。HTTP 侧自己写 JSON-RPC 更可控</td></tr>
+<tr><td><strong>D3</strong></td><td>能力面是否照抄 DBX 的 18 工具</td><td>A Phase-1 只做 10 个只读 + UI 桥 / B 一次做全（含 batch / session / 事务 / 连接增删）</td><td><span class="ok">✅ 定稿 A</span>，<span class="bad">口径按 P4 修正</span>：延后的是<strong>「把会话暴露成工具」与显式事务语义</strong>（DBX 为它写了整页文档：30min 回收、32 并发、MySQL-only、<code>transaction_state: unknown</code> 后销毁连接），而<strong>底层驱动池 <code>McpDriverPool</code> 必须进 Phase-1</strong>（W4）—— 它不是给 agent 的功能，是不让 P4 的握手开销把工具面拖死的内部代价</td></tr>
+<tr><td><strong>D4</strong></td><td>agent 的 SQL 跑在哪条连接上</td><td>A <strong>另开专用驱动实例 + MCP 自己的池</strong>（同键复用、脏则销毁）/ B 每次调用新建连接用完即关 / C 复用连接树的活连接</td><td><span class="ok">✅ 定稿 A</span>。C 是本仓已付过学费的坑（E4：反复 <code>useDatabase</code> 会改上下文、PG 家族还会断重连，直接打乱用户正在用的查询页）；B 在 agent 一轮十次的调用节奏下不可接受（P4：每次都是 TCP+TLS+认证握手，超时都定在 10s）。C 的「可见性」由状态栏指示 + 审计日志承担（W9）</td></tr>
+<tr><td><strong>D5</strong></td><td>权限粒度做到哪一层</td><td>A 全局默认 + 连接 allowlist + 连接级 mode / B 再加数据库范围 / C 再加单库覆盖（DBX 完整三级回退）</td><td><span class="ok">✅ 定稿</span> <strong>A + <code>databaseScope</code> 字段先落盘但 UI 只给「全部/指定」二选一</strong>（B 的壳）。单库覆盖（C）Phase-2：它要求策略文件带「规则版本」才敢做放宽语义（DBX 的升级兼容段就是在处理这个），Phase-1 没这个包袱</td></tr>
+<tr><td><strong>D6</strong></td><td>只读/写入的判定口径</td><td>A <strong>白名单</strong>：只有 <code>SELECT / SHOW / EXPLAIN / DESCRIBE / WITH…SELECT</code> 算只读，其余一律要求更高档；写档再要求 <code>UPDATE/DELETE</code> 带<strong>非平凡 WHERE</strong>（<code>WHERE TRUE</code>、<code>1=1</code>、无 WHERE 判高风险）/ B 黑名单（列危险关键字）</td><td><span class="ok">✅ 定稿 A</span>。黑名单必然漏（<code>SELECT … INTO OUTFILE</code>、<code>FOR UPDATE</code>、<code>CALL</code>、方言特有语法），而 <code>sql_row_cap.dart:19-30</code> 的 <code>_blockers</code> 集合已经证明「出现即拒绝改写」的白名单式保守在本仓是可行风格。另：连接改名会脱钩策略（§5.1 / P6），改名对话框需提示「该连接已授权给 MCP」（W12）</td></tr>
+<tr><td><strong>D7</strong></td><td>凭据边界</td><td>A 工具输出一律不回显 <code>password</code>，连接增删改 Phase-1 直接不给 / B 允许 agent 传密码建连接</td><td><span class="ok">✅ 定稿 A</span>。E5（全量覆写双写）+ E6（明文）叠加下，让 agent 写连接是净风险；用户要接新库就在 UI 里加，反正策略也是人在 UI 上定的</td></tr>
+<tr><td><strong>D8</strong></td><td>客户端配置 Tab 给哪几个</td><td>A Claude Code / Cursor / VS Code / 千问办公 + 通用 JSON / B 抄 DBX 的 8 个 Tab</td><td><span class="ok">✅ 定稿 A</span>。每个 Tab 都是一份要跟着上游 config 格式改的活文档；4 个覆盖你实际在用的，其余靠通用 JSON 兜。等真有人反馈接不上再加</td></tr>
+<tr><td><strong>D9</strong></td><td>是否把 <code>daro_open_table</code> 这类 UI 桥放进 Phase-1</td><td>A 放（1 个工具）/ B 不放，纯数据面</td><td><span class="ok">✅ 定稿 A</span>。它是 D1 选内嵌 HTTP 后<strong>唯一零成本的差异化</strong>：DBX 要靠 Desktop bridge 才做到，我们直接改 <code>AppState</code> 就行；agent 跑完大结果集时「把表打开给人看」比把 1000 行塞进上下文更合理</td></tr>
+<tr><td><strong>D10</strong></td><td><span class="warn">P6 逼出来的</span>是否给 <code>ConnectionInfo</code> 引入稳定 <code>id</code></td><td>A 不引入，Phase-1 靠「改名时同步迁移策略条目 + 提示」兜（W12）/ B 现在就加 <code>id</code>，策略与池按 id 索引，name 只做展示 / C 加 id 但策略仍按 name（双写兼容）</td><td><span class="ok">✅ 定稿 A</span>。B 是正确做法但会牵动 <code>connections.json</code> 迁移、连接树、<code>_drivers</code> 键、Navicat 导入导出与分组（分组简报已定「名称即标识」），为一个新功能把这些一起改动不值当；风险点仅在「改名」这个低频操作上，用 W12 的同步 + 提示能盖住。<span class="ok">已确认：改名靠约定兜（W12 与 MCP 同批落地），不引入 <code>id</code></span>；若日后连接类实体再增多（如备份、隧道也要被授权引用），再统一提 <code>id</code> 迁移。</td></tr>
+<tr><td><strong>D11</strong></td><td><span class="bad">P1/P2 逼出来的</span>超时与取消的默认档</td><td>A 按模式分档 <code>readonly 30s / readWrite 60s / full 300s</code>，超时后尽力 <code>killSession</code>，取消失败即销毁实例并回 <code>QUERY_TIMEOUT + cancelAttempted:false</code> / B 统一 30s / C 不设默认（由连接配置决定）</td><td><span class="ok">✅ 定稿 A</span>。C 最省事但等于把 P1 留着；B 会让 <code>full</code> 档下的正常大查询全部误伤。<span class="warn">注意</span>：SQLite / Access 走的是 C 都做不了的路——<code>serverSessionId()</code> 返回 null，超时只能「等它跑完 + 丢弃实例」，这一点必须在工具 description 里写明，否则 agent 会以为取消成功而立刻重跑</td></tr>
+<tr><td><strong>D12</strong></td><td><span class="warn">P7 逼出来的</span>设置页的「可复制配置块」怎么落</td><td>A Phase-1 用现成 base-ui 件规避（只读 <code>Input</code> 展示 + <code>Button</code>「复制」，多行配置用 <code>Input</code> 的 multiline）/ B 先去子仓加 <code>CodeBlock</code> 组件（两笔提交）再画页 / C 在 daro 侧自造（违反 AGENTS.md）</td><td><span class="ok">✅ 定稿 A</span>。C 直接排除；<span class="warn">也别顺手用 <code>SelectableText</code></span>——它定义在 <code>flutter/src/material/selectable_text.dart</code>，属 Material 禁令范围。B 是正确终局但会把 MCP 第一版卡在 submodule 流程上。等确有第二个使用方（SQL 预览块、导出脚本预览）时再一次性把 <code>CodeBlock</code> 提进子仓</td></tr>
+</table>
+
+<h2>8. 边界与验收</h2>
+<table>
+<tr><th>项</th><th>Phase-1 验收标准</th></tr>
+<tr><td>接通即用</td><td>在 Claude Code 里粘设置页复制的配置 → 不重启 daro → <code>daro_list_connections</code> 返回 allowlist 内连接；改 allowlist 后<strong>不重启 MCP 客户端</strong>，下一次调用即生效（DBX 核心语义，必须实测）</td></tr>
+<tr><td>默认安全</td><td>全新安装 <code>enabled=false</code>，agent 连不上且得到明确拒绝原因；默认 <code>defaultMode=readonly</code>；未勾 allowlist 的连接在任何模式下都不可见</td></tr>
+<tr><td>权限不可放宽</td><td>单测钉死：任何工具输出不含 <code>password</code>；<code>full</code> 模式也不能访问 allowlist 外连接；不在 <code>tools</code> 名单内的工具即使客户端缓存了旧列表也在服务端被拒</td></tr>
+<tr><td>不污染 UI <span class="tag">E4 / P4</span></td><td>agent 连续跑 <code>USE other_db</code> / 建临时表后，用户的连接树与查询页运行上下文<strong>不变</strong>（D4 的回归点）；且 <code>connection_manager.dart:99</code> 的 <code>_drivers</code> 里<strong>不会</strong>出现 MCP 专用实例</td></tr>
+<tr><td>规模可控 <span class="tag">P1</span></td><td><code>max_rows</code> 越界夹取到 1000 不报错；LIMIT 真的下推到服务端（复用 <code>sql_row_cap</code>，不是取回后再丢）；<span class="warn">命中 <code>_blockers</code> 的语句必须带 <code>ROW_CAP_NOT_APPLIED</code></span>，不允许静默返回未封顶结果</td></tr>
+<tr><td>超时与取消 <span class="tag">P1 / P2</span></td><td>对一条 <code>SLEEP</code>/<code>pg_sleep</code> 语句：到点返回 <code>QUERY_TIMEOUT</code>；MySQL/PG/SQL Server 上 <code>cancelAttempted:true</code> 且服务端会话确实终止；<strong>SQLite/Access 上明确返回 <code>cancelAttempted:false</code> + 原因</strong>，且该驱动实例被销毁不回池。验收要看审计日志，不能只看返回值</td></tr>
+<tr><td>握手次数 <span class="tag">P4</span></td><td>同一 <code>连接|库|模式</code> 连续 10 次工具调用，服务端<strong>只发生 1 次握手</strong>（用连接侧会话计数或日志验证）；并发第 9 个请求返回 <code>POOL_EXHAUSTED</code> 而不是挂住</td></tr>
+<tr><td>密码缺失路径 <span class="tag">P3</span></td><td>对未保存密码的连接调用工具 → daro 弹出密码子窗 → 人输入后<strong>本次调用直接成功</strong>（不必重试）；人取消或 120s 无人响应 → <code>PASSWORD_REQUIRED</code>；任何情况下响应体不含密码字段</td></tr>
+<tr><td>不支持类型 <span class="tag">P5</span></td><td>对 <code>oracle</code> / <code>mongodb</code> / <code>redis</code> / <code>snowflake</code> 及 <code>aliyun-*</code> 连接：<code>daro_list_connections</code> 里 <code>supported:false</code> 可见，后续调用返回 <code>DRIVER_UNSUPPORTED</code>，<strong>不得出现 <code>UnsupportedError</code> 的中文堆栈外泄</strong></td></tr>
+<tr><td>改名守卫 <span class="tag">P6</span></td><td>改一个已授权连接的名字 → 弹提示且策略条目同步迁移；<code>daro_list_connections</code> 不出现幽灵连接，也不出现失效的孤儿授权</td></tr>
+<tr><td>主题与交互</td><td>设置对话框明暗双主题走 <code>Tokens.of(context)</code>；控件全部 base-ui（<code>Button</code>/<code>Input</code>/<code>CheckBox</code>/<code>GroupBox</code>），零 Material、零动画、点击走 <code>Listener.onPointerDown</code></td></tr>
+<tr><td>不做（写死边界）</td><td>Redis / MongoDB / Kafka 工具（无驱动）、连接增删改、有状态会话与显式事务、批量脚本、自动写第三方客户端配置文件、远程非回环访问</td></tr>
+</table>
+
+<p class="kv" style="margin-top:22px">取证来源：<code>t8y2/dbx</code> 的 <code>packages/mcp-server/README.md</code> 与 <code>docs/content/docs/mcp.cn.mdx</code>（本机 curl 原文核对，2026-09-20）；截图为 <strong>设置 → MCP</strong> 的「能力 × 模式」矩阵与客户端配置 Tab 区。daro 侧全部结论来自本仓 <code>grep</code> / <code>Read</code> 实测，标注的文件:行号可直接跳转。</p>
+
+</body>
+</html>
