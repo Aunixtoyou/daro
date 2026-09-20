@@ -20,6 +20,66 @@
 
 ---
 
+## MCP 服务(默认关闭)
+
+daro 内置一个本地 Model Context Protocol (MCP) HTTP 服务器,允许 AI Agent 通过标准协议调用数据库工具。安全策略为**默认关闭、按需开启**。
+
+### 核心组件
+
+| 文件 | 职责 |
+|---|---|
+| `lib/app/mcp_service.dart` | 主服务:策略管理/HTTP主机启动停止/驱动池协调/活动调用计数 |
+| `lib/mcp/mcp_policy.dart` | 授权策略:连接级授权列表 + 单连接规则模式/库范围/库级别模式 |
+| `lib/mcp/mcp_pool.dart` | 专用驱动实例池:`Lease` borrow/release 生命周期 |
+| `lib/mcp/mcp_errors.dart` | 错误码契约 |
+| `lib/mcp/mcp_tools.dart` | 工具注册表 + 执行分发(按 mode 路由到 agent/sandbox/read_only) |
+| `lib/mcp/mcp_protocol.dart` | JSON-RPC 2.0 信封构造 + 超时取消 |
+| `lib/mcp/mcp_http_host.dart` | Streamable HTTP 端点,Bearer auth,POST 收请求 GET 探健康 |
+| `lib/data/mcp_policy_store.dart` | `mcp_settings.json` 持久化,三种加载状态(ok/missing/corrupted) |
+| `lib/widgets/mcp_settings_dialog.dart` | 设置对话框:开关/模式矩阵/token管理/端口配置/客户端配置 |
+| `lib/widgets/status_bar.dart` → `_McpIndicator` | 状态栏指示器:禁用/未监听/运行中(#N)四种态,点击打开设置 |
+
+### 三种模式矩阵
+
+每条连接可设 `agent` / `sandbox` / `read_only`:
+
+| 模式 | 权限 | 典型用途 |
+|---|---|---|
+| `read_only` | 只读查询 | 数据审计、报表生成 |
+| `sandbox` | DDL 执行,无跨库操作 | schema 变更实验 |
+| `agent` | 完全访问(含写操作) | AI 辅助运维 |
+
+连接未出现在授权列表 = **拒绝所有工具调用**(返回 `CONNECTION_NOT_AUTHORIZED`)。
+
+### API 形状
+
+```dart
+class McpService {
+  bool authorizes(String connectionName);
+  Future<void> renameConnection(String oldName, String newName); // 改名迁移策略+池驱动
+  Future<bool> requestPassword(ConnectionInfo conn, {Duration timeout}); // W14 密码补录
+  bool get isRunning;
+  int get activeCalls;
+  McpPolicy get policy;
+  McpPolicyLoadStatus get policyStatus;
+}
+```
+
+### UI 交互规则
+
+- **默认关闭**:安装后 MCP 未启用,不绑定端口,不占用系统资源
+- **状态栏指示器**:点击弹出设置对话框;运行中带活动调用数显示
+- **连接改名守卫(P6/D10)**:名称即标识,改名自动迁移 MCP 授权条目与池驱动实例(`McpService.renameConnection`)
+- **密码补录(W14)**:连接缺少密码且需要认证时,通过 `askPassword` 回调或桌面多窗口插件弹出密码输入框,120 秒超时
+
+### 安全原则
+
+- 宿主在 loopback 接口监听(非回环需 token)
+- 每次工具调用重读策略文件(不缓存),修改即时生效无需重启
+- 禁止并发 bind/start,内部用 Completer 串行链保护
+
+---
+
 ## 目录结构
 
 ```
@@ -27,9 +87,20 @@ daro/
 ├── lib/
 │   ├── main.dart                 # 应用入口；TokenScope 包裹；主题切换
 │   ├── app/
-│   │   └── app_state.dart        # AppState: 主题模式、标签管理、表选择
+│   │   ├── app_state.dart        # AppState: 主题模式、标签管理、表选择
+│   │   ├── mcp_service.dart      # MCP 主服务:策略/HTTP主机/驱动池/活动计数
+│   │   └── connection_manager.dart # 连接生命周期管理(打开/断开/扩展)
 │   ├── data/
-│   │   └── db_data.dart     # 静态模拟数据（连接 / 数据库 / 表列表）
+│   │   ├── db_data.dart          # 静态模拟数据（连接 / 数据库 / 表列表）
+│   │   └── mcp_policy_store.dart # MCP 策略文件持久化(mcp_settings.json)
+│   ├── mcp/                      # MCP 子模块
+│   │   ├── mcp_policy.dart       # 授权策略模型(连接规则/库范围/模式矩阵)
+│   │   ├── mcp_pool.dart         # 专用驱动实例池(Lease borrow/release)
+│   │   ├── mcp_errors.dart       # JSON-RPC 错误码契约
+│   │   ├── mcp_tools.dart        # 工具注册表 + 执行分发(mode 路由)
+│   │   ├── mcp_protocol.dart     # JSON-RPC 2.0 信封构造
+│   │   ├── mcp_http_host.dart    # Streamable HTTP 端点 + Bearer auth
+│   │   └── mcp_client_configs.dart # 客户端配置生成(免鉴权/带Token两种格式)
 │   ├── pages/
 │   │   └── main_page.dart     # 主页面布局：顶栏 + Ribbon + 三栏 + 状态栏
 │   ├── theme/
@@ -42,7 +113,8 @@ daro/
 │       ├── object_tabs.dart      # 对象路径标签
 │       ├── view_tabs.dart        # 视图标签栏
 │       ├── database_info.dart    # 右侧详情面板
-│       ├── status_bar.dart       # 底部状态栏
+│       ├── status_bar.dart       # 底部状态栏 + _McpIndicator(MCP 指示器)
+│       ├── mcp_settings_dialog.dart # MCP 设置对话框(开关/模式/token/端口/客户端配置)
 │       ├── table_icon.dart       # 表图标（应用级，不归入 base-ui-flutter）
 │       ├── table_data_page.dart  # 表数据浏览页
 │       └── query_page.dart       # SQL 查询编辑页
@@ -229,6 +301,24 @@ context.read<AppState>().cycleThemeMode();
 // 或直接设置
 context.read<AppState>().setThemeMode(ThemeMode.dark);
 ```
+
+---
+
+## 连接分组（单层）
+
+左侧连接树顶层可按分组折叠管理连接。约定与不变量：
+
+| 位置 | 事实 |
+|---|---|
+| 模型 | `ConnectionInfo.group`（空串 = 未分组）+ `ConnGroup(name)` 独立条目，允许**空分组存在**（否则无法预建 / 重命名空分组） |
+| 持久化 | `connections.json` 的 `groups` 键 + 每条连接的 `group`；老文件缺 `groups` 时按连接上的 `group` 现场补齐 |
+| 状态 | `AppState` 的 `groups` / `groupNames` / `addGroup` / `renameGroup` / `deleteGroup` / `moveConnectionToGroup` / `ensureGroups`；分组变更**不改连接名**，因此不触发标签迁移与驱动重连 |
+| 树 | 分组节点 `NodeKind.connGroup`（depth 0）→ 组内连接 depth 1；分组**默认展开**，折叠态记在 `_collapsedGroups`（不落盘）；一条分组都没有时保持平铺，不插入包装层；搜索 / 类型筛选只按连接名命中，空分组头随子项显隐 |
+| 命名 | 树内**无弹窗**:新建分组直接落地占位名节点并就地编辑（`InlineEditor`，Esc 撤销新建并回移连接）；选中分组/连接/表节点按 **F2** 进入同一内联改名；仅连接向导下拉的「新建分组…」仍复用 base-ui `InputDialog`（`connection_group_prompt.dart`） |
+| Navicat 导出 | `.ncx` 里 Navicat **原生没有分组字段**（实测本机 378 条连接的导出文件无任何 group/folder 属性，`SettingsSavePath` 恒为 `<根>\<类型>\Servers\<连接名>`），故 daro 用**私有属性** `Group="分组名"` 追加在实测属性表末尾；未分组不写该属性（文件与不带分组时逐字节一致） |
+| Navicat 导入 | `NavicatConnection.group` 读私有属性 → `addConnections` 顺带登记缺失分组（即「分组不存在则重建」，幂等）；导入列表用分组列标出「·新建」 |
+
+> 已知边界：`Group` 是 daro 私有属性，Navicat 打开该文件时忽略它（静态推断，未实机验证），分组只在 daro ↔ daro 之间往返。
 
 ---
 

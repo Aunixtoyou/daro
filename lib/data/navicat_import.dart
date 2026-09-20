@@ -98,6 +98,11 @@ class NavicatConnection {
   /// Navicat 原始类型(MYSQL / POSTGRESQL / SQLSERVER / SQLITE ...)
   String get connType => attr('ConnType');
 
+  /// daro 私有的分组属性(Navicat 自身不写也不读,见 navicat_export.dart 顶部说明)。
+  ///
+  /// 老文件与 Navicat 原生导出的文件都没有这个属性,返回空串 = 未分组。
+  String get group => attr('Group').trim();
+
   /// 归一到 daro 的类型 id
   String get typeId =>
       kNavicatConnTypes[connType.toUpperCase()] ?? connType.toLowerCase();
@@ -154,6 +159,8 @@ class NavicatConnection {
       password: passwordState == NavicatPasswordState.decrypted ? password : '',
       database: database,
       authMethod: authMethod,
+      // 分组随连接一起落地;分组条目由 AppState.addConnections 在缺失时自动登记
+      group: group,
       isLive: true,
     );
   }

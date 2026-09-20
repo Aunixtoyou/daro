@@ -46,6 +46,8 @@ class DatabaseInfo extends StatelessWidget {
               );
             case NodeKind.tableGroup:
               break;
+            case NodeKind.connGroup:
+              return _ConnGroupInfoView(group: node.name);
           }
         }
         // 未选中节点:跟随对象页上下文展示库信息
@@ -206,6 +208,58 @@ class _ConnectionInfoView extends StatelessWidget {
             _field(t, '主机', '${conn.host}:${conn.port}'),
             _field(t, '用户', conn.username),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 连接分组信息视图(选中左侧树的分组节点时展示)。
+///
+/// 只列能真实派生的事实:组内连接数与类型分布。分组是纯本地视图层概念,
+/// 没有服务端对应物,故不编造任何"描述/大小"类字段。
+class _ConnGroupInfoView extends StatelessWidget {
+  const _ConnGroupInfoView({required this.group});
+
+  final String group;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    final app = context.read<AppState>();
+    final members = app.connections.where((c) => c.group == group).toList();
+    // 类型分布按 DbType 定义顺序聚合,避免同一分组两次渲染顺序抖动
+    final counts = <String, int>{};
+    for (final c in members) {
+      counts[c.typeId] = (counts[c.typeId] ?? 0) + 1;
+    }
+    final ordered = [
+      for (final type in kAllDbTypes)
+        if (counts[type.id] != null) (type.label.split('\n').first, counts[type.id]!),
+    ];
+
+    return Container(
+      color: t.background,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          UiIcon(kConnGroupIcon, size: 46),
+          const SizedBox(height: 8),
+          Text(
+            group,
+            style: TextStyle(
+                fontSize: 20, fontWeight: FontWeight.w600, color: t.foreground),
+          ),
+          const SizedBox(height: 4),
+          Text('连接分组',
+              style: TextStyle(fontSize: 12, color: t.mutedForeground)),
+          const SizedBox(height: 18),
+          _field(t, '连接数', '${members.length}'),
+          for (final (label, count) in ordered) _field(t, label, '$count'),
+          if (members.isEmpty)
+            Text('分组为空:把连接右键 →「移动到分组」放进来,或删除该分组。',
+                style: TextStyle(fontSize: 12, color: t.mutedForeground)),
         ],
       ),
     );

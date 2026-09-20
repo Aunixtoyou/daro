@@ -13,6 +13,7 @@ class NavicatImportOutcome {
   const NavicatImportOutcome({
     required this.imported,
     required this.needsManualPassword,
+    this.newGroups = const [],
   });
 
   /// 已写入连接树的连接配置
@@ -20,6 +21,9 @@ class NavicatImportOutcome {
 
   /// 其中密码没能带过来(Navicat 端未保存 / 旧版加密未能解密)的条数
   final int needsManualPassword;
+
+  /// 文件里出现、但本地原本没有,因而本次新建的连接分组名
+  final List<String> newGroups;
 }
 
 /// 打开「从 Navicat 导入连接」向导。
@@ -197,11 +201,19 @@ class _NavicatImportDialogState extends State<NavicatImportDialog> {
     if (_selected.isEmpty) return;
     final indices = _selected.toList()..sort();
     final conns = [for (final i in indices) _entries[i].toConnection()];
+    // 分组不单独走一次落盘:先记下已有分组名,addConnections 会把连接指向的
+    // 未知分组一并登记(分组不存在则重建),差集即本次新建的分组。
+    final before = widget.app.groupNames.toSet();
     widget.app.addConnections(conns);
+    final newGroups = [
+      for (final g in widget.app.groupNames)
+        if (!before.contains(g)) g,
+    ];
     Navigator.of(context).pop(NavicatImportOutcome(
       imported: conns,
       needsManualPassword:
           indices.where((i) => _entries[i].needsManualPassword).length,
+      newGroups: newGroups,
     ));
   }
 
@@ -315,10 +327,13 @@ class _NavicatImportDialogState extends State<NavicatImportDialog> {
         _entries.where(test).length;
     final unsupported = count((e) => !e.isSupported);
     final manual = count((e) => e.needsManualPassword);
+    // 文件里出现的分组去重计数(未分组不计),与「是否已存在」无关,纯说清量级
+    final groups = {for (final e in _entries) e.group}..remove('');
     final parts = <String>[
       if (unsupported > 0) '引擎不支持 $unsupported',
       if (_duplicates.isNotEmpty) '重名 ${_duplicates.length}',
       if (manual > 0) '需手填密码 $manual',
+      if (groups.isNotEmpty) '分组 ${groups.length}',
     ];
     return parts.isEmpty ? '全部可导入,密码均已解密' : parts.join(' · ');
   }
@@ -335,6 +350,7 @@ class _NavicatImportDialogState extends State<NavicatImportDialog> {
         children: [
           const SizedBox(width: 46),
           cell('连接名称', 4),
+          cell('分组', 3),
           cell('目标', 5),
           cell('用户', 3),
           cell('状态', 4),
@@ -390,6 +406,10 @@ class _NavicatImportDialogState extends State<NavicatImportDialog> {
               ),
             ),
             Expanded(
+              flex: 3,
+              child: _groupCell(t, e),
+            ),
+            Expanded(
               flex: 5,
               child: Text(e.targetLabel,
                   maxLines: 1,
@@ -407,6 +427,24 @@ class _NavicatImportDialogState extends State<NavicatImportDialog> {
           ],
         ),
       ),
+    );
+  }
+
+  /// 分组列:本地已有同名分组只显示名字;文件里有、本地没有的标「新建」,
+  /// 导入时会连分组一起重建(Navicat 原生导出的文件不带 Group,整列即 '-')。
+  Widget _groupCell(AppPalette t, NavicatConnection e) {
+    final group = e.group;
+    if (group.isEmpty) {
+      return Text('-',
+          maxLines: 1,
+          style: _style(t, color: t.disabledForeground, size: 12));
+    }
+    final isNew = !widget.app.groupNames.contains(group);
+    return Text(
+      isNew ? '$group ·新建' : group,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: _style(t, color: isNew ? _warn : t.mutedForeground, size: 12),
     );
   }
 
@@ -458,7 +496,9 @@ class _NavicatImportDialogState extends State<NavicatImportDialog> {
         child: Text(
           '在 Navicat 里用「文件 → 导出连接设置…」并勾选「导出密码」导出 .ncx,'
           '然后在这里选择该文件。\n'
-          '文件里保存的密码会按 Navicat 内置算法解密后一并带过来。',
+          '文件里保存的密码会按 Navicat 内置算法解密后一并带过来。\n'
+          'daro 导出的文件带 Group 属性,导入时本地没有的分组会自动新建;'
+          'Navicat 自身导出的文件没有分组信息,连接会落在「未分组」。',
           textAlign: TextAlign.center,
           style: _style(t, color: t.mutedForeground, size: 12.5),
         ),

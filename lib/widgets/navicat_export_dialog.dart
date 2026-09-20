@@ -270,6 +270,13 @@ class _NavicatExportDialogState extends State<NavicatExportDialog> {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
+            Text(
+              '分组会写入 Group 属性:Navicat 原生没有连接分组的概念,会忽略该属性,'
+              '由 daro 导入时还原(本地没有的分组自动新建)。',
+              style: _style(t, color: t.disabledForeground, size: 11.5),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
           ],
         ),
       ),
@@ -286,15 +293,45 @@ class _NavicatExportDialogState extends State<NavicatExportDialog> {
   }
 
   Widget _list(AppPalette t, AppColors colors) {
-    return Container(
-      decoration: BoxDecoration(
-        color: t.surface,
-        border: Border.all(color: t.border),
-      ),
-      child: ListView.builder(
-        itemExtent: _rowHeight,
-        itemCount: _connections.length,
-        itemBuilder: (_, i) => _row(t, colors, i),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _listHeader(t),
+        const SizedBox(height: 2),
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: t.surface,
+              border: Border.all(color: t.border),
+            ),
+            child: ListView.builder(
+              itemExtent: _rowHeight,
+              itemCount: _connections.length,
+              itemBuilder: (_, i) => _row(t, colors, i),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 列头:分组单列摆出来,才看得清「这条会带着分组一起走」
+  Widget _listHeader(AppPalette t) {
+    Widget cell(String text, int flex) => Expanded(
+          flex: flex,
+          child: Text(text,
+              style: _style(t, color: t.mutedForeground, size: 11.5)),
+        );
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Row(
+        children: [
+          const SizedBox(width: 46),
+          cell('连接名称', 5),
+          cell('分组', 3),
+          cell('目标', 5),
+          cell('状态', 3),
+        ],
       ),
     );
   }
@@ -331,7 +368,16 @@ class _NavicatExportDialogState extends State<NavicatExportDialog> {
               ),
             ),
             Expanded(
-              flex: 6,
+              flex: 3,
+              child: Text(
+                conn.group.isEmpty ? '-' : conn.group,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: _style(t, color: t.mutedForeground, size: 12),
+              ),
+            ),
+            Expanded(
+              flex: 5,
               child: Text(_target(conn),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

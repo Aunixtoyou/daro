@@ -230,6 +230,42 @@ void main() {
     });
   });
 
+  // Navicat 原生 .ncx 没有分组字段(实测本机 378 条连接的导出文件里无任何
+  // group/folder 属性),daro 用私有属性 Group 承载:只保证 daro↔daro 往返,
+  // 未分组时必须与不带分组时逐字节一致。
+  group('分组(私有属性 Group)', () {
+    test('未分组的连接不写 Group 属性', () {
+      expect(_attrNames(_xml([_mysql, _sqlite]), 0), isNot(contains('Group')));
+      expect(_attrNames(_xml([_mysql, _sqlite]), 1), isNot(contains('Group')));
+    });
+
+    test('带分组时 Group 追加在实测模板末尾,既有属性顺序不动', () {
+      final xml = _xml([_mysql.copyWith(group: '生产')]);
+      expect(_attrNames(xml, 0), [..._mysqlOrder, 'Group']);
+      expect(_attr(xml, 0, 'Group'), '生产');
+    });
+
+    test('分组名两侧空白导出时裁掉', () {
+      final xml = _xml([_mysql.copyWith(group: '  生产  ')]);
+      expect(_attr(xml, 0, 'Group'), '生产');
+    });
+
+    test('分组名里的 XML 特殊字符同样转义并读回', () {
+      final xml = _xml([_mysql.copyWith(group: 'a&b<c>"d"')]);
+      expect(xml, contains('Group="a&amp;b&lt;c&gt;&quot;d&quot;"'));
+      expect(NavicatNcx.parse(xml).connections.single.group, 'a&b<c>"d"');
+    });
+
+    test('导出→导入往返保留分组;不带 Group 的文件读成未分组', () {
+      final back = NavicatNcx.parse(
+          _xml([_mysql.copyWith(group: '客户现场'), _pg]));
+      expect(back.connections[0].group, '客户现场');
+      expect(back.connections[0].toConnection().group, '客户现场');
+      expect(back.connections[1].group, '');
+      expect(back.connections[1].toConnection().group, '');
+    });
+  });
+
   group('文件形制', () {
     test('声明 / 根节点 / 制表符缩进 / CRLF / 结尾空行与 Navicat 一致', () {
       final xml = _xml([_mysql]);

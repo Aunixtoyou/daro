@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:base_ui_flutter/base_ui_flutter.dart';
 import '../app/app_state.dart';
@@ -44,7 +45,33 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   /// 再次打开需重新拉取)。用于控制箭头显隐与灰色态。
   final Set<String> _opened = {};
 
+  /// 被折叠的**连接分组**名集合。语义与 [_expanded] 相反:分组默认展开
+  /// (新建分组不该看起来"空的"),所以只记被收起的那些;也与 _expanded 分开,
+  /// 避免分组名与连接名同名时互相干扰。
+  final Set<String> _collapsedGroups = {};
+
   final ValueNotifier<String?> _selectedNode = ValueNotifier<String?>(null);
+
+  /// 树列表键盘焦点:点行即取得,F2 就地重命名由此触发。
+  final FocusNode _treeFocus = FocusNode();
+
+  /// 正在内联改名的节点 key(null = 无编辑)。支持三类:
+  /// 分组 `g:名` / 连接 `名` / 表 `连接|库[|模式]|table|名`(与行 key 一致)。
+  String? _editingKey;
+
+  /// 手动双击判定用:上一次左键按下的行 key 与时刻(毫秒)。
+  /// 行体双击展开不走 GestureDetector.onDoubleTap——那会让同目标上的
+  /// 单击(箭头切换)被双击判定窗口 hold 约 300ms。
+  String? _lastTapKey;
+  int _lastTapMs = 0;
+  static const int _doubleTapWindowMs = 500;
+
+  /// 编辑被 Esc 取消时的撤销动作(仅"新建分组"用:删掉临时分组并回移连接)。
+  VoidCallback? _onEditCancel;
+
+  /// 每次 build 重建:表节点 key → 改名所需的连接/库/模式上下文。
+  final Map<String, ({ConnectionInfo conn, String database, String? schema})>
+      _tableNodes = {};
 
   final _searchController = TextEditingController();
 
@@ -98,8 +125,12 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         _expanded.contains(key) ? _expanded.remove(key) : _expanded.add(key);
       });
 
-  /// 折叠全部节点(底栏「折叠全部」按钮,无展开节点时按钮禁用)
-  void _collapseAll() => setState(() => _expanded.clear());
+  /// 折叠全部节点(底栏「折叠全部」按钮,无展开节点时按钮禁用)。
+  /// 连接分组默认展开,折叠全部 = 把当前所有分组名收进折叠集。
+  void _collapseAll(AppState app) => setState(() {
+        _expanded.clear();
+        _collapsedGroups.addAll([for (final g in app.groups) g.name]);
+      });
 
   /// 统一展开 / 收起:连接 / 库 / 模式节点,单击箭头或双击整行都走此逻辑,
   /// 切换其子树展开状态,并在「首次展开」时懒加载下一级数据。
@@ -139,6 +170,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         }
       case NodeKind.tableGroup:
       case NodeKind.table:
+      case NodeKind.connGroup:
         // 分组 / 叶子不可展开(分组对象行随父级展开始终可见),仅保留 case 满足穷尽
         break;
     }
@@ -150,6 +182,190 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   void _toggleGroup(AppState app, String groupKey, String label, bool wasExpanded) {
     _toggle(groupKey);
     app.logTreeAction(wasExpanded ? '已关闭「$label」' : '已打开「$label」');
+  }
+
+  // ── 内联改名:F2 / 菜单进入编辑,无弹窗 ─────────────────────────
+
+  /// 树键盘交互:F2 对当前选中的分组 / 连接 / 表节点进入就地重命名。
+  /// 编辑器持有焦点时不参与(Enter / Esc 归编辑器)。
+  KeyEventResult _onTreeKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent || _editingKey != null) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey != LogicalKeyboardKey.f2) {
+      return KeyEventResult.ignored;
+    }
+    final key = _selectedNode.value;
+    if (key == null) return KeyEventResult.ignored;
+    final app = context.read<AppState>();
+    if (!_canRenameKey(key, app)) return KeyEventResult.ignored;
+    setState(() {
+      _editingKey = key;
+      _onEditCancel = null;
+    });
+    return KeyEventResult.handled;
+  }
+
+  /// key 是否可就地改名:分组(存在)/ 连接(存在)/ 表(节点可见且已连接)。
+  bool _canRenameKey(String key, AppState app) {
+    if (key.startsWith('g:')) {
+      final group = key.substring(2);
+      return app.groupNames.any((g) => g == group);
+    }
+    if (app.connections.any((c) => c.name == key)) return true;
+    final table = _tableNodes[key];
+    if (table != null) {
+      return app.connectionManager.isConnected(table.conn.name);
+    }
+    return false;
+  }
+
+  /// 结束编辑并把键盘焦点收回树列表(编辑器随重建卸载)。
+  void _endEditing() {
+    if (_editingKey == null) return;
+    setState(() {
+      _editingKey = null;
+      _onEditCancel = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _treeFocus.requestFocus();
+    });
+  }
+
+  /// Esc 取消:先执行登记的撤销动作(新建分组 = 删除临时分组并回移连接)
+  void _cancelEditing() {
+    final cancel = _onEditCancel;
+    _endEditing();
+    cancel?.call();
+  }
+
+  /// 新建分组用的默认名:「未命名分组」,重名递增序号
+  String _uniqueGroupName(AppState app) {
+    final taken = {for (final g in app.groupNames) g.toLowerCase()};
+    for (var i = 0;; i++) {
+      final name = i == 0 ? '未命名分组' : '未命名分组 ${i + 1}';
+      if (!taken.contains(name.toLowerCase())) return name;
+    }
+  }
+
+  /// 就地新建分组:[moveConn] 非空时把该连接移入。
+  /// 新分组节点直接展开编辑(全选占位名),Esc 撤销整个操作
+  void _createGroupInline(AppState app, {ConnectionInfo? moveConn}) {
+    final name = _uniqueGroupName(app);
+    app.addGroup(name);
+    final originGroup = moveConn?.group ?? '';
+    if (moveConn != null) app.moveConnectionToGroup(moveConn, name);
+    _selectedNode.value = 'g:$name';
+    app.detailSelection.value = SelectedNode(NodeKind.connGroup, name);
+    setState(() {
+      _editingKey = 'g:$name';
+      _onEditCancel = moveConn == null
+          ? () => app.deleteGroup(name)
+          : () {
+              app.moveConnectionToGroup(moveConn, originGroup);
+              app.deleteGroup(name);
+            };
+    });
+    _treeFocus.requestFocus();
+  }
+
+  /// 分组改名提交:重名(不区分大小写)弹错并保持原名
+  void _commitGroupRename(String old, String input) {
+    _endEditing();
+    final name = input.trim();
+    if (name.isEmpty || name == old) return;
+    final app = context.read<AppState>();
+    if (!app.renameGroup(old, name)) {
+      if (!mounted) return;
+      MessageBox.show(
+        context,
+        title: '重命名分组',
+        message: '已存在同名分组「$name」(不区分大小写)。',
+        type: MessageBoxType.error,
+        okText: '知道了',
+        tokens: Tokens.read(context).toDesktopTokens(),
+      );
+      return;
+    }
+    // 折叠状态跟着改名走,否则重命名后原本收起的分组会突然展开
+    if (_collapsedGroups.remove(old)) _collapsedGroups.add(name);
+    if (_selectedNode.value == 'g:$old') _selectedNode.value = 'g:$name';
+  }
+
+  /// 连接改名提交:走 [AppState.updateConnection](自动避重 + 迁移标签与驱动),
+  /// 与「编辑连接」改名的后续处理一致
+  Future<void> _commitConnectionRename(String old, String input) async {
+    _endEditing();
+    final name = input.trim();
+    if (name.isEmpty || name == old) return;
+    final app = context.read<AppState>();
+    ConnectionInfo? conn;
+    for (final c in app.connections) {
+      if (c.name == old) {
+        conn = c;
+        break;
+      }
+    }
+    if (conn == null) return;
+    final updated = await app.updateConnection(conn, conn.copyWith(name: name));
+    if (updated == null || !mounted) return;
+    if (updated.name != old) {
+      _migrateConnectionKeys(old, updated.name);
+      final detail = app.detailSelection.value;
+      if (detail != null && detail.connection == old) {
+        app.detailSelection.value = SelectedNode(
+          detail.kind,
+          detail.name,
+          connection: updated.name,
+          database: detail.database,
+          schema: detail.schema,
+        );
+      }
+      if (_expanded.contains(updated.name) && hasDriver(updated)) {
+        app.connectionManager.expandConnection(updated);
+      }
+      // 连接改名守卫:旧名若已被 MCP 授权,自动迁移策略与池驱动实例
+      try {
+        await app.mcp.renameConnection(old, updated.name);
+      } catch (_) {
+        // 不影响主流程:改名已生效,仅记录日志不弹窗
+      }
+      app.logTreeAction('已重命名连接「$old」为「${updated.name}」');
+    }
+  }
+
+  /// 表改名提交:ALTER TABLE ... RENAME(renameTable 内部已刷新对象列表);
+  /// 失败弹窗,成功后新名保持选中
+  Future<void> _commitTableRename(
+    ConnectionInfo conn,
+    String database,
+    String? schema,
+    String old,
+    String input,
+  ) async {
+    _endEditing();
+    final name = input.trim();
+    if (name.isEmpty || name == old) return;
+    final app = context.read<AppState>();
+    final outcome =
+        await app.renameTable(conn, database, old, name, schema: schema);
+    if (outcome.ok) {
+      final newKey = schema == null
+          ? '${conn.name}|$database|${ObjectCategory.table.name}|$name'
+          : '${conn.name}|$database|$schema|${ObjectCategory.table.name}|$name';
+      if (_selectedNode.value != null) _selectedNode.value = newKey;
+      app.logTreeAction('已重命名表「$old」为「$name」');
+      return;
+    }
+    if (!mounted) return;
+    MessageBox.show(
+      context,
+      title: '重命名表',
+      message: '重命名失败:\n${outcome.error}',
+      type: MessageBoxType.error,
+      okText: '知道了',
+      tokens: Tokens.read(context).toDesktopTokens(),
+    );
   }
 
   // ── 连接节点右键菜单:打开 / 关闭 / 新建库 / 编辑 / 复制 / 删除 ──
@@ -187,10 +403,107 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         MenuSeparator(),
         MenuItem(text: '编辑连接', onPressed: () => _editConnectionNode(app, conn)),
         MenuItem(text: '复制连接', onPressed: () => app.copyConnection(conn)),
+        MenuItem(
+          // 移动到分组:纯视图变化,不断驱动、不动已打开的标签(两者都按连接名索引)
+          text: '移动到分组',
+          children: [
+            MenuItem(
+              text: '未分组',
+              enabled: conn.group.isNotEmpty,
+              onPressed: () => app.moveConnectionToGroup(conn, ''),
+            ),
+            for (final g in app.groups)
+              MenuItem(
+                text: g.name,
+                enabled: g.name != conn.group,
+                onPressed: () => app.moveConnectionToGroup(conn, g.name),
+              ),
+            const MenuSeparator(),
+            MenuItem(
+              text: '新建分组',
+              onPressed: () => _createGroupInline(app, moveConn: conn),
+            ),
+          ],
+        ),
         MenuSeparator(),
         MenuItem(text: '删除连接', onPressed: () => _deleteConnectionNode(app, conn)),
       ],
     );
+  }
+
+  // ── 连接分组节点右键菜单:新建连接 / 重命名 / 删除 ──
+
+  /// 右键分组节点。分组只是本地视图层容器,菜单里不放任何「打开/连接」类动作。
+  void _showConnGroupMenu(
+    BuildContext context,
+    AppState app,
+    String group,
+    Offset position,
+  ) {
+    final members = app.connections.where((c) => c.group == group).length;
+    showContextMenu(
+      context,
+      position: position,
+      items: [
+        MenuItem(
+          text: '新建连接…',
+          onPressed: () => _newConnectionInGroup(context, app, group),
+        ),
+        MenuSeparator(),
+        MenuItem(
+          text: '重命名分组',
+          onPressed: () {
+            _selectedNode.value = 'g:$group';
+            setState(() {
+              _editingKey = 'g:$group';
+              _onEditCancel = null;
+            });
+            _treeFocus.requestFocus();
+          },
+        ),
+        MenuItem(
+          text: members == 0 ? '删除分组' : '删除分组(含 $members 条连接)',
+          onPressed: () => _deleteGroupNode(context, app, group, members),
+        ),
+      ],
+    );
+  }
+
+  /// 在指定分组下新建连接:走同一个连接向导,确定后落到该分组
+  Future<void> _newConnectionInGroup(
+    BuildContext context,
+    AppState app,
+    String group,
+  ) async {
+    final result = await showDialog<ConnectionInfo>(
+      context: context,
+      builder: (_) => const ConnectionDialogPage(),
+    );
+    if (result != null) app.addConnection(result.copyWith(group: group));
+  }
+
+  /// 删除分组:连接不删,回落到未分组(故仅在有连接时二次确认)
+  Future<void> _deleteGroupNode(
+    BuildContext context,
+    AppState app,
+    String group,
+    int memberCount,
+  ) async {
+    if (memberCount > 0) {
+      final confirm = await MessageBox.show(
+        context,
+        title: '删除分组',
+        message: '删除分组「$group」不会删除其中的 $memberCount 条连接,'
+            '它们会回落到未分组。继续?',
+        type: MessageBoxType.warning,
+        buttons: MessageBoxButtons.yesNo,
+        yesText: '删除分组',
+        noText: '取消',
+        tokens: Tokens.read(context).toDesktopTokens(),
+      );
+      if (confirm != MessageBoxResult.yes || !mounted) return;
+    }
+    app.deleteGroup(group);
   }
 
   /// 文件型数据库(SQLite / Access):单文件即一个库,无「新建数据库」概念
@@ -881,6 +1194,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     _listenedManager?.removeListener(_onManagerChanged);
     _listenedApp?.treeNavigate.removeListener(_onTreeNavigate);
     _selectedNode.dispose();
+    _treeFocus.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -892,14 +1206,38 @@ class _DatabaseTreeState extends State<DatabaseTree> {
 
     final connections =
         context.select<AppState, List<ConnectionInfo>>((a) => a.filteredConnections);
+    final groups =
+        context.select<AppState, List<ConnGroup>>((a) => a.groups);
     final hasFilter =
         context.select<AppState, bool>((a) =>
             a.selectedDbTypes.isNotEmpty ||
             a.treeSearchText.isNotEmpty);
 
     final rows = <Widget>[];
-    for (final conn in connections) {
-      rows.addAll(_liveConnectionRows(context, app, conn));
+    // 表节点改名上下文每次重建时重新登记(只登记当前可见的行)
+    _tableNodes.clear();
+    // 顶层分段:一条分组都没有时保持原来的平铺(不给既有配置凭空插入一层),
+    // 一旦有分组就按分组渲染,未分组的连接沉底平铺在最后一层
+    final sections = _connectionSections(connections, groups, hideEmpty: hasFilter);
+    if (sections.isEmpty) {
+      for (final conn in connections) {
+        rows.addAll(_liveConnectionRows(context, app, conn));
+      }
+    } else {
+      for (final section in sections) {
+        final group = section.group;
+        if (group == null) {
+          for (final conn in section.connections) {
+            rows.addAll(_liveConnectionRows(context, app, conn));
+          }
+          continue;
+        }
+        rows.add(_connGroupRow(context, app, group));
+        if (_collapsedGroups.contains(group)) continue;
+        for (final conn in section.connections) {
+          rows.addAll(_liveConnectionRows(context, app, conn, base: 1));
+        }
+      }
     }
 
     // 空态:无任何连接 / 筛选无结果
@@ -936,7 +1274,12 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       child: Column(
         children: [
           Expanded(
-            child: ListView(children: rows),
+            // Focus 承载树键盘焦点:点行取得焦点后 F2 就地重命名选中节点
+            child: Focus(
+              focusNode: _treeFocus,
+              onKeyEvent: _onTreeKey,
+              child: ListView(children: rows),
+            ),
           ),
           _buildBottomBar(context, t, hasFilter),
         ],
@@ -946,12 +1289,90 @@ class _DatabaseTreeState extends State<DatabaseTree> {
 
   // ── 真实连接树:连接 → 库 → 表,展开时懒加载 ──────────────────
 
-  /// 渲染一个真实连接的整棵子树
+  /// 顶层分段:已登记分组按登记顺序在前(空分组也保留,否则「新建分组」看着像没生效),
+  /// 只出现在连接上、未登记的分组随后补上,最后一段是未分组连接(`group: null`)。
+  ///
+  /// [hideEmpty] 为 true(搜索 / 类型筛选中)时丢掉没有可见连接的分组:
+  /// 命中口径仍是连接名,分组头只随子项显隐。
+  /// 一条分组都没有时返回空列表,调用方据此保持原有的平铺布局。
+  List<({String? group, List<ConnectionInfo> connections})> _connectionSections(
+    List<ConnectionInfo> connections,
+    List<ConnGroup> groups, {
+    required bool hideEmpty,
+  }) {
+    final sections = <({String? group, List<ConnectionInfo> connections})>[];
+    void add(String name) {
+      if (sections.any((s) => s.group == name)) return;
+      sections.add((
+        group: name,
+        connections: [for (final c in connections) if (c.group == name) c],
+      ));
+    }
+
+    for (final g in groups) {
+      add(g.name);
+    }
+    // 连接指向了没有条目的分组(手改配置 / 更早版本遗留):现场补一段,别藏起连接
+    for (final c in connections) {
+      if (c.group.isNotEmpty) add(c.group);
+    }
+    if (sections.isEmpty) return const [];
+    if (hideEmpty) sections.removeWhere((s) => s.connections.isEmpty);
+    final loose = [for (final c in connections) if (c.group.isEmpty) c];
+    if (loose.isNotEmpty) sections.add((group: null, connections: loose));
+    return sections;
+  }
+
+  /// 连接分组节点:箭头 = 折叠 / 展开(纯视图状态,不触发任何加载);
+  /// 单击 = 选中并在右侧详情显示组内连接数;右键 = 分组菜单。
+  Widget _connGroupRow(
+    BuildContext context,
+    AppState app,
+    String group,
+  ) {
+    final c = AppColors.of(context);
+    final key = 'g:$group';
+    final expanded = !_collapsedGroups.contains(group);
+    return ValueListenableBuilder<String?>(
+      valueListenable: _selectedNode,
+      builder: (context, sel, _) => _node(
+        context,
+        key: key,
+        depth: 0,
+        text: group,
+        icon: Icons.folder,
+        color: c.iconWarning,
+        // 实心文件夹 SVG:折叠 = 合上,展开 = 翻开露出里面的连接(与库/模式节点同源)
+        leading: UiIcon(
+          expanded ? kConnGroupIcon : kConnGroupClosedIcon,
+          size: _treeIconSize,
+        ),
+        expanded: expanded,
+        selected: sel == key,
+        kind: NodeKind.connGroup,
+        onToggle: () => setState(() {
+          expanded ? _collapsedGroups.add(group) : _collapsedGroups.remove(group);
+        }),
+        onSelect: () {
+          _selectNode(key);
+          app.detailSelection.value = SelectedNode(NodeKind.connGroup, group);
+        },
+        onContextMenu: (position) =>
+            _showConnGroupMenu(context, app, group, position),
+        editing: _editingKey == key,
+        onCommitRename: (input) => _commitGroupRename(group, input),
+      ),
+    );
+  }
+
+  /// 渲染一个真实连接的整棵子树。
+  /// [base] 为该连接节点的层级(顶层 0 / 分组内 1),其下各级依次 +1。
   List<Widget> _liveConnectionRows(
     BuildContext context,
     AppState app,
-    ConnectionInfo conn,
-  ) {
+    ConnectionInfo conn, {
+    int base = 0,
+  }) {
     final c = AppColors.of(context);
     final manager = app.connectionManager;
     final supported = hasDriver(conn);
@@ -975,7 +1396,8 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         valueListenable: _selectedNode,
         builder: (context, sel, _) => _node(
           context,
-          depth: 0,
+          key: conn.name,
+          depth: base,
           text: conn.name,
           icon: Icons.dns,
           color: c.iconInfo,
@@ -1001,6 +1423,8 @@ class _DatabaseTreeState extends State<DatabaseTree> {
           },
           onContextMenu: (position) =>
               _showConnectionMenu(context, app, conn, position),
+          editing: _editingKey == conn.name,
+          onCommitRename: (input) => _commitConnectionRename(conn.name, input),
         ),
       ),
     );
@@ -1008,7 +1432,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
 
     // 尚未实现驱动的类型:展开仅提示,不发请求
     if (!supported) {
-      rows.add(_hintNode(context, depth: 1, text: '暂不支持该类型,待实现驱动'));
+      rows.add(_hintNode(context, depth: base + 1, text: '暂不支持该类型,待实现驱动'));
       return rows;
     }
 
@@ -1017,12 +1441,12 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     switch (dbState.status) {
       case LoadStatus.idle:
       case LoadStatus.loading:
-        rows.add(_hintNode(context, depth: 1, text: '加载中...'));
+        rows.add(_hintNode(context, depth: base + 1, text: '加载中...'));
         return rows;
       case LoadStatus.error:
         rows.add(_hintNode(
           context,
-          depth: 1,
+          depth: base + 1,
           text: '加载失败: ${dbState.error}',
           isAction: true,
           onTap: () => manager.retryExpandConnection(conn),
@@ -1039,7 +1463,8 @@ class _DatabaseTreeState extends State<DatabaseTree> {
           valueListenable: _selectedNode,
           builder: (context, sel, _) => _node(
             context,
-            depth: 1,
+            key: dbKey,
+            depth: base + 1,
             text: database,
             icon: Icons.storage,
             color: c.iconSuccess,
@@ -1094,7 +1519,8 @@ class _DatabaseTreeState extends State<DatabaseTree> {
               valueListenable: _selectedNode,
               builder: (context, sel, _) => _node(
                 context,
-                depth: 2,
+                key: schemaKey,
+                depth: base + 2,
                 text: schema,
                 icon: Icons.folder_outlined,
                 color: c.iconWarning,
@@ -1135,12 +1561,12 @@ class _DatabaseTreeState extends State<DatabaseTree> {
           );
           if (!_expanded.contains(schemaKey)) continue;
           rows.addAll(
-            _groupRows(context, app, conn, database, schema, schemaKey, 3),
+            _groupRows(context, app, conn, database, schema, schemaKey, base + 3),
           );
         }
       } else {
         // 无模式层:分组直挂库节点下(原布局)
-        rows.addAll(_groupRows(context, app, conn, database, null, dbKey, 2));
+        rows.addAll(_groupRows(context, app, conn, database, null, dbKey, base + 2));
       }
     }
     return rows;
@@ -1198,6 +1624,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
           valueListenable: _selectedNode,
           builder: (context, sel, _) => _node(
             context,
+            key: groupKey,
             depth: groupDepth,
             text: group.category.label,
             icon: group.icon,
@@ -1381,6 +1808,12 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     final key = schema == null
         ? '${conn.name}|$database|${category.name}|$name'
         : '${conn.name}|$database|$schema|${category.name}|$name';
+    // 表节点登记改名上下文(F2 需要 连接/库/模式 才能落 DDL);
+    // 视图 / 函数等无改名 API,不登记
+    if (category == ObjectCategory.table) {
+      _tableNodes[key] = (conn: conn, database: database, schema: schema);
+    }
+    final editing = _editingKey == key;
     // Listener.onPointerDown 立即选中(零延迟);
     // 双击单独走 GestureDetector,避免单击被双击判定窗口 hold;
     // 右键触发上下文菜单(表实例支持 打开 / 删除 / 清空 / 设计 / 转储 / 复制重命名)
@@ -1389,7 +1822,13 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       builder: (context, sel, _) => Listener(
         behavior: HitTestBehavior.opaque,
         onPointerDown: (event) {
+          if (editing) return;
+          if (_editingKey != null) {
+            // 点了别的行:让编辑器失焦提交(本行照常选中)
+            FocusManager.instance.primaryFocus?.unfocus();
+          }
           _selectNode(key);
+          if (!_treeFocus.hasFocus) _treeFocus.requestFocus();
           if (category == ObjectCategory.table ||
               category == ObjectCategory.view ||
               category == ObjectCategory.materializedView) {
@@ -1407,7 +1846,9 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         },
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onDoubleTap: switch (category) {
+          onDoubleTap: editing
+              ? null
+              : switch (category) {
             ObjectCategory.table ||
             ObjectCategory.view ||
             ObjectCategory.materializedView => () => app.openTable(
@@ -1436,14 +1877,24 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                 _objectIcon(category),
                 const SizedBox(width: 6),
                 Expanded(
-                  child: Text(
-                    name,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: bodyTextColor(context),
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  child: editing
+                      ? InlineEditor(
+                          initialValue: name,
+                          height: 24,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 2),
+                          selectAll: true,
+                          onCommit: (input) =>
+                              _commitTableRename(conn, database, schema, name, input),
+                          onCancel: _cancelEditing,
+                        )
+                      : Text(
+                          name,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: bodyTextColor(context),
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                 ),
               ],
             ),
@@ -1649,8 +2100,12 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                   color: t.mutedForeground,
                   tooltip: '折叠全部',
                   size: const Size(26, 26),
-                  // 无展开节点时禁用(onTap 为 null → 灰显不可点)
-                  onTap: _expanded.isEmpty ? null : _collapseAll,
+                  // 无展开节点时禁用(onTap 为 null → 灰显不可点)。分组默认展开,
+                  // 所以「还有可折叠的东西」= 有展开的连接层级 或 还有未折叠的分组
+                  onTap: (_expanded.isEmpty &&
+                          _collapsedGroups.length >= app.groups.length)
+                      ? null
+                      : () => _collapseAll(app),
                 ),
               ],
             ),
@@ -1662,6 +2117,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
 
   Widget _node(
     BuildContext context, {
+    required String key,
     required int depth,
     required String text,
     required IconData icon,
@@ -1678,68 +2134,98 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     bool selected = false,
     Widget? leading,
     void Function(Offset position)? onContextMenu,
+    // 就地改名态:文本换成 base-ui InlineEditor(Enter / 失焦提交,Esc 取消)
+    bool editing = false,
+    ValueChanged<String>? onCommitRename,
   }) {
     final t = Tokens.of(context);
+    // 行左缩进 + 箭头 20px 热区(与下方占位宽度一致)
+    final arrowLeft = 4.0 + depth * 14;
     return Listener(
       behavior: HitTestBehavior.opaque,
       onPointerDown: (event) {
+        // 编辑中的行只响应文本框本身(光标定位归输入框)
+        if (editing) return;
+        if (_editingKey != null) {
+          // 点了别的行:让编辑器失焦提交(本行照常选中)
+          FocusManager.instance.primaryFocus?.unfocus();
+        }
         onSelect();
-        // 右键:选中节点并弹出上下文菜单(连接节点专用)
+        if (!_treeFocus.hasFocus) _treeFocus.requestFocus();
+        // 右键:选中节点并弹出上下文菜单(不参与双击 / 展开判定)
         if (event.buttons == kSecondaryMouseButton) {
           onContextMenu?.call(event.position);
+          return;
         }
+        final now = event.timeStamp.inMilliseconds;
+        final dx = event.localPosition.dx;
+        // 箭头:按下瞬间即展开 / 收起(零延迟,不走 tap-up)
+        final inArrow = onToggle != null &&
+            !noArrow &&
+            opened &&
+            dx >= arrowLeft &&
+            dx < arrowLeft + 20;
+        // 行体双击整行 = 切换子树(与箭头同一逻辑),手动判定不拖累单击
+        final bodyDouble = onToggle != null &&
+            !noArrow &&
+            key == _lastTapKey &&
+            now - _lastTapMs <= _doubleTapWindowMs;
+        if (inArrow || bodyDouble) onToggle();
+        _lastTapKey = key;
+        _lastTapMs = now;
       },
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        // 有子节点的节点:双击整行 = 切换子树展开 / 收起(与箭头单击同一逻辑);
-        // 无展开功能的节点(noArrow)双击无动作
-        onDoubleTap: noArrow ? null : onToggle,
-        child: Container(
-          height: 26,
-          color: selected ? t.treeSelectedBg : null,
-          padding: EdgeInsets.only(left: 4.0 + depth * 14),
-          child: Row(
-            children: [
-              if (noArrow)
-                // 无箭头占位:与展开节点箭头宽(20)一致,保证同级文本对齐
-                const SizedBox(width: 20, height: 26)
-              else if (!opened)
-                // 未打开:隐藏箭头,保留占位宽度对齐文本
-                const SizedBox(width: 20, height: 26)
-              else
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: onToggle,
-                  child: SizedBox(
-                    width: 20,
-                    height: 26,
-                    child: Icon(
-                      expanded ? Icons.expand_more : Icons.chevron_right,
-                      size: 14,
-                      color: t.disabledForeground,
-                    ),
-                  ),
-                ),
-              const SizedBox(width: 4),
-              // leading 已由调用方按打开/关闭状态传入对应图标(如连接 ON/OFF、
-              // 库 DATABASE/CLOSE、模式 SCHEMA_ON/CLOSE),不再叠加半透明灰显
-              (leading ?? Icon(icon, size: _treeIconSize, color: (!noArrow && !opened) ? t.mutedForeground : color)),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  text,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w400,
-                    // 正文一律纯黑(明亮主题);未打开节点仅隐藏箭头 / 图标灰显,
-                    // 文字不再降灰
-                    color: bodyTextColor(context),
-                  ),
-                  overflow: TextOverflow.ellipsis,
+      child: Container(
+        height: 26,
+        color: selected ? t.treeSelectedBg : null,
+        padding: EdgeInsets.only(left: arrowLeft),
+        child: Row(
+          children: [
+            if (noArrow)
+              // 无箭头占位:与展开节点箭头宽(20)一致,保证同级文本对齐
+              const SizedBox(width: 20, height: 26)
+            else if (!opened)
+              // 未打开:隐藏箭头,保留占位宽度对齐文本
+              const SizedBox(width: 20, height: 26)
+            else
+              // 箭头本体不挂任何手势:热区判定在行级 Listener 完成,
+              // tap 即切、无 ~300ms 双击竞技延迟
+              SizedBox(
+                width: 20,
+                height: 26,
+                child: Icon(
+                  expanded ? Icons.expand_more : Icons.chevron_right,
+                  size: 14,
+                  color: t.disabledForeground,
                 ),
               ),
-            ],
-          ),
+            const SizedBox(width: 4),
+            // leading 已由调用方按打开/关闭状态传入对应图标(如连接 ON/OFF、
+            // 库 DATABASE/CLOSE、模式 SCHEMA_ON/CLOSE),不再叠加半透明灰显
+            (leading ?? Icon(icon, size: _treeIconSize, color: (!noArrow && !opened) ? t.mutedForeground : color)),
+            const SizedBox(width: 6),
+            Expanded(
+              child: editing
+                  ? InlineEditor(
+                      initialValue: text,
+                      height: 26,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 2),
+                      selectAll: true,
+                      onCommit: (input) => onCommitRename?.call(input),
+                      onCancel: _cancelEditing,
+                    )
+                  : Text(
+                      text,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w400,
+                        // 正文一律纯黑(明亮主题);未打开节点仅隐藏箭头 / 图标灰显,
+                        // 文字不再降灰
+                        color: bodyTextColor(context),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+            ),
+          ],
         ),
       ),
     );

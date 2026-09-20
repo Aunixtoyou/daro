@@ -6,6 +6,7 @@ import '../data/db_data.dart';
 import '../data/db_types.dart';
 import '../data/drivers/db_driver.dart';
 import '../theme/app_theme.dart';
+import '../widgets/connection_group_prompt.dart';
 import '../widgets/connection_form_page.dart';
 
 /// 「新建 / 编辑连接」弹窗的客户区尺寸(逻辑像素)。
@@ -27,6 +28,8 @@ class ConnectionWizard extends StatefulWidget {
     required this.onResult,
     required this.onTestConnection,
     this.initial,
+    this.groupOptions = const [],
+    this.onCreateGroup,
   });
 
   /// 编辑已有连接时传入的初始配置;新建连接时为 null
@@ -37,6 +40,10 @@ class ConnectionWizard extends StatefulWidget {
 
   /// 由宿主提供的「测试连接」实现:内容体不碰 AppState,便于单独排版与测试
   final Future<(bool, String)> Function(ConnectionInfo) onTestConnection;
+
+  /// 由宿主提供的分组候选与「新建分组」动作(同样不碰 AppState)
+  final List<String> groupOptions;
+  final Future<String?> Function()? onCreateGroup;
 
   @override
   State<ConnectionWizard> createState() => _ConnectionWizardState();
@@ -133,6 +140,8 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
                     onConfirm: widget.onResult,
                     onTestConnection: widget.onTestConnection,
                     initial: widget.initial,
+                    groupOptions: widget.groupOptions,
+                    onCreateGroup: widget.onCreateGroup,
                   )
                 : _selectStep(context, t),
           ),
@@ -252,7 +261,7 @@ class ConnectionDialogPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final manager = Provider.of<AppState>(context, listen: false).connectionManager;
+    final app = Provider.of<AppState>(context, listen: false);
     return DialogBox(
       title: initial == null ? '新建连接' : '编辑连接',
       width: kConnectionEditorContentSize.width,
@@ -261,8 +270,19 @@ class ConnectionDialogPage extends StatelessWidget {
       onClose: () => Navigator.of(context).pop(),
       child: ConnectionWizard(
         initial: initial,
-        onTestConnection: manager.testConnection,
+        onTestConnection: app.connectionManager.testConnection,
         onResult: (result) => Navigator.of(context).pop(result),
+        // 分组候选与「新建分组」由宿主(唯一知道 AppState 的一层)提供
+        groupOptions: app.groupNames,
+        onCreateGroup: () async {
+          final name = await promptGroupName(
+            context,
+            app,
+            title: '新建连接分组',
+            okText: '新建',
+          );
+          return name == null ? null : app.addGroup(name);
+        },
       ),
     );
   }

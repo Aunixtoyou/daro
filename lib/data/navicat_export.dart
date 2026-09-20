@@ -19,6 +19,12 @@ import 'navicat_import.dart';
 /// 用与导入完全相同的 libcc 常量做 AES-128-CBC + PKCS#7 加密,输出大写十六进制,
 /// 所以 Navicat 侧能照常解密(空密码也会写出密文,与 Navicat 自身行为一致:
 /// 样本里 Windows 身份验证的 SQL Server 连接就是 `Password="E191AF42..."`)。
+///
+/// ── 分组 ──
+/// Navicat 的 `.ncx` 没有分组字段(实测本机 378 条连接、52 个属性里无任何
+/// group/folder 字样),daro 用**私有属性** `Group="分组名"` 承载,追加在每条
+/// 连接属性表末尾。Navicat 读该文件时忽略未知属性、连接本身照常导入,
+/// 只是看不到分组;分组在 daro ↔ daro 之间完整往返。
 
 /// 不可导出的 daro 连接类型 → 原因(Navicat 侧没有对应 ConnType)
 const Map<String, String> kNavicatExportBlockers = {
@@ -285,7 +291,14 @@ class _Entry {
 
   String toXml() {
     final sb = StringBuffer('<Connection');
-    _attrs.forEach((key, value) {
+    final attrs = Map<String, String>.of(_attrs);
+    // daro 的连接分组:Navicat 原生没有这个概念(实测本机 378 条导出的 .ncx 里
+    // 无任何 group/folder 属性,SettingsSavePath 也恒为 <根>\<类型>\Servers\<连接名>),
+    // 故只能自带私有属性。追加在实测模板之后,不改动既有属性的相对顺序;
+    // 未分组的连接不写该属性,导出的文件与不带分组时逐字节一致。
+    final group = conn.group.trim();
+    if (group.isNotEmpty) attrs['Group'] = group;
+    attrs.forEach((key, value) {
       sb.write(' $key="${_escape(value)}"');
     });
     sb.write('/>');

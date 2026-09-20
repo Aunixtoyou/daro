@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 import 'app/app_state.dart';
+import 'app/mcp_service.dart';
 import 'app/sub_window.dart';
 import 'pages/main_page.dart';
 import 'theme/app_theme.dart';
@@ -69,22 +70,26 @@ class DbApp extends StatelessWidget {
     // 通过 Provider<AppPalette> 注入通用色板(可能是用户定制后的),
     // Provider<AppColors> 注入业务色;
     // TokenScope 把通用色板桥接为 DesktopTokens,使 base-ui-flutter 组件跟随定制。
+    // McpService 也挂在 MaterialApp 之上:设置页与状态栏是 Dialog / Overlay,拿不到 home 下的 Provider。
     return Provider<AppPalette>.value(
       value: palette,
       child: Provider<AppColors>.value(
         value: colors,
-        child: TokenScope(
-          tokens: palette.toDesktopTokens(),
-          child: MaterialApp(
-            title: 'daro',
-            debugShowCheckedModeBanner: false,
-            home: Material(
-              type: MaterialType.transparency,
-              child: const MainPage(),
+        child: ChangeNotifierProvider<McpService>.value(
+          value: app.mcp,
+          child: TokenScope(
+            tokens: palette.toDesktopTokens(),
+            child: MaterialApp(
+              title: 'daro',
+              debugShowCheckedModeBanner: false,
+              home: Material(
+                type: MaterialType.transparency,
+                child: const MainPage(),
+              ),
+              theme: buildAppTheme(Brightness.light, app.effectiveLight),
+              darkTheme: buildAppTheme(Brightness.dark, app.effectiveDark),
+              themeMode: app.themeMode,
             ),
-            theme: buildAppTheme(Brightness.light, app.effectiveLight),
-            darkTheme: buildAppTheme(Brightness.dark, app.effectiveDark),
-            themeMode: app.themeMode,
           ),
         ),
       ),

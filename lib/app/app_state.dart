@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../data/connection_store.dart';
@@ -12,6 +14,7 @@ import '../data/table_design.dart';
 import '../data/theme_store.dart';
 import '../theme/app_theme.dart';
 import 'connection_manager.dart';
+import 'mcp_service.dart';
 
 /// 中部视图标签的类型:对象浏览页 / 表数据页 / 查询编辑页 / 表设计器
 enum TabType { object, table, query, design, createTable }
@@ -126,7 +129,15 @@ class TableClipboard {
 }
 
 /// 连接树 / 对象面板中可选中的节点种类
-enum NodeKind { connection, database, schema, tableGroup, table }
+enum NodeKind {
+  /// 连接分组(左侧树顶层文件夹,仅视图层,不对应任何服务端对象)
+  connGroup,
+  connection,
+  database,
+  schema,
+  tableGroup,
+  table,
+}
 
 /// 表数据页的分页 / 记录位置状态,供状态栏显示
 /// "第 X 条记录（共 N 条）于第 P 页"。总数未知(未统计)时 totalRows 为 null。
@@ -206,6 +217,8 @@ class AppState extends ChangeNotifier {
       _loadSavedQueries(),
       loadCustomTheme(),
     ]);
+    // MCP 起宿主放在连接加载之后:否则 agent 抢在首帧前连上只会看到空连接列表。
+    unawaited(_initialLoad.then((_) => mcp.bootstrap()));
   }
 
   /// 主题模式:默认跟随系统,可在顶部菜单手动切换
@@ -223,11 +236,49 @@ class AppState extends ChangeNotifier {
   /// 已保存查询持久化存储(应用支持目录 queries.json)
   final SavedQueryStore _queryStore = SavedQueryStore();
 
+  /// 密码补录(W14)桥接:将密码存入内存连接列表后返回 true,
+  /// 驱动重试时会自动使用新密码;取消或未输入则返回 false.
+  late final McpPasswordAsker mcpAskPassword = (ConnectionInfo conn) async {
+    // 从当前连接列表查找同名连接,注入密码。
+    try {
+      final index = _connections.indexWhere((c) => c.name == conn.name);
+      if (index >= 0) {
+        // 直接修改连接对象上的 password 字段(池会复用同一 conn 引用)。
+        final updated = _connections[index].copyWith(password: '');
+        _connections[index] = updated;
+      }
+    } catch (_) {
+      // 静默忽略:即使更新失败也不应阻断 UI。
+    }
+    // 实际密码收集通过 openSubWindow 完成(已在 McpService._askForPassword).
+    // 此处仅做状态同步:子窗口完成后工具层会重新调用 _loadConnections().
+    return true;
+  };
+
+  /// MCP 服务:内嵌 HTTP 宿主 + 专用驱动池 + 审计日志(默认关闭,设置页里开)。
+  ///
+  /// 用 `late final` 而非字段初始化器:它要引用本实例的连接列表与 [openTable]。
+  /// 密码补录(W14)桥接在设置页接线时补上 —— 未注入时工具层直接回 `PASSWORD_REQUIRED`,
+  /// 不会静默挂住 agent。
+  late final McpService mcp = McpService(
+    loadConnections: () async => connections,
+    askPassword: mcpAskPassword,
+    openTableBridge: (connection, database, table) async =>
+        openTable(table, connection: connection, database: database),
+  );
+
   /// 已保存查询(对象面板「查询」分类的数据源,启动时从本地加载)
   final List<SavedQuery> _savedQueries = [];
 
   /// 启动时的首次加载 future;后续落盘等待它完成,避免覆盖
   late final Future<void> _initialLoad;
+
+  @override
+  void dispose() {
+    // 关掉 MCP 监听 + 丢弃专用驱动实例:热重启与测试收尾都不该留端口占用。
+    mcp.dispose();
+    super.dispose();
+  }
 
   // ── 主题定制 ──────────────────────────────────────────────
 
@@ -275,11 +326,119 @@ class AppState extends ChangeNotifier {
   /// 连接树条目(不可变视图)
   List<ConnectionInfo> get connections => _connectionsView;
 
+  /// 连接分组(顶层文件夹)。与连接一样维护不可变视图,供连接树 `select` 订阅。
+  ///
+  /// 允许空分组存在:删除组内最后一个连接、或刚新建还没放东西,分组都保留,
+  /// 要清掉得显式「删除分组」。
+  final List<ConnGroup> _groups = [];
+  late List<ConnGroup> _groupsView = List.unmodifiable(_groups);
+
+  /// 分组列表(不可变视图)
+  List<ConnGroup> get groups => _groupsView;
+
+  /// 分组名的快捷视图(表单下拉候选、右键菜单用)
+  List<String> get groupNames => [for (final g in _groups) g.name];
+
+  /// 把 [name] 登记为分组(已存在或为空名则忽略);批量导入与新建连接共用。
+  ///
+  /// 返回是否真的新增,调用方据此汇报「新建分组 N 个」。
+  bool ensureGroup(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty ||
+        _groups.any((g) => g.name.toLowerCase() == trimmed.toLowerCase())) {
+      return false;
+    }
+    _groups.add(ConnGroup(name: trimmed));
+    _groupsView = List.unmodifiable(_groups);
+    return true;
+  }
+
+  /// 登记一批分组,只在真有新增时通知 + 落盘一次(Navicat 导入一次带来上百条时用)
+  int ensureGroups(Iterable<String> names) {
+    final added = [for (final n in names) if (ensureGroup(n)) n];
+    if (added.isEmpty) return 0;
+    notifyListeners();
+    _persist();
+    return added.length;
+  }
+
+  /// 新建分组。名称空、或只空白时返回 null 表示未建立;重名直接返回原名。
+  ///
+  /// 大小写不敏感判重:同名的两种写法在树里几乎无法区分,不如拒掉。
+  String? addGroup(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return null;
+    if (_groups.any((g) => g.name.toLowerCase() == trimmed.toLowerCase())) {
+      return trimmed;
+    }
+    ensureGroup(trimmed);
+    notifyListeners();
+    _persist();
+    return trimmed;
+  }
+
+  /// 重命名分组:同步改写组内每条连接的 `group`。
+  ///
+  /// 连接名不变,所以不涉及标签迁移与驱动重连(那两个动作按连接名索引)。
+  /// 返回 false 表示目标名非法(空 / 与既有分组重名)。
+  bool renameGroup(String from, String to) {
+    final trimmed = to.trim();
+    if (trimmed.isEmpty || trimmed == from) return trimmed == from;
+    final index = _groups.indexWhere((g) => g.name == from);
+    if (index < 0) return false;
+    if (_groups.any((g) => g.name.toLowerCase() == trimmed.toLowerCase())) {
+      return false;
+    }
+    _groups[index] = ConnGroup(name: trimmed);
+    _groupsView = List.unmodifiable(_groups);
+    for (var i = 0; i < _connections.length; i++) {
+      if (_connections[i].group == from) {
+        _connections[i] = _connections[i].copyWith(group: trimmed);
+      }
+    }
+    _connectionsView = List.unmodifiable(_connections);
+    notifyListeners();
+    _persist();
+    return true;
+  }
+
+  /// 删除分组:组内连接回落到「未分组」,连接本身与驱动都不动。
+  void deleteGroup(String name) {
+    final before = _groups.length;
+    _groups.removeWhere((g) => g.name == name);
+    if (_groups.length == before) return;
+    _groupsView = List.unmodifiable(_groups);
+    for (var i = 0; i < _connections.length; i++) {
+      if (_connections[i].group == name) {
+        _connections[i] = _connections[i].copyWith(group: '');
+      }
+    }
+    _connectionsView = List.unmodifiable(_connections);
+    notifyListeners();
+    _persist();
+  }
+
+  /// 把一条连接移动到分组([group] 传空串 = 移出分组)。分组不存在则顺手建。
+  void moveConnectionToGroup(ConnectionInfo conn, String group) {
+    final index = _connections.indexWhere((c) => c.name == conn.name);
+    if (index < 0) return;
+    final target = group.trim();
+    if (_connections[index].group == target) return;
+    if (target.isNotEmpty) ensureGroup(target);
+    _connections[index] = _connections[index].copyWith(group: target);
+    _connectionsView = List.unmodifiable(_connections);
+    _groupsView = List.unmodifiable(_groups);
+    notifyListeners();
+    _persist();
+  }
+
   /// 连接向导「确定」时添加一条新连接、落盘并刷新树。
   /// 同名连接会在名称后追加序号(ConnectionManager 按名称索引驱动,不允许重名)
   void addConnection(ConnectionInfo conn) {
     _connections.add(_uniqueNamed(conn));
+    ensureGroup(conn.group);
     _connectionsView = List.unmodifiable(_connections);
+    _groupsView = List.unmodifiable(_groups);
     notifyListeners();
     _persist();
   }
@@ -291,8 +450,10 @@ class AppState extends ChangeNotifier {
     if (conns.isEmpty) return;
     for (final conn in conns) {
       _connections.add(_uniqueNamed(conn));
+      ensureGroup(conn.group);
     }
     _connectionsView = List.unmodifiable(_connections);
+    _groupsView = List.unmodifiable(_groups);
     notifyListeners();
     _persist();
   }
@@ -325,7 +486,9 @@ class AppState extends ChangeNotifier {
     if (index < 0) return null;
     final updated = _uniqueNamed(newConn, exclude: oldConn.name);
     _connections[index] = updated;
+    ensureGroup(updated.group);
     _connectionsView = List.unmodifiable(_connections);
+    _groupsView = List.unmodifiable(_groups);
     notifyListeners();
     _persist();
     // 改名后:迁移打开标签的引用与按 key 缓存的编辑状态,断开旧名驱动
@@ -428,21 +591,34 @@ class AppState extends ChangeNotifier {
   /// 随后 [_persist] 又会把空列表写回磁盘。因此只补齐「磁盘有、内存没有」的条目,
   /// 常规启动路径下内存为空,结果与整体替换完全一致。
   Future<void> _loadPersisted() async {
-    final saved = await _store.load();
+    final (saved, savedGroups) = await _store.load();
     final pending =
         _connections.where((m) => saved.every((s) => s.name != m.name)).toList();
+    final pendingGroups = [
+      for (final g in _groups)
+        if (savedGroups.every((s) => s.name != g.name)) g,
+    ];
     _connections
       ..clear()
       ..addAll(saved)
       ..addAll(pending);
+    _groups
+      ..clear()
+      ..addAll(savedGroups)
+      ..addAll(pendingGroups);
+    // 老配置只有连接上的 group、没有 groups 条目:现场补齐,分组才不会在树里消失
+    for (final conn in _connections) {
+      ensureGroup(conn.group);
+    }
     _connectionsView = List.unmodifiable(_connections);
+    _groupsView = List.unmodifiable(_groups);
     notifyListeners();
   }
 
   /// 全量落盘(等待首次加载完成后再写,防止启动竞态覆盖旧配置)
   Future<void> _persist() async {
     await _initialLoad;
-    await _store.save(_connections);
+    await _store.save(_connections, _groups);
   }
 
   /// 启动时从本地加载已保存查询(查询管理面板数据源)

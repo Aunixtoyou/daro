@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import 'package:base_ui_flutter/base_ui_flutter.dart';
 import '../app/app_state.dart';
 import '../theme/app_theme.dart';
+import '../data/mcp_policy_store.dart' show McpPolicyLoadStatus;
+import 'mcp_settings_dialog.dart';
 
 class StatusBar extends StatelessWidget {
   const StatusBar({super.key});
@@ -154,6 +156,8 @@ class StatusBar extends StatelessWidget {
                       ),
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  _McpIndicator(),
                 ],
               ),
             );
@@ -568,6 +572,71 @@ class _HistoryPopup extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// MCP 状态指示器(M2):点击打开设置对话框
+class _McpIndicator extends StatelessWidget {
+  const _McpIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    final mcp = context.read<AppState>().mcp;
+    final t = Tokens.of(context);
+
+    // 按策略启用/启动进度构建文案与图标
+    IconData iconData;
+    Color iconColor;
+    String tooltipText;
+
+    if (!mcp.policy.enabled) {
+      // 策略未启用:灰色插头
+      tooltipText = 'MCP 服务已禁用(点击打开设置)';
+      iconData = Icons.power_off_rounded;
+      iconColor = t.disabledForeground;
+    } else if (mcp.policyStatus == McpPolicyLoadStatus.corrupted) {
+      // 策略加载失败:红色感叹号
+      tooltipText = 'MCP 策略加载失败(点击查看详情)';
+      iconData = Icons.error_outline;
+      iconColor = const Color(0xffd93025);
+    } else if (!mcp.isRunning) {
+      // 策略启用但未启动
+      tooltipText = 'MCP 服务已启用但未监听(点击打开设置)';
+      iconData = Icons.power_settings_new;
+      iconColor = t.mutedForeground;
+    } else {
+      // 正常监听中:绿色,带活动连接数
+      final calls = mcp.activeCalls;
+      tooltipText = calls > 0
+          ? 'MCP 运行中 ($calls 个调用)'
+          : 'MCP 运行中(点击打开设置)';
+      iconData = Icons.power_settings_new;
+      iconColor = const Color(0xff2e9e4f);
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Listener(
+        onPointerDown: (_) {
+          showDialog(
+            context: context,
+            builder: (_) => McpSettingsDialog(),
+          );
+        },
+        child: Tooltip(
+          message: tooltipText,
+          waitDuration: const Duration(milliseconds: 200),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(iconData, size: 13, color: iconColor),
+              const SizedBox(width: 4),
+              Text('MCP', style: TextStyle(fontSize: 12, color: iconColor)),
+            ],
+          ),
         ),
       ),
     );

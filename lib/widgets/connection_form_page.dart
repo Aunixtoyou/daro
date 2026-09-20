@@ -8,6 +8,12 @@ import '../data/db_types.dart';
 import '../data/drivers/db_driver.dart';
 import '../theme/app_theme.dart';
 
+/// 分组下拉里代表「不属于任何分组」的哨兵值(不是合法分组名)
+const String kGroupNone = '<未分组>';
+
+/// 分组下拉里代表「去新建一个分组」的哨兵值(选中后由宿主弹窗收名字)
+const String kGroupNew = '<新建分组…>';
+
 /// "新建连接"配置页(连接向导第二步)。
 ///
 /// 风格:顶部品牌区(固定) → Tab 栏(常规/高级/数据库/SSL/SSH/HTTP/备注)
@@ -21,6 +27,8 @@ class ConnectionFormPage extends StatefulWidget {
     required this.onConfirm,
     required this.onTestConnection,
     this.initial,
+    this.groupOptions = const [],
+    this.onCreateGroup,
   });
 
   /// 已选中的数据库类型(决定默认端口/用户名/标题)
@@ -41,6 +49,12 @@ class ConnectionFormPage extends StatefulWidget {
 
   /// 编辑已有连接时传入的初始配置(新建时为空,表单使用默认值)
   final ConnectionInfo? initial;
+
+  /// 可选的既有分组名(下拉候选)。由宿主从 AppState 传入,表单不自己取状态。
+  final List<String> groupOptions;
+
+  /// 请求新建分组:宿主弹窗收名字并登记,返回最终分组名(null = 取消)
+  final Future<String?> Function()? onCreateGroup;
 
   @override
   State<ConnectionFormPage> createState() => _ConnectionFormPageState();
@@ -91,6 +105,27 @@ class _ConnectionFormPageState extends State<ConnectionFormPage> {
 
   /// SQL Server 验证方式:'sql' = SQL Server 身份验证,'windows' = Windows 身份验证
   String _authMethod = 'sql';
+
+  /// 所属连接分组;空串 = 未分组。下拉里选中项由 [kGroupNone] 表示
+  String _group = '';
+
+  /// 分组候选(initState 里并入 initial.group,避免编辑模式下拉缺项)
+  late final List<String> _groupOptions;
+
+  /// 分组下拉的选中处理:两个哨兵值各自翻译,[kGroupNew] 交宿主弹窗收名字,
+  /// 取消则保持原值不动(不能把用户已选的分组清空)。
+  Future<void> _selectGroup(String picked) async {
+    if (picked == kGroupNone) {
+      setState(() => _group = '');
+      return;
+    }
+    if (picked != kGroupNew) {
+      setState(() => _group = picked);
+      return;
+    }
+    final created = await widget.onCreateGroup?.call();
+    if (created != null && mounted) setState(() => _group = created);
+  }
 
   /// 测试连接是否进行中(防止重复点击)
   bool _testing = false;
@@ -165,7 +200,14 @@ class _ConnectionFormPageState extends State<ConnectionFormPage> {
     }
     if (initial != null) {
       _savePassword = initial.password.isNotEmpty;
+      _group = initial.group;
     }
+    // 分组候选要含它自己当前所在分组,否则下拉会显示成「未分组」
+    _groupOptions = [
+      for (final g in widget.groupOptions)
+        if (g != kGroupNone && g != kGroupNew) g,
+      if (initial != null && initial.group.isNotEmpty) initial.group,
+    ];
   }
 
   /// 文件型数据库(SQLite / Access)的路径:表单把路径同时写入 host 与 database,
@@ -319,6 +361,9 @@ class _ConnectionFormPageState extends State<ConnectionFormPage> {
           isSqlServer: _isSqlServer,
           authMethod: _authMethod,
           onAuthMethodChanged: (v) => setState(() => _authMethod = v),
+          group: _group,
+          groupOptions: _groupOptions,
+          onGroupSelected: _selectGroup,
           onBrowseFile: _browseFile,
         ),
       ),
@@ -389,6 +434,7 @@ class _ConnectionFormPageState extends State<ConnectionFormPage> {
                     : (_savePassword ? _passController.text : ''),
                 database: _isFileBased ? _dbFileController.text.trim() : '',
                 authMethod: _isSqlServer ? _authMethod : '',
+                group: _group,
                 isLive: true,
               );
               if (!hasDriver(info)) {
@@ -455,6 +501,9 @@ class _GeneralForm extends StatelessWidget {
     required this.isSqlServer,
     required this.authMethod,
     required this.onAuthMethodChanged,
+    required this.group,
+    required this.groupOptions,
+    required this.onGroupSelected,
     required this.onBrowseFile,
   });
 
@@ -470,6 +519,12 @@ class _GeneralForm extends StatelessWidget {
   final bool isSqlServer;
   final String authMethod;
   final ValueChanged<String> onAuthMethodChanged;
+
+  /// 当前分组(空串 = 未分组)与候选列表、选中回调(含两个哨兵值)
+  final String group;
+  final List<String> groupOptions;
+  final ValueChanged<String> onGroupSelected;
+
   final VoidCallback onBrowseFile;
 
   @override
@@ -483,6 +538,22 @@ class _GeneralForm extends StatelessWidget {
           FieldRow(
             label: '连接名称:',
             child: SizedBox(width: 600, child: Input(controller: name)),
+          ),
+          const SizedBox(height: 14),
+          // 分组(所有类型共有):单层,选「新建分组…」当场起名字
+          FieldRow(
+            label: '分组:',
+            child: SizedBox(
+              width: 240,
+              child: ComboBox<String>(
+                items: [kGroupNone, ...groupOptions, kGroupNew],
+                value: group.isEmpty ? kGroupNone : group,
+                onChanged: (v) {
+                  if (v != null) onGroupSelected(v);
+                },
+                itemToString: (v) => v == kGroupNew ? '新建分组…' : v,
+              ),
+            ),
           ),
           if (isSqlite) ...[
             const SizedBox(height: 14),

@@ -1,4 +1,5 @@
 import 'package:base_ui_flutter/base_ui_flutter.dart';
+import 'package:flutter/gestures.dart' show kSecondaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -6,6 +7,7 @@ import 'package:re_editor/re_editor.dart';
 import 'package:re_highlight/languages/sql.dart';
 import '../app/app_state.dart';
 import '../app/connection_manager.dart';
+import '../data/column_clipboard.dart';
 import '../data/db_metadata.dart';
 import '../data/db_types.dart';
 import '../data/drivers/db_driver.dart';
@@ -21,6 +23,8 @@ import 'index_column_picker_dialog.dart';
 /// 各标签实时采集设计数据([DesignTable]),「字段」页为「网格 + 行首 ▶ 当前行
 /// 标记 + 底部纵向属性面板」:属性面板按方言展示默认 / 排序规则 / 维度 /
 /// 虚拟类型(IDENTITY)及其序列选项 / 循环;「键」列以 钥匙 + 序号 表示主键。
+/// 「字段」网格支持像数据表格那样操作行:Ctrl 加选 / Shift 连选,选中行可整批
+/// 复制 / 粘贴(见 [ColumnRowClipboard],Tab 分隔一行一字段)/ 删除 / 设主键。
 /// 「SQL 预览」标签按当前连接类型实时生成方言 DDL(预览即所见):
 /// 新建模式输出 CREATE 语句,编辑模式输出 [DdlBuilder.buildAlterStatements]
 /// 生成的变更语句。点「保存」经 [AppState.createTableDesign] /
@@ -84,6 +88,10 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
 
   /// 表注释输入控制器(注释标签页)
   final TextEditingController _commentCtrl = TextEditingController();
+
+  /// 内容区(网格)的键盘焦点:点行选中后由网格持有,Ctrl+C / Ctrl+V 才有落点
+  /// (焦点一旦进入单元格输入框,这两个键就是文本复制 / 粘贴,归输入框)
+  final FocusNode _gridFocus = FocusNode(debugLabel: 'tableDesignerGrid');
 
   /// 当前连接类型 id 与显示名
   String _typeId = 'postgresql';
@@ -175,6 +183,11 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
   int _selExclude = -1;
   int _selRule = -1;
   int _selTrigger = -1;
+
+  /// 字段网格的多选行(索引集合,支持 Ctrl 加选 / Shift 连选)。
+  /// [_selColumn] 始终是锚点:▶ 标记、底部属性面板、上移 / 下移跟随它;
+  /// 复制 / 粘贴 / 删除 / 设主键作用于整个选择集。其它标签为单选,不维护本集合。
+  final Set<int> _selColumns = {};
 
   // ── 下拉候选 ──────────────────────────────────────────────
 
@@ -322,6 +335,7 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
     _nameCtrl.dispose();
     _commentCtrl.dispose();
     _sqlCtrl.dispose();
+    _gridFocus.dispose();
     super.dispose();
   }
 
@@ -484,6 +498,9 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
     _nameCtrl.text = name;
     _commentCtrl.text = read.tableComment;
     _selColumn = _design.columns.isEmpty ? -1 : 0;
+    _selColumns
+      ..clear()
+      ..addAll(_selColumn < 0 ? const <int>[] : [_selColumn]);
     _selIndex = _design.indexes.isEmpty ? -1 : 0;
     _selFk = _design.foreignKeys.isEmpty ? -1 : 0;
     _selUnique = _design.uniqueKeys.isEmpty ? -1 : 0;
@@ -663,7 +680,13 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
                     TabItem(label: label),
                 ],
               ),
-              Expanded(child: _tabBody(t, _tabIndex)),
+              Expanded(
+                child: Focus(
+                  focusNode: _gridFocus,
+                  onKeyEvent: _onGridKey,
+                  child: _tabBody(t, _tabIndex),
+                ),
+              ),
               _statusBar(t),
             ],
           ),
@@ -853,7 +876,8 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
     switch (_tabIndex) {
       case 0:
         final cols = _design.columns;
-        final hasSel = _selColumn >= 0 && _selColumn < cols.length;
+        final selCount = _selectedColumns().length;
+        final hasSel = selCount > 0;
         actions.addAll([
           ToolbarButton(
             icon: Icons.add_circle_outline,
@@ -872,8 +896,22 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
             icon: Icons.remove_circle_outline,
             iconColor: _iconDanger,
             text: '删除字段',
-            enabled: cols.isNotEmpty,
+            enabled: hasSel,
             onTap: _removeColumn,
+          ),
+          const SizedBox(width: 10),
+          // 多选行 → 像数据表格那样整批复制 / 粘贴(Ctrl+C / Ctrl+V 同口径)
+          ToolbarButton(
+            icon: Icons.copy_outlined,
+            text: selCount > 1 ? '复制 $selCount 行' : '复制行',
+            enabled: hasSel,
+            onTap: _copyColumns,
+          ),
+          const SizedBox(width: 2),
+          ToolbarButton(
+            icon: Icons.paste_outlined,
+            text: '粘贴行',
+            onTap: _pasteColumns,
           ),
           const SizedBox(width: 10),
           // 「主键 ▾」:弹层开合由 DropDownButton 的 Listener 处理,按钮仅提供视觉态
@@ -911,8 +949,9 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
           ToolbarButton(
             icon: Icons.arrow_downward,
             text: '下移',
-            enabled:
-                hasSel && _selColumn < cols.length - 1 && _canReorderColumns,
+            enabled: hasSel &&
+                _selColumn < cols.length - 1 &&
+                _canReorderColumns,
             onTap: _moveColumnDown,
           ),
         ]);
@@ -1063,7 +1102,9 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
       widths: _fieldWidths,
       rowCount: cols.length,
       selected: cols.isEmpty ? -1 : _selColumn,
-      onSelect: (i) => setState(() => _selColumn = i),
+      selectedRows: _selColumns,
+      onSelect: _selectColumnAt,
+      onContextMenu: _columnContextMenu,
       rowBuilder: (i) => _fieldRow(t, cols[i], i, ordinals[cols[i]]),
       propsPanel: _props(
         t,
@@ -1343,7 +1384,7 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
       widths: const [140, 150, 110, 64, 64, 180],
       rowCount: items.length,
       selected: _selIndex,
-      onSelect: (i) => setState(() => _selIndex = i),
+      onSelect: (i, ctrl, shift) => setState(() => _selIndex = i),
       rowBuilder: (i) => _indexRow(t, items[i]),
       propsPanel: _props(
         t,
@@ -1453,7 +1494,7 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
       widths: const [110, 100, 100, 120, 100, 96, 96, 180],
       rowCount: items.length,
       selected: _selFk,
-      onSelect: (i) => setState(() => _selFk = i),
+      onSelect: (i, ctrl, shift) => setState(() => _selFk = i),
       rowBuilder: (i) => _fkRow(t, items[i]),
       propsPanel: _props(
         t,
@@ -1533,7 +1574,7 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
       widths: const [160, 200, 240],
       rowCount: items.length,
       selected: _selUnique,
-      onSelect: (i) => setState(() => _selUnique = i),
+      onSelect: (i, ctrl, shift) => setState(() => _selUnique = i),
       rowBuilder: (i) => _uniqueRow(t, items[i]),
       propsPanel: _props(
         t,
@@ -1573,7 +1614,7 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
       widths: const [160, 320, 240],
       rowCount: items.length,
       selected: _selCheck,
-      onSelect: (i) => setState(() => _selCheck = i),
+      onSelect: (i, ctrl, shift) => setState(() => _selCheck = i),
       rowBuilder: (i) => _checkRow(t, items[i]),
       propsPanel: null,
     );
@@ -1601,7 +1642,7 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
       widths: const [150, 260, 110, 180],
       rowCount: items.length,
       selected: _selExclude,
-      onSelect: (i) => setState(() => _selExclude = i),
+      onSelect: (i, ctrl, shift) => setState(() => _selExclude = i),
       rowBuilder: (i) => _excludeRow(t, items[i]),
       propsPanel: null,
     );
@@ -1639,7 +1680,7 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
       widths: const [150, 100, 320, 160],
       rowCount: items.length,
       selected: _selRule,
-      onSelect: (i) => setState(() => _selRule = i),
+      onSelect: (i, ctrl, shift) => setState(() => _selRule = i),
       rowBuilder: (i) => _ruleRow(t, items[i]),
       propsPanel: null,
     );
@@ -1677,7 +1718,7 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
       widths: const [110, 70, 90, 44, 44, 44, 44, 110, 44, 140],
       rowCount: items.length,
       selected: _selTrigger,
-      onSelect: (i) => setState(() => _selTrigger = i),
+      onSelect: (i, ctrl, shift) => setState(() => _selTrigger = i),
       rowBuilder: (i) => _triggerRow(t, items[i]),
       propsPanel: _props(
         t,
@@ -2039,6 +2080,9 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
   /// 表头 + 行列表 + 底部属性面板(可选)的编辑网格。
   /// 表头与行放在同一个水平滚动容器内,超宽时一起滚动、始终对齐。
   /// [rowMarker] 控制行首「当前行」▶ 标记(表头同步预留宽度)。
+  /// [onSelect] 收到 Ctrl / Shift 修饰键,由调用方决定是否支持多选。
+  /// [selectedRows] 为多选高亮集合(为空时按 [selected] 单选高亮);
+  /// [onContextMenu] 非空时行右键可弹菜单(命中行 + 光标位置)。
   Widget _editorGrid(
     AppPalette t, {
     required List<String> headers,
@@ -2046,7 +2090,9 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
     required int rowCount,
     required Widget Function(int row) rowBuilder,
     required int selected,
-    required ValueChanged<int> onSelect,
+    required void Function(int index, bool ctrl, bool shift) onSelect,
+    Set<int>? selectedRows,
+    void Function(int index, Offset position)? onContextMenu,
     Widget? propsPanel,
     bool rowMarker = true,
   }) {
@@ -2088,8 +2134,14 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
                             itemBuilder: (context, i) => _rowWrap(
                               t,
                               i,
-                              selected: i == selected,
-                              onTap: () => onSelect(i),
+                              selected: selectedRows == null
+                                  ? i == selected
+                                  : selectedRows.contains(i),
+                              anchor: i == selected,
+                              onTap: (ctrl, shift) => onSelect(i, ctrl, shift),
+                              onContextMenu: onContextMenu == null
+                                  ? null
+                                  : (pos) => onContextMenu(i, pos),
                               showMarker: rowMarker,
                               child: rowBuilder(i),
                             ),
@@ -2123,27 +2175,42 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
       );
 
   /// 行容器:Listener.onPointerDown 零延迟选中 + zebra / 选中底色;
-  /// [showMarker] 时在行首画 ▶ 标记当前行(与表头预留列同宽)
+  /// [anchor] 为当前行(▶ 标记 + 实色),[selected] 为多选命中的行(浅色);
+  /// 左键按下带 Ctrl / Shift 修饰键,右键交给 [onContextMenu]
   Widget _rowWrap(AppPalette t, int index,
       {required bool selected,
-      required VoidCallback onTap,
+      required bool anchor,
+      required void Function(bool ctrl, bool shift) onTap,
+      void Function(Offset position)? onContextMenu,
       required Widget child,
       bool showMarker = true}) {
     return Listener(
-      onPointerDown: (_) => onTap(),
+      onPointerDown: (e) {
+        if (e.buttons & kSecondaryButton != 0) {
+          onContextMenu?.call(e.position);
+          return;
+        }
+        onTap(HardwareKeyboard.instance.isControlPressed,
+            HardwareKeyboard.instance.isShiftPressed);
+      },
       child: Container(
         height: 30,
         padding: const EdgeInsets.symmetric(horizontal: 8),
-        color: selected
+        color: anchor
             ? t.treeSelectedBg
-            : (index.isOdd
-                ? Color.alphaBlend(t.foreground.withValues(alpha: 0.03), t.background)
-                : t.background),
+            : (selected
+                // 多选中非锚点的行:由选中色派生,明暗两套都保持可辨
+                ? Color.alphaBlend(
+                    t.treeSelectedBg.withValues(alpha: 0.45), t.background)
+                : (index.isOdd
+                    ? Color.alphaBlend(
+                        t.foreground.withValues(alpha: 0.03), t.background)
+                    : t.background)),
         child: Row(
           children: [
             SizedBox(
               width: showMarker ? _rowMarkerWidth : 0,
-              child: showMarker && selected
+              child: showMarker && anchor
                   ? Icon(Icons.arrow_right, size: 16, color: t.foreground)
                   : null,
             ),
@@ -2288,10 +2355,151 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
 
   // ── 字段动作 ──────────────────────────────────────────────
 
+  /// 网格键盘入口:Ctrl/Cmd + C 复制选中行、+ V 把剪贴板整批粘贴为行。
+  /// 焦点落在单元格输入框里时这两个键归输入框(文本复制 / 粘贴),
+  /// 那种情况下走工具栏按钮或行右键菜单。
+  KeyEventResult _onGridKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent || _tabIndex != 0) return KeyEventResult.ignored;
+    if (!(HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed)) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyC) {
+      _copyColumns();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyV && _actionsEnabled) {
+      _pasteColumns();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  /// 把键盘焦点交给网格(点行之后 Ctrl+C / Ctrl+V 才有落点)。
+  /// 点击落在输入框里时不抢:那一次点击是要开始编辑单元格。
+  void _focusGrid() {
+    final focused = FocusManager.instance.primaryFocus;
+    if (focused?.context?.widget is EditableText) return;
+    _gridFocus.requestFocus();
+  }
+
+  /// 字段网格当前选择(升序、去越界);集合为空时回退到锚点行
+  List<int> _selectedColumns() {
+    final cols = _design.columns;
+    final idx =
+        _selColumns.where((i) => i >= 0 && i < cols.length).toList()..sort();
+    if (idx.isNotEmpty) return idx;
+    return _selColumn >= 0 && _selColumn < cols.length ? [_selColumn] : const [];
+  }
+
+  /// 只选中一行(锚点跟随)
+  void _selectOnly(int index) {
+    _selColumn = index;
+    _selColumns
+      ..clear()
+      ..add(index);
+  }
+
+  /// 点行:Ctrl 加选 / 取消单行,Shift 从锚点连选一段,普通点击为单选
+  void _selectColumnAt(int index, bool ctrl, bool shift) {
+    setState(() {
+      if (shift && _selColumn >= 0) {
+        final lo = index < _selColumn ? index : _selColumn;
+        final hi = index < _selColumn ? _selColumn : index;
+        _selColumns
+          ..clear()
+          ..addAll(List<int>.generate(hi - lo + 1, (i) => lo + i));
+      } else if (ctrl) {
+        if (_selColumns.contains(index)) {
+          // 至少保留一行选中,否则锚点行看起来仍是「当前行」
+          if (_selColumns.length > 1) _selColumns.remove(index);
+        } else {
+          _selColumns.add(index);
+        }
+        _selColumn = index;
+      } else {
+        _selectOnly(index);
+      }
+    });
+    _focusGrid();
+  }
+
+  /// 行右键菜单:批量动作的稳定入口(焦点落在输入框里时 Ctrl+C 会被文本框
+  /// 当作复制选中文本处理,这里给一条不依赖焦点的路径)
+  void _columnContextMenu(int index, Offset position) {
+    final cols = _design.columns;
+    if (index < 0 || index >= cols.length) return;
+    if (!_selColumns.contains(index)) setState(() => _selectOnly(index));
+    _focusGrid();
+    final n = _selectedColumns().length;
+    final multi = n > 1;
+    showContextMenu(
+      context,
+      position: position,
+      items: [
+        MenuItem(
+            text: multi ? '复制 $n 行' : '复制行',
+            shortcut: 'Ctrl+C',
+            onPressed: _copyColumns),
+        MenuItem(
+            text: '粘贴行',
+            shortcut: 'Ctrl+V',
+            enabled: _actionsEnabled,
+            onPressed: _pasteColumns),
+        const MenuSeparator(),
+        MenuItem(
+            text: multi ? '删除 $n 个字段' : '删除字段',
+            enabled: _actionsEnabled,
+            onPressed: _removeColumn),
+      ],
+    );
+  }
+
+  /// 复制选中字段:Tab 分隔、一行一个(与数据浏览页「复制记录」同格式,
+  /// 可直接贴进表格软件,也能原样粘回设计器)
+  void _copyColumns() {
+    final idx = _selectedColumns();
+    if (idx.isEmpty) return;
+    final picked = [for (final i in idx) _design.columns[i]];
+    Clipboard.setData(ClipboardData(text: ColumnRowClipboard.encode(picked)));
+    setState(() => _note = '已复制 ${idx.length} 个字段');
+  }
+
+  /// 粘贴字段:剪贴板文本按行解析,整批插到选中区之后(无选中则追加到末尾)
+  Future<void> _pasteColumns() async {
+    if (!_actionsEnabled) return;
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final rows = ColumnRowClipboard.parse(data?.text ?? '');
+    if (!mounted) return;
+    if (rows.isEmpty) {
+      setState(() => _error = '剪贴板里没有可粘贴的字段:每行一个字段,单元格以 Tab 分隔');
+      return;
+    }
+    setState(() {
+      _error = null;
+      final cols = _design.columns;
+      final sel = _selectedColumns();
+      var at = sel.isEmpty ? cols.length : sel.last + 1;
+      // 新建表预置的那行空字段:粘贴时直接占用它,末尾不留空行
+      if (at == cols.length &&
+          cols.isNotEmpty &&
+          ColumnRowClipboard.isBlank(cols.last)) {
+        at = cols.length - 1;
+        cols.removeAt(at);
+      }
+      cols.insertAll(at, rows);
+      _selColumns
+        ..clear()
+        ..addAll(List<int>.generate(rows.length, (i) => at + i));
+      _selColumn = at + rows.length - 1;
+      _note = '已粘贴 ${rows.length} 个字段';
+    });
+  }
+
   void _addColumn() {
     setState(() {
       _design.columns.add(DesignColumn());
-      _selColumn = _design.columns.length - 1;
+      _selectOnly(_design.columns.length - 1);
     });
   }
 
@@ -2299,24 +2507,32 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
     setState(() {
       final at = _selColumn.clamp(0, _design.columns.length);
       _design.columns.insert(at, DesignColumn());
-      _selColumn = at;
+      _selectOnly(at);
     });
   }
 
+  /// 删除字段:多选时整批删除(从后往前移除,避免索引错位)
   void _removeColumn() {
     setState(() {
-      final at = _selColumn.clamp(0, _design.columns.length - 1);
-      _design.columns.removeAt(at);
-      _selColumn = _design.columns.isEmpty ? -1 : at.clamp(0, _design.columns.length - 1);
+      final idx = _selectedColumns();
+      if (idx.isEmpty) return;
+      final cols = _design.columns;
+      for (final i in idx.reversed) {
+        cols.removeAt(i);
+      }
+      _selColumns.clear();
+      _selColumn = cols.isEmpty ? -1 : idx.first.clamp(0, cols.length - 1);
+      if (_selColumn >= 0) _selColumns.add(_selColumn);
     });
   }
 
-  /// 显式设置 / 取消当前行的主键(供「主键 ▾」下拉;
+  /// 显式设置 / 取消选中行的主键(供「主键 ▾」下拉与右键;多选即复合主键,
   /// 序号由 [DdlBuilder.pkOrdinals] 按列序推导,无需手工维护)
   void _setPk(bool on) {
     setState(() {
-      if (_selColumn < 0 || _selColumn >= _design.columns.length) return;
-      _design.columns[_selColumn].primaryKey = on;
+      for (final i in _selectedColumns()) {
+        _design.columns[i].primaryKey = on;
+      }
     });
   }
 
@@ -2326,7 +2542,7 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
       if (index < 0 || index >= _design.columns.length) return;
       final c = _design.columns[index];
       c.primaryKey = !c.primaryKey;
-      _selColumn = index;
+      _selectOnly(index);
     });
   }
 
@@ -2358,7 +2574,7 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
       final i = _selColumn;
       final c = _design.columns.removeAt(i);
       _design.columns.insert(i - 1, c);
-      _selColumn = i - 1;
+      _selectOnly(i - 1);
     });
   }
 
@@ -2368,7 +2584,7 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
       if (i < 0 || i >= _design.columns.length - 1) return;
       final c = _design.columns.removeAt(i);
       _design.columns.insert(i + 1, c);
-      _selColumn = i + 1;
+      _selectOnly(i + 1);
     });
   }
 

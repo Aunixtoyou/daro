@@ -10,6 +10,7 @@ import '../data/db_data.dart';
 import '../pages/connection_dialog_page.dart';
 import '../theme/app_theme.dart';
 import 'about_dialog.dart';
+import 'mcp_settings_dialog.dart';
 import 'navicat_export_dialog.dart';
 import 'navicat_import_dialog.dart';
 import 'schema_sync_dialog.dart';
@@ -308,6 +309,10 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
         MenuItem(text: '备份...', enabled: false),
         MenuItem(text: '还原备份...', enabled: false),
         MenuSeparator(),
+        // MCP 设置改动即时落盘生效,所以只有关闭按钮,不需要「选项...」那种确定/取消。
+        MenuItem(
+            text: 'MCP 服务...',
+            onPressed: () => _openMcpSettings(context)),
         MenuItem(text: '选项...', enabled: false),
       ]),
       // const MenuItem(text: '窗口', children: [
@@ -350,14 +355,20 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
         context, app: context.read<AppState>());
     if (result == null || !context.mounted) return;
     final manual = result.needsManualPassword;
+    final groups = result.newGroups;
     final extra = manual == 0
         ? ''
         : '\n其中 $manual 条没能带过密码(Navicat 端未保存,或用了旧版加密方式),'
             '右键该连接 →「编辑连接」补填后即可正常连接。';
+    final groupNote = groups.isEmpty
+        ? ''
+        : '\n文件里的分组本地不存在,已新建 ${groups.length} 个:'
+            '${groups.take(5).join('、')}${groups.length > 5 ? ' 等' : ''}。';
     MessageBox.show(
       context,
       title: '导入完成',
-      message: '已导入 ${result.imported.length} 条连接,可在左侧连接树查看。$extra',
+      message: '已导入 ${result.imported.length} 条连接,可在左侧连接树查看。'
+          '$extra$groupNote',
       buttons: MessageBoxButtons.ok,
       tokens: Tokens.read(context).toDesktopTokens(),
     );
@@ -396,6 +407,14 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
     await showDialog<void>(
       context: context,
       builder: (_) => const ThemeCustomizeDialog(),
+    );
+  }
+
+  /// 点击"工具 → MCP 服务...":弹出 MCP 设置对话框(策略、连接授权、客户端配置)。
+  Future<void> _openMcpSettings(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => const McpSettingsDialog(),
     );
   }
 

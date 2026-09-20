@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:base_ui_flutter/base_ui_flutter.dart';
+import 'package:flutter/gestures.dart' show kSecondaryButton;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey, SystemChannels;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:re_editor/re_editor.dart';
@@ -568,4 +570,163 @@ void main() {
     await openTab(tester, '选项');
     expect(offers('zz_fast_storage'), isTrue);
   });
+
+  // ── 字段网格多选 / 复制粘贴 ────────────────────────────────
+
+  /// 点字段网格第 [index] 行:落点在行首 ▶ 标记列,只触发行选中,
+  /// 不会顺带改到单元格(输入框 / 勾选框 / 键列)
+  Future<void> tapRow(WidgetTester tester, int index,
+      {bool ctrl = false, bool shift = false}) async {
+    final grid = tester.getRect(find.byType(ListView));
+    // ListView 上下 padding 2,itemExtent 30
+    final y = grid.top + 2 + index * 30 + 15;
+    if (ctrl) await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    if (shift) await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.tapAt(Offset(grid.left + 10, y));
+    if (ctrl) await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    if (shift) await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pumpAndSettle();
+  }
+
+  /// 当前字段行数:每行只有「不是 null」一个勾选框
+  int fieldRowCount(WidgetTester tester) => find
+      .descendant(of: find.byType(ListView), matching: find.byType(CheckBox))
+      .evaluate()
+      .length;
+
+  testWidgets('Ctrl 加选 / Shift 连选:工具栏按选中行数改文案', (tester) async {
+    wideView(tester);
+    await openEdit(tester, editHarness(loader: (db, t, s) async => readBack()));
+
+    await tapRow(tester, 0);
+    expect(fieldRowCount(tester), 2);
+    expect(find.text('复制行'), findsOneWidget);
+
+    await tapRow(tester, 1, ctrl: true);
+    expect(find.text('复制 2 行'), findsOneWidget);
+
+    // 再 Ctrl 点同一行 = 取消加选,回到单选
+    await tapRow(tester, 1, ctrl: true);
+    expect(find.text('复制行'), findsOneWidget);
+  });
+
+  testWidgets('多选行 → 复制为 Tab 分隔的整批字段(列序同网格表头)', (tester) async {
+    wideView(tester);
+    final clip = _ClipboardStub()..install(tester);
+    await openEdit(tester, editHarness(loader: (db, t, s) async => readBack()));
+
+    await tapRow(tester, 0);
+    await tapRow(tester, 1, shift: true); // 锚点起连选成段
+    await tester.tap(find.text('复制 2 行'));
+    await tester.pumpAndSettle();
+
+    expect(clip.text,
+        'id\tint8\t64\t\t1\tPRI\t\nname\tvarchar\t32\t\t\t\t名称');
+  });
+
+  testWidgets('粘贴行:整批插入网格并进入 SQL 预览,占位空行被占用', (tester) async {
+    wideView(tester);
+    final clip = _ClipboardStub()
+      ..text = 'amount\tdecimal(10,2)\t\t\t1\t\t金额\n'
+          'remark\tvarchar\t64\t\t\t\t备注'
+      ..install(tester);
+    await tester.pumpWidget(harness());
+    await tester.pumpAndSettle();
+    expect(fieldRowCount(tester), 1); // 新建表预置的空行
+
+    await tester.tap(find.text('粘贴行'));
+    await tester.pumpAndSettle();
+
+    // 两行都进来,且粘贴结果整体成为选中区
+    expect(fieldRowCount(tester), 2);
+    expect(find.text('复制 2 行'), findsOneWidget);
+
+    // 再复制回去:类型括号里的长度已拆进「长度 / 小数点」两格
+    await tester.tap(find.text('复制 2 行'));
+    await tester.pumpAndSettle();
+    expect(clip.text,
+        'amount\tdecimal\t10\t2\t1\t\t金额\nremark\tvarchar\t64\t\t\t\t备注');
+
+    await openTab(tester, 'SQL 预览');
+    final sql = previewSql(tester);
+    expect(sql, contains('"amount" decimal(10,2) NOT NULL'));
+    expect(sql, contains('COMMENT ON COLUMN'));
+  });
+
+  testWidgets('多选后「删除字段」整批删除,单选时只删一行', (tester) async {
+    wideView(tester);
+    await tester.pumpWidget(harness());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('添加字段'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('添加字段'));
+    await tester.pumpAndSettle();
+    expect(fieldRowCount(tester), 3);
+
+    // 单选删一行
+    await tapRow(tester, 1);
+    await tester.tap(find.text('删除字段'));
+    await tester.pumpAndSettle();
+    expect(fieldRowCount(tester), 2);
+
+    // 全选一次删掉
+    await tapRow(tester, 0);
+    await tapRow(tester, 1, shift: true);
+    await tester.tap(find.text('删除字段'));
+    await tester.pumpAndSettle();
+    expect(fieldRowCount(tester), 0);
+  });
+
+  testWidgets('Ctrl+C / Ctrl+V 快捷键:焦点不在输入框时整批复制粘贴', (tester) async {
+    wideView(tester);
+    final clip = _ClipboardStub()..install(tester);
+    await openEdit(tester, editHarness(loader: (db, t, s) async => readBack()));
+
+    // 点行首标记列选中(不把焦点交给单元格输入框)
+    await tapRow(tester, 0);
+    await tapRow(tester, 1, shift: true);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.keyC);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.keyC);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+
+    expect(clip.text, contains('name\tvarchar\t32'));
+  });
+
+  testWidgets('字段行右键:不依赖焦点也能复制选中行', (tester) async {
+    wideView(tester);
+    final clip = _ClipboardStub()..install(tester);
+    await openEdit(tester, editHarness(loader: (db, t, s) async => readBack()));
+
+    final grid = tester.getRect(find.byType(ListView));
+    await tester.tapAt(Offset(grid.left + 10, grid.top + 2 + 15),
+        buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    expect(find.text('复制行'), findsNWidgets(2)); // 工具栏 + 菜单项
+
+    await tester.tap(find.text('复制行').last);
+    await tester.pumpAndSettle();
+    expect(clip.text, 'id\tint8\t64\t\t1\tPRI\t');
+  });
+}
+
+/// 系统剪贴板桩:测试环境没有真实剪贴板,读写都落在这里
+class _ClipboardStub {
+  String text = '';
+
+  void install(WidgetTester tester) {
+    tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      switch (call.method) {
+        case 'Clipboard.setData':
+          text = (call.arguments as Map)['text'] as String? ?? '';
+        case 'Clipboard.getData':
+          return <String, String?>{'text': text};
+      }
+      return null;
+    });
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null));
+  }
 }
