@@ -66,6 +66,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   int _lastTapMs = 0;
   static const int _doubleTapWindowMs = 500;
 
+  /// 正在被拖动的连接(null = 无拖动)。拖动分组内连接时,
+  /// 树底部显示独立的「移到未分组」放置条(与分组行 DragTarget 不嵌套)。
+  ConnectionInfo? _draggingConn;
+
   /// 编辑被 Esc 取消时的撤销动作(仅"新建分组"用:删掉临时分组并回移连接)。
   VoidCallback? _onEditCancel;
 
@@ -1227,15 +1231,22 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       for (final section in sections) {
         final group = section.group;
         if (group == null) {
+          // 未分组段也是放置目标:把分组内连接拖到未分组兄弟上 = 移出分组
           for (final conn in section.connections) {
-            rows.addAll(_liveConnectionRows(context, app, conn));
+            for (final row in _liveConnectionRows(context, app, conn)) {
+              rows.add(_memberDropTarget(context, app, '', row));
+            }
           }
           continue;
         }
-        rows.add(_connGroupRow(context, app, group));
+        rows.add(_connGroupDropTarget(context, app, group));
         if (_collapsedGroups.contains(group)) continue;
         for (final conn in section.connections) {
-          rows.addAll(_liveConnectionRows(context, app, conn, base: 1));
+          // 组内成员(含其展开的库/表子树)也是放置目标:
+          // 拖到兄弟节点上等同拖到分组头上
+          for (final row in _liveConnectionRows(context, app, conn, base: 1)) {
+            rows.add(_memberDropTarget(context, app, group, row));
+          }
         }
       }
     }
@@ -1281,6 +1292,9 @@ class _DatabaseTreeState extends State<DatabaseTree> {
               child: ListView(children: rows),
             ),
           ),
+          // 拖动分组内连接时:底部出现「移到未分组」放置条
+          if (_draggingConn != null && _draggingConn!.group.isNotEmpty)
+            _ungroupedDropZone(context, app),
           _buildBottomBar(context, t, hasFilter),
         ],
       ),
@@ -1323,13 +1337,144 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     return sections;
   }
 
-  /// 连接分组节点:箭头 = 折叠 / 展开(纯视图状态,不触发任何加载);
-  /// 单击 = 选中并在右侧详情显示组内连接数;右键 = 分组菜单。
-  Widget _connGroupRow(
+  /// 拖动连接时的浮层预览:品牌图标 + 连接名。
+  /// 不用 Material(避免阴影/shader 首次计算延迟),文本显式去下划线。
+  Widget _dragFeedback(BuildContext context, ConnectionInfo conn) {
+    final t = Tokens.of(context);
+    DbType? dbType;
+    for (final e in kAllDbTypes) {
+      if (e.id == conn.typeId) { dbType = e; break; }
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: t.surface,
+        border: Border.all(color: t.accent, width: 1),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (dbType != null) DbTypeIcon(type: dbType, size: _treeIconSize),
+          const SizedBox(width: 6),
+          Text(
+            conn.name,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w400,
+              color: bodyTextColor(context),
+              decoration: TextDecoration.none,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 放置到分组([group] 为空串 = 未分组):移动 + 状态栏日志。
+  /// 分组头、组内成员行、未分组兄弟行共用
+  void _dropIntoGroup(AppState app, ConnectionInfo conn, String group) {
+    if (conn.group == group) return;
+    app.moveConnectionToGroup(conn, group);
+    app.logTreeAction(group.isEmpty
+        ? '已把连接「${conn.name}」移到未分组'
+        : '已把连接「${conn.name}」移入分组「$group」');
+  }
+
+  /// 连接分组的放置目标:接受被拖动的连接并移入本分组。
+  /// 拖入时高亮分组行(candidateData 非空);拖到已在组内的连接不接收(无效果)。
+  Widget _connGroupDropTarget(
     BuildContext context,
     AppState app,
     String group,
   ) {
+    return DragTarget<ConnectionInfo>(
+      onWillAcceptWithDetails: (details) => details.data.group != group,
+      onAcceptWithDetails: (details) =>
+          _dropIntoGroup(app, details.data, group),
+      builder: (context, candidate, _) =>
+          _connGroupRow(context, app, group, dropHighlight: candidate.isNotEmpty),
+    );
+  }
+
+  /// 成员行的放置目标:拖到分组展开后的任一成员行(连接 / 库 / 表)上,
+  /// 等同拖到分组头;[group] 为空串时是未分组段——拖到未分组兄弟上 = 移出分组。
+  /// 悬停时该行加强调色边框(DecoratedBox 不改变布局尺寸)。
+  Widget _memberDropTarget(
+    BuildContext context,
+    AppState app,
+    String group,
+    Widget row,
+  ) {
+    return DragTarget<ConnectionInfo>(
+      onWillAcceptWithDetails: (details) => details.data.group != group,
+      onAcceptWithDetails: (details) =>
+          _dropIntoGroup(app, details.data, group),
+      builder: (context, candidate, _) => candidate.isEmpty
+          ? row
+          : DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border.all(color: Tokens.of(context).accent, width: 1),
+              ),
+              child: row,
+            ),
+    );
+  }
+
+  /// 「移到未分组」放置条:拖动分组内连接时出现在树底部,释放即移出分组。
+  /// 与分组行的 DragTarget 平级(不嵌套),避免嵌套目标的落点判定歧义。
+  Widget _ungroupedDropZone(BuildContext context, AppState app) {
+    final t = Tokens.of(context);
+    return DragTarget<ConnectionInfo>(
+      onWillAcceptWithDetails: (details) => details.data.group.isNotEmpty,
+      onAcceptWithDetails: (details) => _dropIntoGroup(app, details.data, ''),
+      builder: (context, candidate, _) {
+        final hot = candidate.isNotEmpty;
+        return Container(
+          height: 30,
+          margin: const EdgeInsets.fromLTRB(6, 0, 6, 4),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: hot ? t.treeSelectedBg : null,
+            border: Border.all(color: hot ? t.accent : t.border, width: 1),
+            borderRadius: BorderRadius.circular(3),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.folder_outlined,
+                size: _treeIconSize,
+                color: hot ? t.accent : t.mutedForeground,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '释放以移到「未分组」',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w400,
+                    color: hot ? t.accent : t.mutedForeground,
+                    decoration: TextDecoration.none,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 连接分组节点:箭头 = 折叠 / 展开(纯视图状态,不触发任何加载);
+  /// 单击 = 选中并在右侧详情显示组内连接数;右键 = 分组菜单。
+  /// [dropHighlight] 为 true(有连接正拖到此分组上)时高亮整行作为放置反馈。
+  Widget _connGroupRow(
+    BuildContext context,
+    AppState app,
+    String group, {
+    bool dropHighlight = false,
+  }) {
     final c = AppColors.of(context);
     final key = 'g:$group';
     final expanded = !_collapsedGroups.contains(group);
@@ -1342,13 +1487,11 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         text: group,
         icon: Icons.folder,
         color: c.iconWarning,
-        // 实心文件夹 SVG:折叠 = 合上,展开 = 翻开露出里面的连接(与库/模式节点同源)
-        leading: UiIcon(
-          expanded ? kConnGroupIcon : kConnGroupClosedIcon,
-          size: _treeIconSize,
-        ),
+        // 分组图标不随展开/折叠切换,始终用同一个实心文件夹 SVG
+        leading: UiIcon(kConnGroupIcon, size: _treeIconSize),
         expanded: expanded,
         selected: sel == key,
+        dropHighlight: dropHighlight,
         kind: NodeKind.connGroup,
         onToggle: () => setState(() {
           expanded ? _collapsedGroups.add(group) : _collapsedGroups.remove(group);
@@ -1391,43 +1534,58 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         : DbTypeIcon(type: dbType, size: _treeIconSize, connected: connected);
 
     // 连接节点:展开时触发连接 + 拉取库列表
-    rows.add(
-      ValueListenableBuilder<String?>(
-        valueListenable: _selectedNode,
-        builder: (context, sel, _) => _node(
-          context,
-          key: conn.name,
-          depth: base,
-          text: conn.name,
-          icon: Icons.dns,
-          color: c.iconInfo,
-          expanded: _expanded.contains(conn.name),
-          selected: sel == conn.name,
+    final connEditing = _editingKey == conn.name;
+    final connRow = ValueListenableBuilder<String?>(
+      valueListenable: _selectedNode,
+      builder: (context, sel, _) => _node(
+        context,
+        key: conn.name,
+        depth: base,
+        text: conn.name,
+        icon: Icons.dns,
+        color: c.iconInfo,
+        expanded: _expanded.contains(conn.name),
+        selected: sel == conn.name,
+        kind: NodeKind.connection,
+        leading: connLeading,
+        // 箭头 / 灰色态跟随真实连接状态:查询页等外部入口打开连接后
+        // (驱动已建立,isConnected=true)即使本树未展开过也显示展开箭头;
+        // 与右键菜单「已连接=显示关闭连接」的判定口径保持一致
+        opened:
+            _opened.contains(conn.name) || manager.isConnected(conn.name),
+        onToggle: () => _toggleNode(
+          app: app,
+          conn: conn,
           kind: NodeKind.connection,
-          leading: connLeading,
-          // 箭头 / 灰色态跟随真实连接状态:查询页等外部入口打开连接后
-          // (驱动已建立,isConnected=true)即使本树未展开过也显示展开箭头;
-          // 与右键菜单「已连接=显示关闭连接」的判定口径保持一致
-          opened:
-              _opened.contains(conn.name) || manager.isConnected(conn.name),
-          onToggle: () => _toggleNode(
-            app: app,
-            conn: conn,
-            kind: NodeKind.connection,
-            key: conn.name,
-          ),
-          onSelect: () {
-            _selectNode(conn.name);
-            app.detailSelection.value =
-                SelectedNode(NodeKind.connection, conn.name, connection: conn.name);
-          },
-          onContextMenu: (position) =>
-              _showConnectionMenu(context, app, conn, position),
-          editing: _editingKey == conn.name,
-          onCommitRename: (input) => _commitConnectionRename(conn.name, input),
+          key: conn.name,
         ),
+        onSelect: () {
+          _selectNode(conn.name);
+          app.detailSelection.value =
+              SelectedNode(NodeKind.connection, conn.name, connection: conn.name);
+        },
+        onContextMenu: (position) =>
+            _showConnectionMenu(context, app, conn, position),
+        editing: connEditing,
+        onCommitRename: (input) => _commitConnectionRename(conn.name, input),
       ),
     );
+    // 按住连接行拖动到分组节点即完成分组;拖到底部「移到未分组」条可移出分组。
+    // 改名态不参与拖动。用 Draggable(按下即拖,与 Navicat 一致;桌面端列表
+    // 滚动靠滚轮,不与拖拽冲突);选中仍走 _node 内 Listener.onPointerDown
+    // (按下即选,零延迟),互不干扰。
+    rows.add(connEditing
+        ? connRow
+        : Draggable<ConnectionInfo>(
+            data: conn,
+            feedback: _dragFeedback(context, conn),
+            childWhenDragging: Opacity(opacity: 0.4, child: connRow),
+            onDragStarted: () => setState(() => _draggingConn = conn),
+            // onDragEnd 覆盖放置与取消两种结局;onDraggableCanceled 兜底
+            onDragEnd: (_) => setState(() => _draggingConn = null),
+            onDraggableCanceled: (_, __) => setState(() => _draggingConn = null),
+            child: connRow,
+          ));
     if (!_expanded.contains(conn.name)) return rows;
 
     // 尚未实现驱动的类型:展开仅提示,不发请求
@@ -2132,6 +2290,8 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     // 打开后恢复箭头和正常颜色。分组节点(noArrow)不受此参数影响
     bool opened = true,
     bool selected = false,
+    // 拖动放置反馈:有连接正拖到本行(分组)上方时,用强调色边框高亮整行
+    bool dropHighlight = false,
     Widget? leading,
     void Function(Offset position)? onContextMenu,
     // 就地改名态:文本换成 base-ui InlineEditor(Enter / 失焦提交,Esc 取消)
@@ -2176,7 +2336,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       },
       child: Container(
         height: 26,
-        color: selected ? t.treeSelectedBg : null,
+        decoration: BoxDecoration(
+          color: selected ? t.treeSelectedBg : null,
+          border: dropHighlight ? Border.all(color: t.accent, width: 1) : null,
+        ),
         padding: EdgeInsets.only(left: arrowLeft),
         child: Row(
           children: [

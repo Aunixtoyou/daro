@@ -165,6 +165,14 @@ class _TableDataPageState extends State<TableDataPage> {
   int? _selected;
   int? _selectedCol;
 
+  /// 多行选中(点行号列 + Ctrl 加选 / Shift 连选):
+  /// 非空时接管 DataGridView 的行底色,单行 `_selected` 让位。
+  /// 单元格选中(`_selectedCol != null`)与多行选中互斥,进入单元格即清空。
+  final Set<int> _selectedRows = {};
+
+  /// Shift 连选锚点(最后一次单击 / Ctrl 加选的行号)
+  int? _rowAnchor;
+
   /// 访问过的页缓存(页号 → 页数据):翻页往返秒开且保留本地修改;
   /// 排序 / 筛选 / 页大小变更 / 刷新时整体失效
   final Map<int, _PageState> _pageCache = {};
@@ -283,12 +291,26 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 非活动标签的表数据页会被销毁,同一时刻只有一个实例响应)
   bool _onKey(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
+    final ctrl = HardwareKeyboard.instance.isControlPressed;
     // Ctrl+S 快速保存
-    if (HardwareKeyboard.instance.isControlPressed &&
-        event.logicalKey == LogicalKeyboardKey.keyS) {
+    if (ctrl && event.logicalKey == LogicalKeyboardKey.keyS) {
       debugPrint('[TableData] Ctrl+S: dirty=$_dirty, saving=$_saving');
       if (_saving) return true;
       _applyEdits();
+      return true;
+    }
+    // Ctrl+C / Ctrl+V:仅在焦点位于本页且**未进入单元格编辑器**时接管。
+    // 编辑器内的 Ctrl+C/V 归文本框自己(复制/粘贴选中文本),不能拦。
+    if (ctrl &&
+        (event.logicalKey == LogicalKeyboardKey.keyC ||
+            event.logicalKey == LogicalKeyboardKey.keyV)) {
+      if (_editing != null) return false;
+      if (!_focusInPage) return false;
+      if (event.logicalKey == LogicalKeyboardKey.keyC) {
+        _copySelectedRows();
+      } else {
+        _pasteRowsFromClipboard();
+      }
       return true;
     }
     // Del:整行选中(未选列)→ 确认后删除行;单元格选中 → 清空为 NULL
@@ -311,11 +333,17 @@ class _TableDataPageState extends State<TableDataPage> {
     return false;
   }
 
-  /// Del 键:整行选中 → 删除行(带确认);单元格选中 → 清空该格为 NULL
+  /// Del 键:整行选中 → 删除行(带确认);多行选中 → 一次确认整批删除;
+  /// 单元格选中 → 清空该格为 NULL
   void _deleteKey() {
-    final sel = _selected;
     final pageData = _pageData;
-    if (pageData == null || sel == null || sel >= pageData.rows.length) return;
+    if (pageData == null) return;
+    if (_selectedRows.length > 1) {
+      _deleteRows(_selectedRows.toList()..sort());
+      return;
+    }
+    final sel = _selected;
+    if (sel == null || sel >= pageData.rows.length) return;
     final col = _selectedCol;
     if (col == null) {
       _deleteRowAt(sel);
@@ -359,6 +387,10 @@ class _TableDataPageState extends State<TableDataPage> {
         _columnSearch = '';
         _cellEditorCell = null;
         _cellController.clear();
+        _selected = null;
+        _selectedCol = null;
+        _selectedRows.clear();
+        _rowAnchor = null;
       });
       _load();
     }
@@ -509,6 +541,8 @@ class _TableDataPageState extends State<TableDataPage> {
         _editing = null;
         _selected = null;
         _selectedCol = null;
+        _selectedRows.clear();
+        _rowAnchor = null;
         _loading = false;
         _pageData = _PageState(
           originals: [for (final r in preview.rows) List<String>.of(r)],
@@ -646,6 +680,7 @@ class _TableDataPageState extends State<TableDataPage> {
   }
 
   /// 上报分页 / 记录位置到 AppState,状态栏显示"第 xx 条记录（共 xx 条）于第 x 页"
+  /// 多行选中时改显示「已选 N 行」(见 TablePageStatus.selectedRowCount)
   void _reportStatus() {
     final total = _totalRows;
     final (start, end) = _pageRange;
@@ -660,6 +695,7 @@ class _TableDataPageState extends State<TableDataPage> {
             currentRecord: record,
             page: _page + 1,
             pageSize: _pageSize,
+            selectedRowCount: _selectedRows.length,
           ),
         );
   }
@@ -682,6 +718,8 @@ class _TableDataPageState extends State<TableDataPage> {
         _pageData = cached;
         _selected = null;
         _selectedCol = null;
+        _selectedRows.clear();
+        _rowAnchor = null;
         _statusMessage = null;
       });
       _syncCellEditor();
@@ -692,6 +730,8 @@ class _TableDataPageState extends State<TableDataPage> {
       _page = page;
       _selected = null;
       _selectedCol = null;
+      _selectedRows.clear();
+      _rowAnchor = null;
     });
     _syncCellEditor();
     final fetched = await _fetchPage(page);
@@ -790,6 +830,10 @@ class _TableDataPageState extends State<TableDataPage> {
       _editing = null;
       _selected = pageData.rows.length - 1;
       _selectedCol = null;
+      _selectedRows
+        ..clear()
+        ..add(_selected!);
+      _rowAnchor = _selected;
     });
     _reportStatus();
   }
@@ -828,6 +872,53 @@ class _TableDataPageState extends State<TableDataPage> {
       pageData.originals.removeAt(row);
       _selected = null;
       _selectedCol = null;
+      _selectedRows.clear();
+      _rowAnchor = null;
+    });
+    _syncCellEditor();
+    _reportStatus();
+  }
+
+  /// 多行删除:一次确认后按**降序**移除,避免行号错位;
+  /// 原始行(≥0)登记到 [_deletedOriginals] 走 DELETE 分支,
+  /// 本地新增行(<0)直接丢弃即可
+  Future<void> _deleteRows(List<int> rowsAsc) async {
+    final pageData = _pageData;
+    if (pageData == null || rowsAsc.isEmpty) return;
+    final valid = rowsAsc
+        .where((r) => r >= 0 && r < pageData.rows.length)
+        .toList()
+      ..sort();
+    if (valid.isEmpty) return;
+    final base = _page * _pageSize;
+    final preview = valid.length <= 5
+        ? valid.map((r) => '${base + r + 1}').join(', ')
+        : '${base + valid.first + 1} … ${base + valid.last + 1}';
+    final result = await MessageBox.show(
+      context,
+      title: '删除记录',
+      message: '确定要删除选中的 ${valid.length} 行记录吗?($preview)\n'
+          '删除后点击「确认修改」或 Ctrl+S 才会写入数据库。',
+      type: MessageBoxType.question,
+      buttons: MessageBoxButtons.okCancel,
+    );
+    if (result != MessageBoxResult.ok || !mounted) return;
+    setState(() {
+      for (final r in valid.reversed) {
+        final id = pageData.rowIds[r];
+        if (id >= 0) {
+          _deletedOriginals[id] = List<String>.of(pageData.originals[r]);
+        }
+        pageData.rows.removeAt(r);
+        pageData.rowIds.removeAt(r);
+        pageData.originals.removeAt(r);
+      }
+      _dirty = true;
+      _editing = null;
+      _selected = null;
+      _selectedCol = null;
+      _selectedRows.clear();
+      _rowAnchor = null;
     });
     _syncCellEditor();
     _reportStatus();
@@ -845,6 +936,8 @@ class _TableDataPageState extends State<TableDataPage> {
       _editing = (row, dataCol);
       _selected = row;
       _selectedCol = dataCol;
+      _selectedRows.clear();
+      _rowAnchor = row;
     });
     _syncCellEditor();
     _reportStatus();
@@ -1015,18 +1108,46 @@ class _TableDataPageState extends State<TableDataPage> {
       _editing = null;
       _selected = null;
       _selectedCol = null;
+      _selectedRows.clear();
+      _rowAnchor = null;
     });
     _syncCellEditor();
     await _fetchPage(_page);
   }
 
   /// 选中整行(点击最左空白列)
+  /// Ctrl 加选 / 去选,Shift 从锚点连选,普通点击单选;
+  /// 与 Navicat 行号列语义一致
   void _selectRow(int index) {
     _pageFocusNode.requestFocus();
-    if (_selected == index && _selectedCol == null) return;
+    final pageData = _pageData;
+    if (pageData == null || index < 0 || index >= pageData.rows.length) return;
+    final kb = HardwareKeyboard.instance;
+    final ctrl = kb.isControlPressed;
+    final shift = kb.isShiftPressed;
     setState(() {
-      _selected = index;
       _selectedCol = null;
+      _editing = null;
+      if (shift && _rowAnchor != null) {
+        final a = _rowAnchor!;
+        final lo = a < index ? a : index;
+        final hi = a > index ? a : index;
+        if (!ctrl) _selectedRows.clear();
+        for (var r = lo; r <= hi; r++) {
+          _selectedRows.add(r);
+        }
+        _selected = index;
+      } else if (ctrl) {
+        if (!_selectedRows.remove(index)) _selectedRows.add(index);
+        _rowAnchor = index;
+        _selected = index;
+      } else {
+        _selectedRows
+          ..clear()
+          ..add(index);
+        _rowAnchor = index;
+        _selected = index;
+      }
     });
     _syncCellEditor();
     _reportStatus();
@@ -1041,10 +1162,14 @@ class _TableDataPageState extends State<TableDataPage> {
     final isEditingCell =
         editing != null && editing.$1 == row && editing.$2 == dataCol;
     if (!isEditingCell) _pageFocusNode.requestFocus();
-    if (_selected == row && _selectedCol == dataCol) return;
+    if (_selected == row &&
+        _selectedCol == dataCol &&
+        _selectedRows.isEmpty) return;
     setState(() {
       _selected = row;
       _selectedCol = dataCol;
+      _selectedRows.clear();
+      _rowAnchor = row;
     });
     _syncCellEditor();
     _reportStatus();
@@ -1234,6 +1359,8 @@ class _TableDataPageState extends State<TableDataPage> {
       mutate();
       _selected = null;
       _selectedCol = null;
+      _selectedRows.clear();
+      _rowAnchor = null;
     });
     await _load();
   }
@@ -2289,15 +2416,46 @@ class _TableDataPageState extends State<TableDataPage> {
     final rows = pageData.rows;
     final cell = rows[row][col];
     final column = _columns![col];
+    // 右键行是否落在多行选中范围内:决定「复制/删除」按几行显示
+    final inMulti = _selectedRows.length > 1 && _selectedRows.contains(row);
+    final nSel = inMulti ? _selectedRows.length : 1;
     return [
       MenuItem(
           text: '设置为空白字符串', onPressed: () => _setCell(row, col, '')),
       MenuItem(
           text: '设置为 NULL', onPressed: () => _setCell(row, col, 'NULL')),
-      MenuItem(text: '删除 记录', onPressed: () => _deleteRowAt(row)),
+      MenuItem(
+          text: inMulti ? '删除 $nSel 行记录' : '删除 记录',
+          onPressed: () =>
+              inMulti ? _deleteRows(_selectedRows.toList()..sort()) : _deleteRowAt(row)),
       const MenuSeparator(),
       MenuItem(
-          text: '复制', shortcut: 'Ctrl+C', onPressed: () => _copyText(cell)),
+          text: inMulti ? '复制 $nSel 行' : '复制行',
+          shortcut: 'Ctrl+C',
+          onPressed: () {
+            // 右键命中行若不在多行选中集合内,先把它设为唯一选中,
+            // 保证「右键哪行就复制哪行」的直觉语义
+            if (!inMulti && _selectedRows.length > 1) {
+              setState(() {
+                _selectedRows
+                  ..clear()
+                  ..add(row);
+                _selected = row;
+                _selectedCol = null;
+                _rowAnchor = row;
+              });
+            } else if (!inMulti && _selected != row) {
+              setState(() {
+                _selected = row;
+                _selectedCol = null;
+                _selectedRows
+                  ..clear()
+                  ..add(row);
+                _rowAnchor = row;
+              });
+            }
+            _copySelectedRows();
+          }),
       MenuItem(text: '复制为', children: [
         MenuItem(
             text: '记录（制表符分隔）',
@@ -2309,7 +2467,11 @@ class _TableDataPageState extends State<TableDataPage> {
             onPressed: () => _copyText(
                 '${_toCsv(_columns!)}\n${_toCsv(rows[row])}')),
       ]),
-      MenuItem(text: '粘贴', onPressed: () => _pasteToCell(row, col)),
+      MenuItem(
+          text: '粘贴行(追加为新增)',
+          shortcut: 'Ctrl+V',
+          onPressed: _pasteRowsFromClipboard),
+      MenuItem(text: '粘贴到单元格', onPressed: () => _pasteToCell(row, col)),
       MenuItem(text: '保存数据为...', onPressed: _openExportWizard),
       const MenuSeparator(),
       MenuItem(text: '排序', children: [
@@ -2444,6 +2606,102 @@ class _TableDataPageState extends State<TableDataPage> {
     if (text == null || text.isEmpty) return;
     // 只取首行(避免多行内容拆进多个单元格)
     _setCell(row, col, text.split('\n').first.trimRight());
+  }
+
+  // ── 多行复制 / 粘贴(Navicat 语义:Tab 分隔、一行一记录) ──────────
+  //
+  // 与表设计器 [ColumnRowClipboard] 同格式,便于「数据页 ↔ 设计器 ↔ Excel」
+  // 三向互通。粘贴一律追加为**新增行**(INSERT 分支),不覆盖已有记录 ——
+  // 与 Navicat「粘贴记录」的默认行为一致,避免误操作改写数据。
+
+  /// 当前应参与复制的行号集合(升序、去重、限本页范围内)
+  List<int> _copyRowIndices() {
+    final pageData = _pageData;
+    if (pageData == null) return const [];
+    final n = pageData.rows.length;
+    if (_selectedRows.isNotEmpty) {
+      final list = _selectedRows.where((r) => r >= 0 && r < n).toList()..sort();
+      return list;
+    }
+    final sel = _selected;
+    if (sel != null && sel >= 0 && sel < n) return [sel];
+    return const [];
+  }
+
+  /// 单元格文本 → 剪贴板安全值:Tab / 换行会破坏「一行一记录」结构,折成空格
+  String _clipCell(String v) => v.replaceAll(RegExp(r'[\t\r\n]+'), ' ');
+
+  /// Ctrl+C / 右键「复制 N 行」:按当前**可见列顺序**编码,一行一记录,
+  /// 单元格 Tab 分隔。隐藏列不参与(与「所见即所复制」一致)。
+  Future<void> _copySelectedRows() async {
+    final pageData = _pageData;
+    if (pageData == null) return;
+    final idx = _copyRowIndices();
+    if (idx.isEmpty) return;
+    final visible = _visibleCols;
+    final lines = <String>[
+      for (final r in idx)
+        [for (final c in visible) _clipCell(pageData.rows[r][c])].join('\t'),
+    ];
+    await Clipboard.setData(ClipboardData(text: lines.join('\n')));
+    if (!mounted) return;
+    setState(() =>
+        _statusMessage = '已复制 ${idx.length} 行到剪贴板');
+  }
+
+  /// Ctrl+V / 右键「粘贴行」:剪贴板按行解析,每行按 Tab 拆单元格,
+  /// 依**可见列顺序**填入新行末尾(隐藏列留空),整批走 INSERT 分支。
+  /// 单元格数超过可见列数则截断,不足则右侧补空。
+  Future<void> _pasteRowsFromClipboard() async {
+    final pageData = _pageData;
+    final columns = _columns;
+    if (pageData == null || columns == null) return;
+    final data = await Clipboard.getData('text/plain');
+    final text = data?.text;
+    if (!mounted) return;
+    if (text == null || text.trim().isEmpty) {
+      setState(() => _statusMessage = '剪贴板为空');
+      return;
+    }
+    final visible = _visibleCols;
+    final lines = text
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
+        .split('\n');
+    // 尾部空行不算记录(Excel 复制常带一个尾换行)
+    while (lines.isNotEmpty && lines.last.trim().isEmpty) {
+      lines.removeLast();
+    }
+    if (lines.isEmpty) {
+      setState(() => _statusMessage = '剪贴板里没有可粘贴的记录');
+      return;
+    }
+    final inserted = <int>[];
+    setState(() {
+      for (final line in lines) {
+        final cells = line.split('\t');
+        final row = List<String>.filled(columns.length, '');
+        for (var i = 0; i < visible.length && i < cells.length; i++) {
+          row[visible[i]] = cells[i];
+        }
+        pageData.rows.add(row);
+        pageData.originals.add(List<String>.filled(columns.length, ''));
+        pageData.rowIds.add(_nextNewId);
+        _nextNewId--;
+        inserted.add(pageData.rows.length - 1);
+      }
+      _dirty = true;
+      _editing = null;
+      _selectedCol = null;
+      _selectedRows
+        ..clear()
+        ..addAll(inserted);
+      _selected = inserted.last;
+      _rowAnchor = inserted.first;
+      _statusMessage = '已粘贴 ${inserted.length} 行为新增记录(未保存)';
+    });
+    _syncCellEditor();
+    _reportStatus();
   }
 
   /// 菜单项文本过长时截断
@@ -2808,6 +3066,9 @@ class _TableDataPageState extends State<TableDataPage> {
           _selected != null && _selectedCol == null && _selected! < visibleRows
               ? _selected
               : null,
+      selectedRows: _selectedRows.isEmpty
+          ? null
+          : {for (final r in _selectedRows) if (r < visibleRows) r},
       selectedCell: _selected != null &&
               selectedCol != null &&
               _selected! < visibleRows

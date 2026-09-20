@@ -147,6 +147,7 @@ class TablePageStatus {
     required this.currentRecord,
     required this.page,
     required this.pageSize,
+    this.selectedRowCount = 0,
   });
 
   /// 记录总数(null 表示尚未统计,如表数据页按需 COUNT 模式)
@@ -161,6 +162,10 @@ class TablePageStatus {
   /// 每页行数
   final int pageSize;
 
+  /// 多行选中数(>1 时状态栏改显示「已选 N 行」替代当前记录号;
+  /// 0 / 1 与旧行为一致,展示 currentRecord)
+  final int selectedRowCount;
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -168,11 +173,12 @@ class TablePageStatus {
           other.totalRows == totalRows &&
           other.currentRecord == currentRecord &&
           other.page == page &&
-          other.pageSize == pageSize;
+          other.pageSize == pageSize &&
+          other.selectedRowCount == selectedRowCount;
 
   @override
   int get hashCode =>
-      Object.hash(totalRows, currentRecord, page, pageSize);
+      Object.hash(totalRows, currentRecord, page, pageSize, selectedRowCount);
 }
 
 /// 详情面板当前跟随的选中节点(值相等即视为同一节点)。

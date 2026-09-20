@@ -71,12 +71,17 @@ class StatusBar extends StatelessWidget {
                     ),
                   ),
                   // 表数据页:记录位置信息(第 xx 条记录（共 xx 条）于第 x 页)
+                  // 多行选中时改显示「已选 N 行」,与 Navicat 状态栏一致
                   if (activeTabModel?.type == TabType.table &&
                       tableStatus != null) ...[
                     Text(
-                      '第 ${tableStatus.currentRecord} 条记录'
-                      '（共 ${tableStatus.totalRows ?? '?'} 条）'
-                      '于第 ${tableStatus.page} 页',
+                      tableStatus.selectedRowCount > 1
+                          ? '已选 ${tableStatus.selectedRowCount} 行'
+                              '（共 ${tableStatus.totalRows ?? '?'} 条）'
+                              '于第 ${tableStatus.page} 页'
+                          : '第 ${tableStatus.currentRecord} 条记录'
+                              '（共 ${tableStatus.totalRows ?? '?'} 条）'
+                              '于第 ${tableStatus.page} 页',
                       style: TextStyle(fontSize: 12, color: t.mutedForeground),
                     ),
                     const SizedBox(width: 12),

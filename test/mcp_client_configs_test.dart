@@ -80,12 +80,14 @@ void main() {
       expect(parseOf('generic')['mcpServers'], isNotNull);
     });
 
-    test('千问办公是单服务对象(表单粘贴,不套 mcpServers 外层)', () {
+    test('千问办公要 mcpServers 包裹 + streamable-http(对话框 JSON 页的形状)', () {
       final qwen = parseOf('qwen', withToken);
-      expect(qwen['name'], 'daro');
-      expect(qwen['url'], 'http://127.0.0.1:5231/mcp');
-      expect(qwen['type'], 'streamableHttp');
-      expect(qwen['headers'], {'Authorization': 'Bearer tk-abc'});
+      expect(qwen.keys, ['mcpServers']);
+      final server =
+          ((qwen['mcpServers'] as Map)['daro'] as Map).cast<String, dynamic>();
+      expect(server['type'], 'streamable-http');
+      expect(server['url'], 'http://127.0.0.1:5231/mcp');
+      expect(server['headers'], {'Authorization': 'Bearer tk-abc'});
     });
   });
 }

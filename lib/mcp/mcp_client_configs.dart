@@ -81,14 +81,15 @@ List<McpClientConfig> mcpClientConfigs(McpHttpSettings http) {
       id: 'qwen',
       label: '千问办公',
       filePath: '设置 → MCP 服务 → 自定义添加',
+      // 千问办公「添加自定义 MCP」的 JSON 页只认 mcpServers 包裹 + streamable-http;
+      // 平铺 name / type=streamableHttp 的形状导入不了。
       json: _encode({
-        'name': 'daro',
-        'type': 'streamableHttp',
-        'url': endpoint,
-        if (http.token.isNotEmpty) 'headers': {'Authorization': 'Bearer ${http.token}'},
+        'mcpServers': {
+          'daro': _server(endpoint, http.token, type: 'streamable-http'),
+        },
       }),
       notes: [
-        '在自定义 MCP 服务表单里粘贴:URL 与请求头分开填也可以。',
+        '在「添加自定义 MCP」的 JSON 页整段粘贴,导入后写入用户级 settings.json。',
         'daro 只监听回环地址时同机可用;跨机访问请在设置里绑地址并设置 Token。',
       ],
     ),

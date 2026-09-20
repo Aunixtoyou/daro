@@ -292,6 +292,95 @@ void main() {
       // 命中口径仍是连接名:「测试」分组因无可见子项而隐藏
       expect(app.filteredConnections.map((c) => c.name), ['甲']);
     });
+
+    testWidgets('按住连接拖到分组头:移入该分组', (tester) async {
+      final app = await pumpApp(tester)
+        ..addConnection(_conn('甲', group: '生产'))
+        ..addConnection(_conn('乙'));
+      await tester.pump();
+
+      final from = tester.getCenter(treeText('乙'));
+      final to = tester.getCenter(treeText('生产'));
+      await tester.drag(treeText('乙'), to - from);
+      await tester.pump();
+
+      expect(
+        app.connections.map((c) => '${c.name}:${c.group}'),
+        ['甲:生产', '乙:生产'],
+      );
+    });
+
+    testWidgets('拖到组内兄弟连接上:等同拖到分组头', (tester) async {
+      final app = await pumpApp(tester)
+        ..addConnection(_conn('甲', group: '生产'))
+        ..addConnection(_conn('乙'));
+      await tester.pump();
+
+      final from = tester.getCenter(treeText('乙'));
+      final to = tester.getCenter(treeText('甲'));
+      await tester.drag(treeText('乙'), to - from);
+      await tester.pump();
+
+      expect(
+        app.connections.map((c) => '${c.name}:${c.group}'),
+        ['甲:生产', '乙:生产'],
+      );
+    });
+
+    testWidgets('拖到未分组兄弟连接上:移出分组', (tester) async {
+      final app = await pumpApp(tester)
+        ..addConnection(_conn('甲', group: '生产'))
+        ..addConnection(_conn('乙'));
+      await tester.pump();
+
+      final from = tester.getCenter(treeText('甲'));
+      final to = tester.getCenter(treeText('乙'));
+      await tester.drag(treeText('甲'), to - from);
+      await tester.pump();
+
+      expect(
+        app.connections.map((c) => '${c.name}:${c.group}'),
+        ['甲:', '乙:'],
+      );
+      // 分组条目保留(允许空分组)
+      expect(app.groupNames, ['生产']);
+    });
+
+    testWidgets('拖动分组内连接时底部出现「未分组」放置条,释放即移出', (tester) async {
+      final app = await pumpApp(tester)
+        ..addConnection(_conn('甲', group: '生产'));
+      await tester.pump();
+
+      // 未拖动时放置条不存在
+      expect(find.textContaining('释放以移到'), findsNothing);
+
+      final gesture = await tester.startGesture(tester.getCenter(treeText('甲')));
+      await gesture.moveBy(const Offset(0, 30));
+      await tester.pump(); // 拖动开始 → 放置条出现
+      final strip = find.textContaining('释放以移到');
+      expect(strip, findsOneWidget);
+
+      await gesture.moveTo(tester.getCenter(strip));
+      await tester.pump();
+      await gesture.up();
+      await tester.pump();
+
+      expect(app.connections.single.group, '');
+      // 拖动结束后放置条消失
+      expect(strip, findsNothing);
+    });
+
+    testWidgets('拖动未分组连接时不出现「未分组」放置条', (tester) async {
+      await pumpApp(tester)..addConnection(_conn('乙'));
+      await tester.pump();
+
+      final gesture = await tester.startGesture(tester.getCenter(treeText('乙')));
+      await gesture.moveBy(const Offset(0, 30));
+      await tester.pump();
+      expect(find.textContaining('释放以移到'), findsNothing);
+      await gesture.up();
+      await tester.pump();
+    });
   });
 }
 

@@ -22,9 +22,8 @@ const String kSchemaIcon = 'assets/icons/ui/schema.svg';
 const String kSchemaClosedIcon = 'assets/icons/ui/schema_closed.svg';
 
 /// 连接树顶层「连接分组」节点图标:实心文件夹(参考 Navicat 的连接分组)。
-/// 折叠 = 合上的文件夹,展开 = 前面板翻开、露出里面的连接。
-const String kConnGroupIcon = 'assets/icons/ui/conn_group_open.svg';
-const String kConnGroupClosedIcon = 'assets/icons/ui/conn_group.svg';
+/// 展开 / 折叠状态不切换图标,始终用这一个。
+const String kConnGroupIcon = 'assets/icons/ui/conn_group.svg';
 
 /// 对象分类图标组件:渲染自绘彩色 SVG(与 Ribbon 分类按钮一致)。
 ///
