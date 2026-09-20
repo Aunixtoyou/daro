@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:meta/meta.dart';
 import 'package:mysql_client/exception.dart';
 import 'package:mysql_client/mysql_client.dart';
 
@@ -52,18 +54,22 @@ Future<MySQLConnection> openMysqlConnection({
   try {
     return await attempt(true);
   } catch (e) {
-    if (!_tlsUnavailable(e)) rethrow;
+    if (!mysqlTlsUnavailable(e)) rethrow;
   }
   try {
     return await attempt(false);
-  } on MySQLClientException catch (e) {
+  } on MySQLClientException catch (e, st) {
     // 服务器没开 SSL,账号又是 caching_sha2_password:两条路都走不通,
-    // 把库里的英文报错换成人能看懂的处置建议
+    // 把库里的英文报错换成人能看懂的处置建议(保留原始堆栈与底层报错)
     if (e.message.contains('caching_sha2_password')) {
-      throw MySQLClientException(
-        '账号使用 caching_sha2_password 认证,必须走加密连接,'
-        '但服务器未启用 SSL。请在服务器上开启 SSL,'
-        '或把该账号改为 mysql_native_password 认证。',
+      Error.throwWithStackTrace(
+        MySQLClientException(
+          '账号使用 caching_sha2_password 认证,必须走加密连接,'
+          '但服务器未启用 SSL。请在服务器上开启 SSL,'
+          '或把该账号改为 mysql_native_password 认证。'
+          '(原始错误:${e.message})',
+        ),
+        st,
       );
     }
     rethrow;
@@ -73,16 +79,23 @@ Future<MySQLConnection> openMysqlConnection({
 /// 失败是否属于「TLS 不可用」——只有这种情况才值得回退明文重试。
 ///
 /// 密码错误 / 权限不足(服务端已明确应答)必须原样抛出,否则会被一次明文
-/// 重试掩盖成误导性报错;主机不可达同理(重试只是白等一轮超时)。
-bool _tlsUnavailable(Object error) {
+/// 重试掩盖成误导性报错;主机不可达同理(重试只是白等一轮超时)——
+/// 包括 RST 类失败(SocketException)与防火墙 drop 端口类失败(TimeoutException)。
+/// `@visibleForTesting` 导出仅为回归钉住分类规则。
+@visibleForTesting
+bool mysqlTlsUnavailable(Object error) {
   if (error is MySQLServerException) return false;
   if (error is SocketException) return false;
+  // 超时抛的是 dart:async 的 TimeoutException(非 SocketException 子类),
+  // 与主机不可达同理:换明文重试解决不了,只会再等满一轮超时
+  if (error is TimeoutException) return false;
   if (error is MySQLClientException) {
     // 认证插件不匹配:换明文也解决不了
     return !error.message.contains('auth plugin') &&
         !error.message.contains('caching_sha2_password');
   }
-  // 其余(多为 TLS 握手失败:服务端只支持旧版 TLS / 证书异常等)按 TLS 不可用处理
+  // 其余按 TLS 不可用处理:握手期连接被关闭、TLS 版本/证书异常等
+  // (HandshakeException / TlsException 均继承 IOException,不是 SocketException 子类)
   return true;
 }
 
