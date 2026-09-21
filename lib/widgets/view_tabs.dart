@@ -6,8 +6,12 @@ import '../theme/app_theme.dart';
 import 'object_category_icon.dart';
 
 // 中部面板顶部的视图标签栏:默认展示"对象"页,表数据页/查询页追加为标签。
-// 复用 base-ui 的 TabControl:固定/自适应宽度、closable、滚动箭头、
+// 复用 base-ui 的 TabControl:自适应宽度、closable、滚动箭头、
 // 右键菜单、键盘方向键切换均由组件内置,本文件只负责装配标签数据。
+
+/// 文档标签条高度:比对话框内的标签(约 21)略高,好容纳 16px 图标。
+const double _kTabBarHeight = 26;
+
 class ViewTabs extends StatelessWidget {
   const ViewTabs({super.key});
 
@@ -24,57 +28,41 @@ class ViewTabs extends StatelessWidget {
         ? 0
         : app.tabs.indexWhere((tab) => tab.title == activeTab) + 1;
 
+    // 文档标签条:条高固定 26(比对话框标签略高,好容纳 16px 图标),
+    // 标签宽度交由 TabControl 按标题自适应 —— 不再平分撑满整条,
+    // 标签多到超出可视宽度时由组件内部弹出滚动箭头。
     return Container(
-      height: 32,
+      height: _kTabBarHeight,
       color: t.background,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // 动态标签宽度:标签少时平分可用宽度(上限 200),多时保持最小
-          // 80px 触发滚动箭头。宽度计算与 TabControl 内部 needScroll 判断
-          // 配合,行为与原自绘实现一致。
-          const objectTabWidth = 70.0;
-          const minTabWidth = 80.0;
-          const maxTabWidth = 200.0;
-          final availableForTabs = constraints.maxWidth - objectTabWidth;
-          final tabWidth = tabCount > 0
-              ? (availableForTabs / tabCount).clamp(minTabWidth, maxTabWidth)
-              : minTabWidth;
-
-          return TabControl(
-            initialIndex: activeIndex.clamp(0, tabCount),
-            // 延迟到下一帧再同步,避免鼠标事件处理期间触发 setState
-            onChanged: (index) => WidgetsBinding.instance
-                .addPostFrameCallback((_) => _activate(context, index)),
-            // 选中标签用 surface(与内容区同底),悬浮用 secondary,
-            // 与 app 标题栏/标签栏配色一致
-            tabBarColor: t.background,
-            selectedTabColor: t.surface,
-            hoverTabColor: t.secondary,
-            barHeight: 32,
-            tabWidth: tabWidth,
-            // 纯标签条场景:不需要内容区
-            contentPadding: EdgeInsets.zero,
-            tabs: [
-              // 固定的"对象"标签:不可关闭,无右键菜单
-              TabItem(
-                label: '对象',
-                width: objectTabWidth,
+      child: TabControl(
+        initialIndex: activeIndex.clamp(0, tabCount),
+        // 延迟到下一帧再同步,避免鼠标事件处理期间触发 setState
+        onChanged: (index) => WidgetsBinding.instance
+            .addPostFrameCallback((_) => _activate(context, index)),
+        // 选中标签用 surface(与内容区同底),悬浮用 secondary,
+        // 与 app 标题栏/标签栏配色一致
+        tabBarColor: t.background,
+        selectedTabColor: t.surface,
+        hoverTabColor: t.secondary,
+        barHeight: _kTabBarHeight,
+        // 纯标签条场景:不需要内容区
+        contentPadding: EdgeInsets.zero,
+        tabs: [
+          // 固定的"对象"标签:不可关闭,无右键菜单
+          const TabItem(label: '对象'),
+          for (final tab in app.tabs)
+            TabItem(
+              label: tab.title,
+              // 与连接树分组同一套图标,保证标签图标与分组一致:
+              // 查询 → 查询图;表数据 / 新建表 → 表图;设计页按对象分类取图
+              icon: ObjectCategoryIcon(
+                category: _tabCategory(tab),
+                size: 16,
               ),
-              for (final tab in app.tabs)
-                TabItem(
-                  label: tab.title,
-                  // 与连接树分组同一套图标,保证标签图标与分组一致:
-                  // 查询 → 查询图;表数据 / 新建表 → 表图;设计页按对象分类取图
-                  icon: ObjectCategoryIcon(
-                    category: _tabCategory(tab),
-                    size: 16,
-                  ),
-                  onClose: () => context.read<AppState>().closeTab(tab.title),
-                  contextMenuItems: _tabMenuItems(context, tab.title),
-                ),
-            ],
-          );
-        },
+              onClose: () => context.read<AppState>().closeTab(tab.title),
+              contextMenuItems: _tabMenuItems(context, tab.title),
+            ),
+        ],
       ),
     );
   }

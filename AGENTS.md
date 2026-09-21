@@ -144,52 +144,66 @@ daro/
 
 ### 第一层：AppPalette / Tokens（应用语义色板）
 
-定义在 `lib/theme/app_theme.dart`。这是应用的**主**主题系统，包含 应用特有的语义色（`connIcon`、`schemaIcon`、`folderIcon`、`tableIcon` 等）。
+定义在 `lib/theme/app_theme.dart`。这是应用的**主**主题系统，共 16 个通用语义色，
+按抽象层级命名（底色 / 前景 / 交互 / 线条），**不绑定具体组件**；
+业务定制色（图标 / 头像等）在 `AppColors` 里独立管理，不参与主题定制弹窗。
 
 ```dart
 // 取色方式
 final t = Tokens.of(context);
 Container(color: t.surface);
-Text('hello', style: TextStyle(color: t.textPrimary));
+Text('hello', style: TextStyle(color: t.foreground));
 ```
+
+> 明亮主题是**纸白**配色：内容纯白，铬件（`surface` / `control`）与次级底（`secondary`）
+> 只保留两级极浅灰，状态栏 `statusBar` 不得比 `secondary` 更深。
+> 历史坑：0.5 及更早版本同一屏叠了 5 档互不相同的浅灰（`#F3F3F3` 铬件 /
+> `#E7E7E7` 状态栏 / `#E0E0E0` 分割线），整窗观感发灰发脏。
+> 需要加深某块区域时**先问是不是层级问题**，不要为单个组件单独加深一档。
+> 约束由 `test/theme_palette_test.dart` 守护。
 
 ### 第二层：DesktopTokens / TokenScope（base_ui_flutter 令牌）
 
 `base_ui_flutter` 组件库使用自己的 `DesktopTokens` 系统。通过 `AppPalette.toDesktopTokens()` 桥接方法，将应用色板映射到 `DesktopTokens` 字段，使 `base_ui_flutter` 组件自动跟随应用主题。
 
 ```dart
-// 在 main.dart 中
-home: Builder(
-  builder: (context) {
-    final brightness = Theme.of(context).brightness;
-    final palette = brightness == Brightness.dark
-        ? AppTheme.dark
-        : AppTheme.light;
-    return TokenScope(
-      tokens: palette.toDesktopTokens(),
-      child: const MainPage(),
-    );
-  },
-),
+// 在 main.dart 中（TokenScope 挂在 MaterialApp 之上，覆盖 Dialog / Overlay）
+return TokenScope(
+  tokens: palette.toDesktopTokens(),   // palette = app.effectiveLight / effectiveDark
+  child: MaterialApp(theme: buildAppTheme(Brightness.light, app.effectiveLight), ...),
+);
 ```
 
 ### 桥接映射
 
 | AppPalette 字段 | DesktopTokens 字段 | 用途 |
 |---|---|---|
-| `selectedBg` | `primaryColor` | 选中 / 焦点色 |
-| `menuBar` | `backgroundColor` | 窗口背景 |
-| `textPrimary` | `foregroundColor` | 主文字 |
+| `accent` | `primaryColor` / `ringColor` / `accentColor` | 选中 / 焦点 / 强调 |
+| `background` | `backgroundColor` / `surfaceColor` / `cardColor` | 窗口与可编辑底（纯白） |
+| `control` | `controlColor` | ribbon / 按钮面 |
+| `surface` | `controlDisabledColor` | 禁用控件面 |
+| `secondary` | `secondaryColor` | 标签条 / 内嵌带 |
+| `popover` | `popoverColor` | 弹出菜单 |
+| `foreground` | `foregroundColor` / `secondaryForegroundColor` / `cardForegroundColor` / `popoverForegroundColor` | 主文字 |
+| `mutedForeground` | `mutedForegroundColor` | 次要文字 |
+| `disabledForeground` | `disabledForegroundColor` | 禁用文字 |
+| `accentForeground` | `accentForegroundColor` | 选中态文字 |
+| `muted` | `mutedColor` | 柔和底 / 行号槽 |
 | `border` | `borderColor` | 控件边框 |
-| `surface` | `surfaceColor` / `cardColor` | 面板背景 |
-| `ribbonBar` | `controlColor` | 按钮 / 工具栏 |
-| `popupBg` | `popoverColor` | 弹出菜单 |
-| `textSecondary` | `mutedForegroundColor` | 次要文字 |
-| `tabBar` | `secondaryColor` | 标签栏 |
-| `gutterBg` | `mutedColor` | 行号槽 |
-| `textOnSelected` | `accentForegroundColor` | 选中态文字 |
 
+> `controlHoverColor` / `controlPressedColor` 由 `control` 按 8% / 13% 黑叠加派生；
+> `hoverOverlayColor` / `pressedOverlayColor` 按 `background` 亮度自适应（亮色加深、暗色提亮）。
+>
 > **新增 DesktopTokens 字段时**：在 `toDesktopTokens()` 中补充映射。
+
+### 定制色板持久化与迁移
+
+- 用户定制落盘在 `theme_custom.json`（`lib/data/theme_store.dart`）。
+- **加载时会丢弃"等于任一版内置默认值"的色板**（`AppTheme.isBuiltInDefault`，
+  依赖 `AppPalette` 的深比较）：老版本只要在主题弹窗里点过「应用」就会把当时的
+  默认值写成"定制"，不识别出来就会把新版内置配色一直盖住。
+- 因此**改内置默认颜色后，必须把旧值保留为 `AppTheme.lightLegacy` 之类的常量**，
+  否则老用户的"伪定制"会继续生效（表现为改了 `AppTheme.light` 却看不到变化）。
 
 ---
 

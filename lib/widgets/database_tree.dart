@@ -299,7 +299,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         message: '已存在同名分组「$name」(不区分大小写)。',
         type: MessageBoxType.error,
         okText: '知道了',
-        tokens: Tokens.read(context).toDesktopTokens(),
+        tokens: Tokens.read(context).desktopTokensFor(context),
       );
       return;
     }
@@ -380,7 +380,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       message: '重命名失败:\n${outcome.error}',
       type: MessageBoxType.error,
       okText: '知道了',
-      tokens: Tokens.read(context).toDesktopTokens(),
+      tokens: Tokens.read(context).desktopTokensFor(context),
     );
   }
 
@@ -515,7 +515,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         buttons: MessageBoxButtons.yesNo,
         yesText: '删除分组',
         noText: '取消',
-        tokens: Tokens.read(context).toDesktopTokens(),
+        tokens: Tokens.read(context).desktopTokensFor(context),
       );
       if (confirm != MessageBoxResult.yes || !mounted) return;
     }
@@ -1596,12 +1596,15 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       ),
     );
     // 按住连接行拖动到分组节点即完成分组;拖到底部「移到未分组」条可移出分组。
-    // 改名态不参与拖动。用 Draggable(按下即拖,与 Navicat 一致;桌面端列表
-    // 滚动靠滚轮,不与拖拽冲突);选中仍走 _node 内 Listener.onPointerDown
-    // (按下即选,零延迟),互不干扰。
+    // 改名态不参与拖动。用 ThresholdDraggable 而非 Draggable:后者在本行是竞技场
+    // 唯一识别器时,pointer down 就被判接受,onDragStarted 立刻触发——选中 /
+    // 双击打开连接都会闪一下拖拽浮层与底部放置条(桌面端鼠标拖拽源基本都是这种
+    // 唯一成员情形;且框架对鼠标的起手容差只有 1px,手抖也算拖)。
+    // ThresholdDraggable 要求位移超过 4px 才起手,选中仍走 _node 内
+    // Listener.onPointerDown(按下即选,零延迟),互不干扰。
     rows.add(connEditing
         ? connRow
-        : Draggable<ConnectionInfo>(
+        : ThresholdDraggable<ConnectionInfo>(
             data: conn,
             feedback: _dragFeedback(context, conn),
             childWhenDragging: Opacity(opacity: 0.4, child: connRow),

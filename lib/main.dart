@@ -78,7 +78,10 @@ class DbApp extends StatelessWidget {
         child: ChangeNotifierProvider<McpService>.value(
           value: app.mcp,
           child: TokenScope(
-            tokens: palette.toDesktopTokens(),
+            // 边框统一收成「1 设备像素」(见 AppPalette.desktopTokensFor):
+            // 参照的 Navicat 是原生窗口,边框恒为 1 物理像素,在 200% 缩放下
+            // 就是 0.5 逻辑像素;令牌默认的 1.0 会画成 2 物理像素,粗一倍。
+            tokens: palette.desktopTokensFor(context),
             child: MaterialApp(
               title: 'daro',
               debugShowCheckedModeBanner: false,

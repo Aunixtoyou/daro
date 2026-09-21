@@ -2209,8 +2209,6 @@ class _TableDataPageState extends State<TableDataPage> {
               tabBarColor: t.background,
               selectedTabColor: t.surface,
               hoverTabColor: t.secondary,
-              barHeight: 26,
-              tabWidth: 76,
               contentPadding: EdgeInsets.zero,
               tabs: [
                 TabItem(label: CellViewMode.text.label, child: _cellBodyText(t)),
@@ -3083,7 +3081,7 @@ class _TableDataPageState extends State<TableDataPage> {
         t.foreground.withValues(alpha: 0.06),
         t.background,
       ),
-      tokens: t.toDesktopTokens(),
+      tokens: t.desktopTokensFor(context),
       verticalScrollController: _vScrollController,
       // 网格行号即当前页内行号
       onRowSelected: _selectRow,

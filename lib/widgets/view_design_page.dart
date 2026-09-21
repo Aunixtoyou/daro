@@ -824,8 +824,6 @@ class _ViewDesignPageState extends State<ViewDesignPage> {
       ),
       child: TabControl(
         initialIndex: _panelTab,
-        barHeight: 24,
-        tabWidth: 56,
         contentPadding: EdgeInsets.zero,
         tabBarColor: t.secondary,
         selectedTabColor: t.surface,

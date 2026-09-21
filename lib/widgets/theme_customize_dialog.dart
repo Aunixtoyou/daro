@@ -25,10 +25,6 @@ class _ThemeCustomizeDialogState extends State<ThemeCustomizeDialog> {
   /// 供 _buildTabControl 约束 tab body 使用)。
   static const double _kBodyHeight = 480;
 
-  /// TabControl chrome 高度:标签条 31(未选中头 28 + 选中加高 2 + 面板顶线 1)
-  /// + 面板底边框 1。需配合 contentPadding: zero 计算。
-  static const double _kTabChromeHeight = 32;
-
   late AppPalette _draftLight;
   late AppPalette _draftDark;
   late Brightness _current;
@@ -82,7 +78,12 @@ class _ThemeCustomizeDialogState extends State<ThemeCustomizeDialog> {
     // 不能用 LayoutBuilder 测量:它与 DialogBox 的 IntrinsicHeight 冲突,
     // 会触发 "LayoutBuilder does not support returning intrinsic dimensions"
     // 断言(同 ConnectionFormPage 内 ComboBox 的修复方式)。
-    final bodyHeight = _kBodyHeight - _kTabChromeHeight;
+    // 标签条高度跟随字号自动推导(Navicat 风格紧凑条),正文高度 =
+    // 总高 - 标签条 - 面板底边线,向 [TabControl.stripHeight] 取值而不是
+    // 硬编码,避免组件度量一改这里就静默错位。
+    final tokens = t.desktopTokensFor(context);
+    final bodyHeight =
+        _kBodyHeight - TabControl.stripHeight(tokens) - tokens.borderWidth;
     return SizedBox(
       height: _kBodyHeight,
       child: TabControl(
@@ -151,7 +152,7 @@ class _ThemeCustomizeDialogState extends State<ThemeCustomizeDialog> {
       context: context,
       builder: (dialogCtx) => ColorDialog(
         selectedColor: field.get(draft),
-        tokens: t.toDesktopTokens(),
+        tokens: t.desktopTokensFor(context),
         onConfirm: (c) => Navigator.of(dialogCtx).pop(c),
         onCancel: () => Navigator.of(dialogCtx).pop(),
       ),

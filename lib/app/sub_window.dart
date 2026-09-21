@@ -288,7 +288,11 @@ Future<void> finishSubWindow(String channelName, {Map<String, Object?>? result})
 }
 
 /// 子窗口的 App 根:自带主题与 TokenScope,原生标题栏承担标题与关闭。
+///
+/// [context] 用于解析显示缩放(子窗口是另一个引擎,DPI 可能与被调用处不同,
+/// 所以让调用方把自己树上的 context 传进来,而不是在这里凭空取 devicePixelRatio)。
 Widget buildSubWindowAppRoot({
+  required BuildContext context,
   required String title,
   required AppPalette palette,
   required bool dark,
@@ -299,7 +303,8 @@ Widget buildSubWindowAppRoot({
   return Provider<AppPalette>.value(
     value: palette,
     child: TokenScope(
-      tokens: palette.toDesktopTokens(),
+      // 与主窗口同源的「1 设备像素」发丝边框
+      tokens: palette.desktopTokensFor(context),
       child: MaterialApp(
         title: title,
         debugShowCheckedModeBanner: false,

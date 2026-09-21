@@ -338,7 +338,7 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
           message: '配置文件已保存到:\n$path',
           type: MessageBoxType.info,
           okText: '知道了',
-          tokens: t.toDesktopTokens(),
+          tokens: t.desktopTokensFor(context),
         );
       }
     } catch (e) {
@@ -349,7 +349,7 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
           message: '$e',
           type: MessageBoxType.error,
           okText: '知道了',
-          tokens: t.toDesktopTokens(),
+          tokens: t.desktopTokensFor(context),
         );
       }
     }
@@ -374,7 +374,7 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
           message: '无法解析配置文件:$e',
           type: MessageBoxType.error,
           okText: '知道了',
-          tokens: t.toDesktopTokens(),
+          tokens: t.desktopTokensFor(context),
         );
       }
     }
@@ -492,7 +492,7 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
         message: plan.errors.join('\n'),
         type: MessageBoxType.warning,
         okText: '知道了',
-        tokens: Tokens.read(context).toDesktopTokens(),
+        tokens: Tokens.read(context).desktopTokensFor(context),
       );
     }
   }
@@ -540,7 +540,7 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
         buttons: MessageBoxButtons.yesNo,
         yesText: '执行部署',
         noText: '取消',
-        tokens: t.toDesktopTokens(),
+        tokens: t.desktopTokensFor(context),
         content: _DeployPreview(plan: plan, script: plan.deployScript()),
       );
       if (confirm != MessageBoxResult.yes || !mounted) return;
@@ -605,7 +605,7 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
             '${_failureText(report)}',
         type: MessageBoxType.error,
         okText: '知道了',
-        tokens: t.toDesktopTokens(),
+        tokens: t.desktopTokensFor(context),
       );
     }
   }
@@ -1025,7 +1025,6 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
           height: 250,
           child: TabControl(
             initialIndex: _reviewTab,
-            tabWidth: 96,
             onChanged: (i) => _reviewTab = i,
             tabs: [
               TabItem(label: 'DDL 比较', child: _ddlComparePane(t)),
@@ -1367,7 +1366,6 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
       // TabControl 只在初始 index 生效,改 initialIndex 不会切页。
       key: ValueKey('script_tabs_$_scriptTab'),
       initialIndex: _scriptTab,
-      tabWidth: 96,
       onChanged: (i) => _scriptTab = i,
       tabs: [
         TabItem(label: '部署脚本', child: _scriptPane(t, withHeader: true)),

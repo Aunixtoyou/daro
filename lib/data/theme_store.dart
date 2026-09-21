@@ -25,6 +25,9 @@ class ThemeStore {
   }
 
   /// 读取已定制的明 / 暗色板;文件不存在 / 损坏 / 无定制时返回 null。
+  ///
+  /// 若存下来的色板恰好等于某一版内置默认值,视为"从未真正定制"
+  /// (老版本在弹窗里点过应用就会留下这种文件),返回 null 让内置配色生效。
   Future<({AppPalette? light, AppPalette? dark})> load() async {
     try {
       final file = await _file();
@@ -34,8 +37,10 @@ class ThemeStore {
       AppPalette? parse(String key) {
         final v = json[key];
         if (v is! Map<String, dynamic>) return null;
-        return AppPalette.fromJson(v);
+        final palette = AppPalette.fromJson(v);
+        return AppTheme.isBuiltInDefault(palette) ? null : palette;
       }
+
       return (light: parse('light'), dark: parse('dark'));
     } catch (_) {
       // 配置损坏不应阻止应用启动,按无定制处理

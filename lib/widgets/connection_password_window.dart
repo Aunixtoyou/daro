@@ -100,6 +100,7 @@ class ConnectionPasswordWindowApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return buildSubWindowAppRoot(
+      context: context,
       title: connectionPasswordTitle(conn),
       palette: palette,
       dark: dark,
