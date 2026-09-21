@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
@@ -86,7 +87,106 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   AppState? _listenedApp;
 
   void _onManagerChanged() {
+    // 关键:进入 loading 的时刻记在这里而不是 build 里。加载比一帧还短时,
+    // loading 期间根本不会有任何 build,只有通知是无条件到达的。
+    _recordLoadingEntries();
     if (mounted) setState(() {});
+  }
+
+  // ── 「打开中」指示器的最小可见时长 ──────────────────────────────
+  // 本地库(或已建连的会话)「打开」常在 1~2 帧内跑完:状态 loading→loaded
+  // 的整个窗口比一帧(16ms)还短,转圈指示器一次都来不及绘制,用户看到的
+  // 就是子级凭空冒出来。给指示器一个最小停留时长,让「打开中」真正可感知;
+  // 只延长视觉呈现,不拖慢真实数据。
+
+  /// 转圈指示器至少停留这么久才会收起
+  static const Duration kMinSpinnerVisible = Duration(milliseconds: 320);
+
+  /// 节点 key → 该节点进入 loading 的时刻(只记首次,重复刷新不重置)
+  final Map<String, DateTime> _loadingSince = {};
+
+  /// 已触发「打开动作」但还没进入 loading 的节点(典型:正在等密码补录弹窗)。
+  /// 「打开中」从触发动作那一刻就转起来,而不是等密码填完才开始。
+  final Set<String> _pendingOpening = {};
+
+  /// 标记已触发打开动作:指示器从这一刻开始转(密码弹窗等待期也算打开中)
+  void _markOpening(String key) {
+    if (!mounted) return;
+    setState(() => _pendingOpening.add(key));
+  }
+
+  /// 打开动作结束(成功转由 loading 接管 / 用户取消 / 失败):撤下挂起态
+  void _clearOpening(String key) {
+    if (!mounted) return;
+    setState(() => _pendingOpening.remove(key));
+  }
+
+  /// 标记「打开中」并**等这一帧真正画完**再返回。
+  ///
+  /// 紧跟其后的动作是密码补录:桌面端要拉起独立的系统窗口(新的 Flutter
+  /// engine),在 Windows 上会占用主线程数百毫秒。若不等这一帧上屏就开窗口,
+  /// 转圈会被这个重活挤到后面,和弹窗一起「卡」一下才冒出来——看起来就是
+  /// 点了没反应。先让指示器画出来,后续再重也不影响它已经可见。
+  Future<void> _beginOpening(String key) async {
+    if (!mounted) return;
+    _markOpening(key);
+    await WidgetsBinding.instance.endOfFrame;
+  }
+
+  /// 节点 key → 到点收起指示器的定时器
+  final Map<String, Timer> _minSpinnerTimers = {};
+
+  /// 扫描当前处于 loading 的节点,补记它们的进入时刻。
+  /// 由 [_onManagerChanged] 调用——通知独立于帧,快于一帧的加载也能被记到。
+  void _recordLoadingEntries() {
+    final app = _listenedApp;
+    if (app == null) return;
+    final manager = app.connectionManager;
+    final now = DateTime.now();
+    for (final conn in app.connections) {
+      final dbState = manager.databaseStateOf(conn.name);
+      if (dbState.status == LoadStatus.loading) {
+        _loadingSince[conn.name] ??= now;
+      }
+      for (final db in dbState.databases) {
+        final dbKey = '${conn.name}|$db';
+        if (manager.tableStateOf(conn.name, db).status == LoadStatus.loading) {
+          _loadingSince[dbKey] ??= now;
+        }
+        for (final schema in manager.schemaStateOf(conn.name, db).schemas) {
+          final sKey = '$dbKey|$schema';
+          if (manager.tableStateOf(conn.name, db, schema: schema).status ==
+              LoadStatus.loading) {
+            _loadingSince[sKey] ??= now;
+          }
+        }
+      }
+    }
+  }
+
+  /// 是否显示转圈指示器:
+  /// - [loading] 为真 → 立即显示(顺带补记进入时刻,兜底未走通知的路径);
+  /// - 加载已结束但停留不足 [kMinSpinnerVisible] → 继续显示,到点自动重建收起。
+  bool _showSpinner(String key, bool loading) {
+    if (loading) {
+      _minSpinnerTimers.remove(key)?.cancel();
+      _loadingSince[key] ??= DateTime.now();
+      return true;
+    }
+    final since = _loadingSince[key];
+    if (since == null) return false;
+    final elapsed = DateTime.now().difference(since);
+    if (elapsed >= kMinSpinnerVisible) {
+      _loadingSince.remove(key);
+      return false;
+    }
+    // 还没停留够:补一个到点收起的定时器(只排一次,避免重复重建时被顶掉)
+    _minSpinnerTimers[key] ??= Timer(kMinSpinnerVisible - elapsed, () {
+      _minSpinnerTimers.remove(key);
+      _loadingSince.remove(key);
+      if (mounted) setState(() {});
+    });
+    return true;
   }
 
   /// Ribbon 快速切换时:仅联动选中当前上下文库对应的分组节点,
@@ -1092,12 +1192,20 @@ class _DatabaseTreeState extends State<DatabaseTree> {
 
   /// 展开连接节点:类型需要密码且未保存时先弹窗补录,确认后再展开节点并
   /// 懒加载库列表。用户取消密码输入(或环境已卸载)时整次展开作废——不展开、
-  /// 不标记已打开、不记日志,连接节点因此不会残留「加载中...」。
+  /// 不标记已打开、不记日志,转圈指示器也随之撤下。
+  ///
+  /// 「打开中」从触发动作那一刻就开始转(见 [_markOpening]):等密码弹窗的
+  /// 时间同样属于打开过程,不该出现「点了没反应」的空档。
   Future<void> _lazyExpandConnection(
       AppState app, ConnectionInfo conn) async {
+    _markOpening(conn.name);
     final target = await _ensurePassword(app, conn);
-    if (target == null || !mounted) return;
+    if (target == null || !mounted) {
+      _clearOpening(conn.name);
+      return;
+    }
     setState(() {
+      _pendingOpening.remove(conn.name);
       _expanded.add(conn.name);
       _opened.add(conn.name);
     });
@@ -1122,12 +1230,19 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       return;
     }
     // 需要密码但未保存时先弹窗补录,确认后再展开节点并连接。
-    // 用户取消则整次打开作废——不展开、不标记已打开,避免节点停在「加载中...」
+    // 用户取消则整次打开作废——不展开、不标记已打开,转圈指示器撤下。
+    // 指示器从本动作触发起就开始转(等密码弹窗的时间也算打开中)。
+    await _beginOpening(conn.name);
+    if (!mounted) return;
     final target = await _ensurePassword(app, conn);
-    if (target == null || !mounted) return;
+    if (target == null || !mounted) {
+      _clearOpening(conn.name);
+      return;
+    }
     _expandNode(conn.name);
     final (ok, message) =
         await app.connectionManager.forceExpandConnection(target);
+    _clearOpening(conn.name);
     if (!mounted) return;
     if (ok) {
       // 连接成功后标记为已打开并记录日志
@@ -1222,6 +1337,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   void dispose() {
     _listenedManager?.removeListener(_onManagerChanged);
     _listenedApp?.treeNavigate.removeListener(_onTreeNavigate);
+    for (final timer in _minSpinnerTimers.values) {
+      timer.cancel();
+    }
+    _minSpinnerTimers.clear();
     _selectedNode.dispose();
     _treeFocus.dispose();
     _searchController.dispose();
@@ -1557,6 +1676,12 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     final connLeading = dbType == null
         ? null
         : DbTypeIcon(type: dbType, size: _treeIconSize, connected: connected);
+    // 打开中:库列表正在拉取(展开或右键「打开连接」都会把状态置为 loading),
+    // 或已触发打开动作但还在等密码补录(见 [_pendingOpening])。
+    // 行首品牌图标整体换成转圈指示器。不看展开态——收起也照常反映进度
+    final connLoading = supported &&
+        (manager.databaseStateOf(conn.name).status == LoadStatus.loading ||
+            _pendingOpening.contains(conn.name));
 
     // 连接节点:展开时触发连接 + 拉取库列表
     final connEditing = _editingKey == conn.name;
@@ -1573,6 +1698,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         selected: sel == conn.name,
         kind: NodeKind.connection,
         leading: connLeading,
+        loading: _showSpinner(conn.name, connLoading),
         // 箭头 / 灰色态跟随真实连接状态:查询页等外部入口打开连接后
         // (驱动已建立,isConnected=true)即使本树未展开过也显示展开箭头;
         // 与右键菜单「已连接=显示关闭连接」的判定口径保持一致
@@ -1627,7 +1753,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     switch (dbState.status) {
       case LoadStatus.idle:
       case LoadStatus.loading:
-        rows.add(_hintNode(context, depth: base + 1, text: '加载中...'));
+        // 加载中不挂提示行:进度由连接行的行首图标转圈表达(见 _node 的 loading)
         return rows;
       case LoadStatus.error:
         rows.add(_hintNode(
@@ -1644,6 +1770,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
 
     for (final database in dbState.databases) {
       final dbKey = '${conn.name}|$database';
+      // 打开中:该库的模式列表与对象列表正在拉取(expandDatabase 二者一并加载),
+      // 行首库图标换成转圈指示器,取代原来挂在库节点下的「加载中...」提示行
+      final dbLoading =
+          manager.tableStateOf(conn.name, database).status == LoadStatus.loading;
       rows.add(
         ValueListenableBuilder<String?>(
           valueListenable: _selectedNode,
@@ -1665,6 +1795,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
               _opened.contains(dbKey) ? kDatabaseIcon : kDatabaseClosedIcon,
               size: _treeIconSize,
             ),
+            loading: _showSpinner(dbKey, dbLoading),
             onToggle: () => _toggleNode(
               app: app,
               conn: conn,
@@ -1700,6 +1831,11 @@ class _DatabaseTreeState extends State<DatabaseTree> {
           schemaState.schemas.isNotEmpty) {
         for (final schema in schemaState.schemas) {
           final schemaKey = '$dbKey|$schema';
+          // 打开中:该模式的对象列表正在拉取,行首模式图标换成转圈指示器
+          final schemaLoading = manager
+                  .tableStateOf(conn.name, database, schema: schema)
+                  .status ==
+              LoadStatus.loading;
           rows.add(
             ValueListenableBuilder<String?>(
               valueListenable: _selectedNode,
@@ -1721,6 +1857,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                   _opened.contains(schemaKey) ? kSchemaIcon : kSchemaClosedIcon,
                   size: _treeIconSize,
                 ),
+                loading: _showSpinner(schemaKey, schemaLoading),
                 onToggle: () => _toggleNode(
                   app: app,
                   conn: conn,
@@ -1783,7 +1920,8 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     switch (objState.status) {
       case LoadStatus.idle:
       case LoadStatus.loading:
-        rows.add(_hintNode(context, depth: groupDepth, text: '加载中...'));
+        // 加载中不挂提示行:对象列表(表 / 视图 / 函数)属父级(库 / 模式)的加载,
+        // 进度由父节点行首图标转圈表达(见 _node 的 loading);此处留空
         return rows;
       case LoadStatus.error:
         rows.add(_hintNode(
@@ -2095,7 +2233,8 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   Widget _objectIcon(ObjectCategory category) =>
       ObjectCategoryIcon(category: category, size: _objectIconSize);
 
-  /// 加载中 / 错误提示节点;isAction 为 true 时点击可重试
+  /// 错误 / 不可用提示节点(加载中已改由节点行首图标转圈表达,不再走这里);
+  /// isAction 为 true 时点击可重试
   Widget _hintNode(
     BuildContext context, {
     required int depth,
@@ -2321,6 +2460,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     // 拖动放置反馈:有连接正拖到本行(分组)上方时,用强调色边框高亮整行
     bool dropHighlight = false,
     Widget? leading,
+    // 打开中(正在拉取子级):行首图标整体换成转圈指示器(Navicat 风格)。
+    // 取代过去挂在节点下的「加载中...」提示行——加载进度体现在节点自身上,
+    // 不额外占一行,也不会在「展开了但加载没发起」时留下永久提示
+    bool loading = false,
     void Function(Offset position)? onContextMenu,
     // 就地改名态:文本换成 base-ui InlineEditor(Enter / 失焦提交,Esc 取消)
     bool editing = false,
@@ -2329,6 +2472,21 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     final t = Tokens.of(context);
     // 行左缩进 + 箭头 20px 热区(与下方占位宽度一致)
     final arrowLeft = 4.0 + depth * 14;
+    // leading 槽:加载中优先换成转圈指示器;否则用调用方按打开/关闭状态传好的
+    // 图标(连接 ON/OFF、库 DATABASE/CLOSE、模式 SCHEMA_ON/CLOSE);再否则回退到
+    // icon + color。槽宽固定为 _treeIconSize,换图标不影响文本对齐
+    final Widget leadingSlot = loading
+        ? const SizedBox(
+            width: _treeIconSize,
+            height: _treeIconSize,
+            child: Spinner(size: _treeIconSize),
+          )
+        : (leading ??
+            Icon(
+              icon,
+              size: _treeIconSize,
+              color: (!noArrow && !opened) ? t.mutedForeground : color,
+            ));
     return Listener(
       behavior: HitTestBehavior.opaque,
       onPointerDown: (event) {
@@ -2390,9 +2548,11 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                 ),
               ),
             const SizedBox(width: 4),
-            // leading 已由调用方按打开/关闭状态传入对应图标(如连接 ON/OFF、
-            // 库 DATABASE/CLOSE、模式 SCHEMA_ON/CLOSE),不再叠加半透明灰显
-            (leading ?? Icon(icon, size: _treeIconSize, color: (!noArrow && !opened) ? t.mutedForeground : color)),
+            // leadingSlot 已按打开/关闭状态与加载中状态定好:
+            // 加载中 → 转圈指示器;打开/关闭 → 调用方传入的 ON/OFF 图标
+            // (如连接 ON/OFF、库 DATABASE/CLOSE、模式 SCHEMA_ON/CLOSE),
+            // 不再叠加半透明灰显
+            leadingSlot,
             const SizedBox(width: 6),
             Expanded(
               child: editing
