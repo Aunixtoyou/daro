@@ -150,8 +150,18 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     String? schema,
   }) {
     final willExpand = !_expanded.contains(key);
+    if (!willExpand) {
+      _toggle(key); // 收起时无需加载
+      return;
+    }
+    // 连接节点可能需要补录密码(弹窗可被取消):「展开 + 标记已打开 + 记日志 +
+    // 拉库列表」整体延后到密码确认之后(见 [_lazyExpandConnection])。否则弹窗
+    // 一取消,节点就停在展开态且状态仍是 idle,树上留下永久「加载中...」。
+    if (kind == NodeKind.connection && hasDriver(conn)) {
+      _lazyExpandConnection(app, conn);
+      return;
+    }
     _toggle(key);
-    if (!willExpand) return; // 收起时无需加载
     // 标记为已打开(曾通过 SQL 获取过下级数据)
     _opened.add(key);
     // 状态栏记录打开操作
@@ -163,7 +173,9 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     });
     switch (kind) {
       case NodeKind.connection:
-        if (hasDriver(conn)) _lazyExpandConnection(app, conn);
+        // 有驱动的连接已在上面提前返回;此处只剩未实现驱动的类型,
+        // 展开后由树渲染「暂不支持该类型」提示,无需发请求
+        break;
       case NodeKind.database:
         if (database != null) {
           app.connectionManager.expandDatabase(conn, database);
@@ -1078,11 +1090,18 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         conn.copyWith(password: result.password);
   }
 
-  /// 首次展开连接节点:先补录密码再懒加载库列表;用户取消则不加载
+  /// 展开连接节点:类型需要密码且未保存时先弹窗补录,确认后再展开节点并
+  /// 懒加载库列表。用户取消密码输入(或环境已卸载)时整次展开作废——不展开、
+  /// 不标记已打开、不记日志,连接节点因此不会残留「加载中...」。
   Future<void> _lazyExpandConnection(
       AppState app, ConnectionInfo conn) async {
     final target = await _ensurePassword(app, conn);
     if (target == null || !mounted) return;
+    setState(() {
+      _expanded.add(conn.name);
+      _opened.add(conn.name);
+    });
+    app.logTreeAction('已打开连接「${conn.name}」');
     app.connectionManager.expandConnection(target);
   }
 
@@ -1091,10 +1110,8 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   /// 驱动不存活自动重连。成功树中显示最新库列表,失败弹窗明确报错。
   Future<void> _openConnectionNode(AppState app, ConnectionInfo conn) async {
     _selectNode(conn.name);
-    if (!_expanded.contains(conn.name)) {
-      setState(() => _expanded.add(conn.name));
-    }
     if (!hasDriver(conn)) {
+      _expandNode(conn.name);
       MessageBox.show(
         context,
         title: '打开连接',
@@ -1104,9 +1121,11 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       );
       return;
     }
-    // 需要密码但未保存时先弹窗补录,填完再连;用户取消则不开连接
+    // 需要密码但未保存时先弹窗补录,确认后再展开节点并连接。
+    // 用户取消则整次打开作废——不展开、不标记已打开,避免节点停在「加载中...」
     final target = await _ensurePassword(app, conn);
     if (target == null || !mounted) return;
+    _expandNode(conn.name);
     final (ok, message) =
         await app.connectionManager.forceExpandConnection(target);
     if (!mounted) return;
@@ -1123,6 +1142,12 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         okText: '知道了',
       );
     }
+  }
+
+  /// 展开指定节点(幂等);连接节点的展开一律在密码确认之后调用
+  void _expandNode(String key) {
+    if (!mounted || _expanded.contains(key)) return;
+    setState(() => _expanded.add(key));
   }
 
   /// 「编辑连接」:以现有配置预填连接向导弹窗,确认后更新连接。

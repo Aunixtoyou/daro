@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:base_ui_flutter/base_ui_flutter.dart';
 import '../app/app_state.dart';
+import '../app/mcp_service.dart';
 import '../theme/app_theme.dart';
 import '../data/mcp_policy_store.dart' show McpPolicyLoadStatus;
 import 'mcp_settings_dialog.dart';
@@ -584,12 +585,18 @@ class _HistoryPopup extends StatelessWidget {
 }
 
 /// MCP 状态指示器(M2):点击打开设置对话框
+///
+/// **必须 watch [McpService]** —— 启用开关、宿主起停、活动调用数都只由
+/// `McpService.notifyListeners` 通知,而外层 `StatusBar` 的 Selector 只订阅
+/// AppState 的展示字段(左右栏可见性 / 活动标签 / 分页状态)。早先这里写的是
+/// `context.read<AppState>().mcp`(取一次快照、不订阅),取消勾选「启用 MCP 服务」
+/// 不产生任何 AppState 变化,指示器便不再重建 —— 状态栏会一直停在「运行中」。
 class _McpIndicator extends StatelessWidget {
   const _McpIndicator();
 
   @override
   Widget build(BuildContext context) {
-    final mcp = context.read<AppState>().mcp;
+    final mcp = context.watch<McpService>();
     final t = Tokens.of(context);
 
     // 按策略启用/启动进度构建文案与图标
@@ -631,9 +638,9 @@ class _McpIndicator extends StatelessWidget {
             builder: (_) => McpSettingsDialog(),
           );
         },
-        child: Tooltip(
+        // Tooltip 属 AGENTS.md 明令禁止直接使用的 Material 控件,统一走 base-ui
+        child: WinToolTip(
           message: tooltipText,
-          waitDuration: const Duration(milliseconds: 200),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
