@@ -665,8 +665,6 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
               // 自渲染——TabControl 内容区是 shrink-wrap,不能承载 Expanded 子级)
               TabControl(
                 initialIndex: 0,
-                barHeight: 30,
-                tabWidth: 82,
                 tabBarColor: t.background,
                 selectedTabColor: t.surface,
                 hoverTabColor: t.secondary,
@@ -1725,19 +1723,14 @@ class _TableDesignerPageState extends State<TableDesignerPage> {
         _selTrigger >= 0 && _selTrigger < items.length ? items[_selTrigger] : null,
         (tr) => [
           // 属性面板内再分「常规 / 约束」两个子页(与参考工具一致)
-          SizedBox(
-            height: 26,
-            child: TabControl(
-              initialIndex: _triggerPropsTab,
-              barHeight: 24,
-              tabWidth: 62,
-              tabBarColor: t.surface,
-              selectedTabColor: t.background,
-              hoverTabColor: t.secondary,
-              contentPadding: EdgeInsets.zero,
-              onChanged: (i) => setState(() => _triggerPropsTab = i),
-              tabs: const [TabItem(label: '常规'), TabItem(label: '约束')],
-            ),
+          TabControl(
+            initialIndex: _triggerPropsTab,
+            tabBarColor: t.surface,
+            selectedTabColor: t.background,
+            hoverTabColor: t.secondary,
+            contentPadding: EdgeInsets.zero,
+            onChanged: (i) => setState(() => _triggerPropsTab = i),
+            tabs: const [TabItem(label: '常规'), TabItem(label: '约束')],
           ),
           ...(_triggerPropsTab == 0
               ? _triggerGeneralProps(t, tr)

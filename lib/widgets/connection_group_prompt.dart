@@ -22,7 +22,7 @@ Future<String?> promptGroupName(
     message: '分组只有一层;连接可随时在分组之间移动。',
     initialValue: initial,
     okText: okText,
-    tokens: Tokens.read(context).toDesktopTokens(),
+    tokens: Tokens.read(context).desktopTokensFor(context),
   );
   if (typed == null) return null;
   final name = typed.trim();
@@ -38,7 +38,7 @@ Future<String?> promptGroupName(
       message: '已存在同名分组「$name」(不区分大小写)。',
       type: MessageBoxType.error,
       okText: '知道了',
-      tokens: Tokens.read(context).toDesktopTokens(),
+      tokens: Tokens.read(context).desktopTokensFor(context),
     );
   }
   return null;

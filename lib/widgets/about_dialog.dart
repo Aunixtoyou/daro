@@ -30,7 +30,7 @@ class DaroAboutDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    final dt = t.toDesktopTokens();
+    final dt = t.desktopTokensFor(context);
 
     return DialogBox(
       title: '关于 daro',
@@ -166,7 +166,7 @@ class DaroAboutDialog extends StatelessWidget {
       title: '无法打开浏览器',
       message: '请在浏览器中访问:\n$url',
       buttons: MessageBoxButtons.ok,
-      tokens: Tokens.read(context).toDesktopTokens(),
+      tokens: Tokens.read(context).desktopTokensFor(context),
     );
   }
 }

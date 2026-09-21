@@ -523,18 +523,23 @@ class _ObjectPanelState extends State<ObjectPanel> {
     );
   }
 
-  /// 对象面板工具栏的 tokens:背景对齐顶部标题栏背景(t.surface),并据此
-  /// 派生 hover/pressed(暗色提亮、亮色加深),使整条与标题栏视觉一致。
+  /// 对象面板工具栏的 tokens:底色取**内容区同色**(t.background)而不是铬件灰。
+  ///
+  /// 面板宽度只有两百来逻辑像素,工具栏是铺满整宽的一条实心色带——用 t.surface
+  /// 时它在窄面板里视觉权重很高,整块面板读起来就"发灰"(实测同一屏里
+  /// 面板正文 99.5% 是 #FFFFFF,唯一压暗面板的就是这条带子)。
+  /// 改为与正文同色后,面板从标签条到列表都由发丝线分区、底色连成一张白纸,
+  /// hover / pressed 仍按该底色派生(暗色提亮、亮色加深),交互反馈不受影响。
   DesktopTokens _toolbarTokens(AppPalette t) {
-    final isDark = t.surface.computeLuminance() < 0.5;
+    final isDark = t.background.computeLuminance() < 0.5;
     final hoverBlend =
         isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.08);
     final pressedBlend =
         isDark ? Colors.white.withValues(alpha: 0.14) : Colors.black.withValues(alpha: 0.14);
-    return t.toDesktopTokens().copyWith(
-      controlColor: t.surface,
-      controlHoverColor: Color.alphaBlend(hoverBlend, t.surface),
-      controlPressedColor: Color.alphaBlend(pressedBlend, t.surface),
+    return t.desktopTokensFor(context).copyWith(
+      controlColor: t.background,
+      controlHoverColor: Color.alphaBlend(hoverBlend, t.background),
+      controlPressedColor: Color.alphaBlend(pressedBlend, t.background),
       // 尺寸令牌一并收紧:条高 = controlHeight + compactSpacing * 2 ≈ 28
       controlHeight: 22,
       compactSpacing: 3,

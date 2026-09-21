@@ -39,8 +39,12 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
   /// DialogBox 正文固定高度(与 build 里的 height 同源)。
   static const double _kBodyHeight = 520;
 
-  /// TabControl chrome 高度:标签条 + 面板底线(配合 contentPadding: zero)。
-  static const double _kTabChromeHeight = 32;
+  /// TabControl chrome 高度 = 标签条高度 + 页面面板底边线。
+  /// 标签条已改为按字号自动推导(Navicat 风格的紧凑条),所以这里向
+  /// [TabControl.stripHeight] 取值,不再硬编码 31 / 32 之类会漂移的数字。
+  /// 需配合 `contentPadding: zero` 使用。
+  static double _tabChromeHeight(DesktopTokens tokens) =>
+      TabControl.stripHeight(tokens) + tokens.borderWidth;
 
   late final McpService _mcp;
   final TextEditingController _hostCtl = TextEditingController();
@@ -126,7 +130,7 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
         message: '${reason ?? '策略未能写入磁盘'}\n$e',
         type: MessageBoxType.error,
         okText: '知道了',
-        tokens: Tokens.read(context).toDesktopTokens(),
+        tokens: Tokens.read(context).desktopTokensFor(context),
       );
     }
   }
@@ -195,7 +199,8 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
     final t = Tokens.of(context);
     final mcp = context.watch<McpService>();
     final policy = mcp.policy;
-    final bodyHeight = _kBodyHeight - _kTabChromeHeight;
+    // 标签条高度跟随字号自动推导,正文可用高度 = 总高 - 标签条 - 面板底线
+    final bodyHeight = _kBodyHeight - _tabChromeHeight(t.desktopTokensFor(context));
     return DialogBox(
       title: 'MCP 服务',
       width: 780,
@@ -209,22 +214,18 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
           tabs: [
             TabItem(
               label: '服务',
-              width: 92,
               child: _scroll(t, bodyHeight, _buildServiceTab(t, mcp, policy)),
             ),
             TabItem(
               label: '连接与模式',
-              width: 104,
               child: _scroll(t, bodyHeight, _buildConnectionTab(t, policy)),
             ),
             TabItem(
               label: '工具与限额',
-              width: 104,
               child: _scroll(t, bodyHeight, _buildToolTab(t, policy)),
             ),
             TabItem(
               label: '客户端配置',
-              width: 104,
               child: _scroll(t, bodyHeight, _buildClientTab(t, policy)),
             ),
           ],

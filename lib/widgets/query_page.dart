@@ -963,10 +963,9 @@ class _QueryPageState extends State<QueryPage> {
           _resultHeader(t),
           if (_outcomes.isNotEmpty) ...[
             // 头-only 模式 tab 条(内容区为下方 IndexedStack,保活各 tab 状态)
+            // 高度 / 宽度均由 TabControl 自适应(消息、结果 1..N 长短不一)
             TabControl(
               initialIndex: _panelTabIndex.clamp(0, _outcomes.length),
-              barHeight: 26,
-              tabWidth: 72,
               contentPadding: EdgeInsets.zero,
               tabBarColor: t.secondary,
               selectedTabColor: t.background,

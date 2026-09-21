@@ -130,6 +130,51 @@ class AppPalette {
         muted: muted ?? this.muted,
       );
 
+  /// 值相等:全部字段逐一比较。
+  ///
+  /// 用于识别"这份色板其实等于内置默认值"([AppTheme.isBuiltInDefault]),
+  /// 因此必须是深比较而非引用比较。
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AppPalette &&
+          other.background == background &&
+          other.surface == surface &&
+          other.control == control &&
+          other.secondary == secondary &&
+          other.statusBar == statusBar &&
+          other.popover == popover &&
+          other.foreground == foreground &&
+          other.mutedForeground == mutedForeground &&
+          other.disabledForeground == disabledForeground &&
+          other.accentForeground == accentForeground &&
+          other.accent == accent &&
+          other.highlight == highlight &&
+          other.border == border &&
+          other.divider == divider &&
+          other.gridLine == gridLine &&
+          other.muted == muted;
+
+  @override
+  int get hashCode => Object.hash(
+        background,
+        surface,
+        control,
+        secondary,
+        statusBar,
+        popover,
+        foreground,
+        mutedForeground,
+        disabledForeground,
+        accentForeground,
+        accent,
+        highlight,
+        border,
+        divider,
+        gridLine,
+        muted,
+      );
+
   /// 序列化为 字段名 -> #RRGGBB 的映射,用于本地持久化。
   Map<String, String> toJson() => {
         'background': _hex(background),
@@ -218,37 +263,88 @@ class AppPalette {
 
   /// 将本应用语义色板桥接到 [DesktopTokens],
   /// 使 base_ui_flutter 组件自动跟随当前明 / 暗主题。
-  DesktopTokens toDesktopTokens() => DesktopTokens.winForm.copyWith(
-        primaryColor: accent,
-        backgroundColor: background,
-        foregroundColor: foreground,
-        borderColor: border,
-        surfaceColor: background,
-        controlColor: control,
-        controlHoverColor: _blend(control, const Color(0x14000000)),
-        controlPressedColor: _blend(control, const Color(0x1F000000)),
-        controlDisabledColor: surface,
-        disabledForegroundColor: disabledForeground,
-        mutedColor: muted,
-        mutedForegroundColor: mutedForeground,
-        secondaryColor: secondary,
-        secondaryForegroundColor: foreground,
-        accentColor: accent,
-        accentForegroundColor: accentForeground,
-        cardColor: background,
-        cardForegroundColor: foreground,
-        popoverColor: popover,
-        popoverForegroundColor: foreground,
-        ringColor: accent,
-        // hover / pressed 叠加色必须明暗自适应:暗色提亮、亮色加深,
-        // 否则 base-ui 组件(按钮 / 列表行等)在暗色主题下 hover 不可见
-        hoverOverlayColor: background.computeLuminance() > 0.5
-            ? const Color(0x0F000000)
-            : const Color(0x14FFFFFF),
-        pressedOverlayColor: background.computeLuminance() > 0.5
-            ? const Color(0x1F000000)
-            : const Color(0x24FFFFFF),
-      );
+  ///
+  /// 只做颜色映射,**不含显示缩放** —— 渲染组件请用 [desktopTokensFor]。
+  DesktopTokens toDesktopTokens() {
+    final light = background.computeLuminance() > 0.5;
+
+    // ── 按钮(对齐 Windows 桌面按钮)────────────────────────────────────
+    // 尺寸(24 高 / 最小 73 宽)由 base-ui 的 winForm 预设给(VCL/WinForms
+    // 按钮的档位:24~25 高、75 宽,比编辑框高一档),这里只管配色。
+    //
+    // 面色朝"纸白"走:亮色主题直接用内容白(配 #F1F1F1 底条 = 参考图的
+    // #FDFDFD 压在 #F0F0F0 上),暗色主题在铬件色上提亮一档,按钮才浮得起来。
+    final buttonFace =
+        light ? background : _blend(control, const Color(0x14FFFFFF));
+    // 边线比通用控件边线深一档,补回面色变白后丢掉的轮廓感
+    final buttonBorder = light
+        ? _blend(border, const Color(0x19000000)) // #E7E7E7 → #D0D0D0
+        : _blend(border, const Color(0x33FFFFFF));
+
+    // 热态 / 按下态:桌面按钮的反馈是"面色染上强调色、边线换强调色",
+    // 而不是把中性面色压暗 —— 后者只能叠出灰,越悬停越脏(参考图实测
+    // 悬浮面 #E0EEF9 + 边 #0078D4,按下再深一档)。
+    //
+    // 亮色用参考图实测值钉死,刻意**不跟随**可定制的 accent:这是"桌面按钮
+    // 的样式",不是"当前强调色"(实测值同时等于"面色 + accent 12%",想让它
+    // 跟着 accent 走的用户把两条换成按 accent 混合即可)。
+    // 暗色没有参考图,按同一条规则(染 accent、按下再深一档)现算。
+    final hoverFace = light
+        ? const Color(0xFFE0EEF9)
+        : _blend(buttonFace, accent.withValues(alpha: 0.28));
+    final hoverBorder = light ? const Color(0xFF0078D4) : accent;
+    final pressedFace = light
+        ? const Color(0xFFB3D6F2)
+        : _blend(buttonFace, accent.withValues(alpha: 0.45));
+    final pressedBorder = light
+        ? const Color(0xFF006BBE)
+        : _blend(accent, const Color(0x40000000));
+
+    return DesktopTokens.winForm.copyWith(
+      primaryColor: accent,
+      backgroundColor: background,
+      foregroundColor: foreground,
+      borderColor: border,
+      surfaceColor: background,
+      controlColor: control,
+      controlHoverColor: _blend(control, const Color(0x14000000)),
+      controlPressedColor: _blend(control, const Color(0x1F000000)),
+      controlDisabledColor: surface,
+      disabledForegroundColor: disabledForeground,
+      buttonFaceColor: buttonFace,
+      buttonBorderColor: buttonBorder,
+      buttonHoverFaceColor: hoverFace,
+      buttonHoverBorderColor: hoverBorder,
+      buttonPressedFaceColor: pressedFace,
+      buttonPressedBorderColor: pressedBorder,
+      mutedColor: muted,
+      mutedForegroundColor: mutedForeground,
+      secondaryColor: secondary,
+      secondaryForegroundColor: foreground,
+      accentColor: accent,
+      accentForegroundColor: accentForeground,
+      cardColor: background,
+      cardForegroundColor: foreground,
+      popoverColor: popover,
+      popoverForegroundColor: foreground,
+      ringColor: accent,
+      // hover / pressed 叠加色必须明暗自适应:暗色提亮、亮色加深,
+      // 否则 base-ui 组件(按钮 / 列表行等)在暗色主题下 hover 不可见
+      hoverOverlayColor:
+          light ? const Color(0x0F000000) : const Color(0x14FFFFFF),
+      pressedOverlayColor:
+          light ? const Color(0x1F000000) : const Color(0x24FFFFFF),
+    );
+  }
+
+  /// 桥接后的 base-ui 令牌,并已按当前显示缩放把边框收成「1 设备像素」。
+  ///
+  /// 这是渲染 base-ui 组件时应该用的入口:参照的 Navicat 是原生窗口,边框恒为
+  /// 1 **物理**像素,在 200% 缩放下就是 0.5 逻辑像素;令牌默认的 1.0 会画成
+  /// 2 物理像素,看起来比原生窗口粗一倍。直接调 [toDesktopTokens] 会漏掉缩放,
+  /// 由 `test/desktop_tokens_bridge_test.dart` 守护。
+  DesktopTokens desktopTokensFor(BuildContext context) =>
+      toDesktopTokens().withHairlineBorders(context);
 
   /// Alpha-blend [overlay] onto [base].
   static Color _blend(Color base, Color overlay) =>
@@ -332,8 +428,46 @@ class AppColors {
 
 /// 明暗双主题色板定义
 class AppTheme {
-  /// 明亮主题:接近 VS Code Light 的浅色配色
+  /// 明亮主题:纸白配色(对齐 Navicat 等桌面数据库工具的通透观感)。
+  ///
+  /// 取色原则 —— 灰阶层级收紧为"白 + 两级极浅灰",不再各区域各自一档:
+  ///
+  /// | 层级 | 用途 | 值 |
+  /// |---|---|---|
+  /// | 内容 | 网格 / 编辑器 / 树 / 弹层 | `#FFFFFF` |
+  /// | 铬件 | 菜单栏 / ribbon / 面板工具栏 / 状态栏 | `#F8F8F8` |
+  /// | 次级 | 标签条 / 面板标题条 / 内嵌带 | `#F1F1F1` |
+  /// | 线条 | 边框 / 分隔线 / 网格线 | `#E7E7E7` / `#EFEFEF` |
+  ///
+  /// 历史坑:0.5 及更早版本用 `#F3F3F3` 做铬件、`#E7E7E7` 做状态栏、
+  /// `#E0E0E0` 做分割线,同一屏里叠了 5 档互不相同的灰,整窗观感发灰发脏。
+  /// 调整时请保持"层级数少、档位浅"这两条,不要为单个组件单独加深。
   static const light = AppPalette(
+    background: Color(0xffffffff),
+    surface: Color(0xfff8f8f8),
+    control: Color(0xfff8f8f8),
+    secondary: Color(0xfff1f1f1),
+    statusBar: Color(0xfff4f4f4),
+    popover: Color(0xffffffff),
+    foreground: Color(0xff1f1f1f),
+    mutedForeground: Color(0xff5f6368),
+    disabledForeground: Color(0xff9aa0a6),
+    accentForeground: Color(0xffffffff),
+    accent: Color(0xff2196F3),
+    highlight: Color(0xff42A5F5),
+    border: Color(0xffe7e7e7),
+    divider: Color(0xffefefef),
+    gridLine: Color(0xffefefef),
+    muted: Color(0xfff4f4f4),
+  );
+
+  /// 明亮主题的历史默认值(0.5 及更早,即上表里被替换掉的那一版)。
+  ///
+  /// 不参与任何渲染,只给 [isBuiltInDefault] 做判定用:老版本在用户打开
+  /// 主题定制弹窗并点过"应用"后,会把当时的**默认值**当成"用户定制"写进
+  /// theme_custom.json;若不识别出来,升级默认配色后它会一直把新配色盖住
+  /// (症状:改了 [light] 却看不到任何变化)。
+  static const lightLegacy = AppPalette(
     background: Color(0xffffffff),
     surface: Color(0xfff3f3f3),
     control: Color(0xfff3f3f3),
@@ -351,6 +485,13 @@ class AppTheme {
     gridLine: Color(0xffe3e3e3),
     muted: Color(0xfff3f3f3),
   );
+
+  /// [p] 是否就是某一版内置默认色板(当前版或历史版)。
+  ///
+  /// 命中的含义是"用户其实没定制过",加载时应丢弃、跟随 [light] / [dark]
+  /// 的内置值,否则内置配色升级将不会生效。
+  static bool isBuiltInDefault(AppPalette p) =>
+      p == light || p == dark || p == lightLegacy;
 
   /// 暗黑主题:沿用原版深色配色,与设计稿一致
   static const dark = AppPalette(

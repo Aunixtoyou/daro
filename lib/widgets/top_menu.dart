@@ -104,7 +104,7 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
     // 将应用语义色板桥接到 DesktopTokens,使 MenuStrip 跟随明 / 暗主题。
     // controlColor/borderColor 设为 surface:让菜单栏背景与整体一致,
     // 且 MenuStrip 自带底边框与背景同色而隐藏,整体无可见下边框。
-    final dt = appPalette.toDesktopTokens().copyWith(
+    final dt = appPalette.desktopTokensFor(context).copyWith(
       controlColor: appPalette.surface,
       borderColor: appPalette.surface,
       // hover / 打开态背景基于 surface 派生:暗色主题提亮、亮色主题加深,
@@ -370,7 +370,7 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
       message: '已导入 ${result.imported.length} 条连接,可在左侧连接树查看。'
           '$extra$groupNote',
       buttons: MessageBoxButtons.ok,
-      tokens: Tokens.read(context).toDesktopTokens(),
+      tokens: Tokens.read(context).desktopTokensFor(context),
     );
   }
 
@@ -397,7 +397,7 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
       message: '已把 ${result.exported} 条连接导出到\n${result.path.path}$extra\n'
           '在 Navicat 里用「文件 → 导入连接设置…」选择该文件即可。',
       buttons: MessageBoxButtons.ok,
-      tokens: Tokens.read(context).toDesktopTokens(),
+      tokens: Tokens.read(context).desktopTokensFor(context),
     );
   }
 
@@ -437,7 +437,7 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
       title: '问题反馈',
       message: '无法自动打开浏览器,请在浏览器中访问:\n$url',
       buttons: MessageBoxButtons.ok,
-      tokens: Tokens.read(context).toDesktopTokens(),
+      tokens: Tokens.read(context).desktopTokensFor(context),
     );
   }
 
