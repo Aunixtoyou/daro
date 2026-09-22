@@ -557,7 +557,7 @@ class PgsqlDriver implements DatabaseDriver {
           defaultValue: normaliseDefault(row[3]?.toString(), _dialect) ?? '',
           dimension: dims == 0 ? '' : '$dims',
           collation: _collationOf(row[6]?.toString()),
-          identityMode: switch (row[4]?.toString()) {
+          identityMode: switch (_text(row[4])) {
             'a' => 'ALWAYS',
             'd' => 'BY DEFAULT',
             _ => '',
@@ -686,9 +686,13 @@ class PgsqlDriver implements DatabaseDriver {
     }
 
     // ── 索引(排除约束支撑的索引已由上面作为约束展示) ────────
+    // indkey 是 int2vector,下标从 0 开始,而 pg_get_indexdef 的列号从 1 开始:
+    // 不 +1 会让首列拿到 0(= 整条索引定义原文),反查出的「字段」就是一句
+    // CREATE INDEX,部署时必然报 42703 column does not exist。
+    // (约束那边是直接 conkey[k.ord] 下标取数,0 基正好,无需偏移。)
     final idxResult = await conn.execute(
       'SELECT c.relname, am.amname, '
-      "(SELECT string_agg(pg_get_indexdef(i.indexrelid, k.ord, true), ',' "
+      "(SELECT string_agg(pg_get_indexdef(i.indexrelid, k.ord + 1, true), ',' "
       'ORDER BY k.ord) FROM generate_subscripts(i.indkey, 1) AS k(ord)), '
       'i.indisunique, '
       "(SELECT split_part(o, '=', 2) FROM unnest(c.reloptions) AS o "
@@ -778,7 +782,15 @@ class PgsqlDriver implements DatabaseDriver {
   }
 
   /// 标量值 → 字符串(null / 空统一为空串,供设计器“留空 = 不输出子句”)
-  static String _text(Object? v) => v?.toString() ?? '';
+  ///
+  /// `"char"`(oid 18,如 `contype` / `attidentity` / `relpersistence`)postgres
+  /// 驱动没有注册编解码器,取回来的是 [UndecodedBytes];它的 `toString()` 是
+  /// `Instance of 'UndecodedBytes'`,所有字母码分支都会静默落空(主键 / 外键 /
+  /// identity 全部消失)。必须走 `asString` 把字节按连接编码解出来。
+  static String _text(Object? v) {
+    if (v is UndecodedBytes) return v.asString;
+    return v?.toString() ?? '';
+  }
 
   /// 逗号分隔的列名串 → 列表(pg_get_indexdef 己按标识符规则加引号)
   static List<String> _nameList(String s) => s
