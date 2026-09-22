@@ -39,6 +39,16 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
   /// DialogBox 正文固定高度(与 build 里的 height 同源)。
   static const double _kBodyHeight = 520;
 
+  /// 「连接与模式」在标签列表里的下标(骨架屏的触发依据)。
+  static const int _kConnectionTabIndex = 1;
+
+  /// 骨架屏最短停留时间。
+  ///
+  /// 正文行列表改成懒建后通常一帧就绪;完全不留时间的话骨架屏只闪一帧,
+  /// 读起来是「界面抖了一下」而不是「正在准备」。120ms 够读懂占位,又短到
+  /// 不构成等待。
+  static const Duration _kSkeletonHold = Duration(milliseconds: 120);
+
   /// TabControl chrome 高度 = 标签条高度 + 页面面板底边线。
   /// 标签条已改为按字号自动推导(Navicat 风格的紧凑条),所以这里向
   /// [TabControl.stripHeight] 取值,不再硬编码 31 / 32 之类会漂移的数字。
@@ -69,6 +79,10 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
   /// 工具页的整批拒绝原因(比如只剩最后一个工具时不让再关)。
   String? _toolsNote;
 
+  /// 「连接与模式」页是否已就绪:首次切到该页先用骨架屏占位一瞬,再上真实正文。
+  bool _connectionReady = false;
+  Timer? _skeletonTimer;
+
   int _clientIndex = 0;
 
   @override
@@ -84,6 +98,7 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
   void dispose() {
     _mcp.removeListener(_onServiceChanged);
     _copyReset?.cancel();
+    _skeletonTimer?.cancel();
     _hostCtl.dispose();
     _portCtl.dispose();
     _tokenCtl.dispose();
@@ -113,6 +128,20 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
       _tokenCtl.text = http.token;
     }
     setState(() {});
+  }
+
+  /// 标签切换:首次切到「连接与模式」时,先把骨架屏留在屏上 [_kSkeletonHold],
+  /// 再把真实正文换上去。
+  ///
+  /// 这一页的列表是几百条连接,以前切换那一刻要一次性 mount 全部行,标签条与
+  /// 正文同帧才出得来 —— 用户看到的就是「点下去卡一下,然后内容整块冒出来」。
+  /// 现在切开:标签条立刻切换(骨架屏同帧上屏),正文随后再建。
+  void _onTabChanged(int index) {
+    if (index != _kConnectionTabIndex || _connectionReady) return;
+    _skeletonTimer?.cancel();
+    _skeletonTimer = Timer(_kSkeletonHold, () {
+      if (mounted) setState(() => _connectionReady = true);
+    });
   }
 
   // ── 保存 ───────────────────────────────────────────────────────────
@@ -211,6 +240,7 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
         height: _kBodyHeight,
         child: TabControl(
           contentPadding: EdgeInsets.zero,
+          onChanged: _onTabChanged,
           tabs: [
             TabItem(
               label: '服务',
@@ -218,7 +248,11 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
             ),
             TabItem(
               label: '连接与模式',
-              child: _scroll(t, bodyHeight, _buildConnectionTab(t, policy)),
+              // 首次进入先给骨架屏:标签条与骨架同帧上屏,几百行的列表推到
+              // 后面几帧再建,切页不再有「先卡一下才出来」的观感。
+              child: _connectionReady
+                  ? _connectionTab(t, policy, bodyHeight)
+                  : _connectionSkeleton(t, bodyHeight),
             ),
             TabItem(
               label: '工具与限额',
@@ -361,44 +395,133 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
 
   // ── Tab 2:连接与模式 ────────────────────────────────────────────────
 
-  List<Widget> _buildConnectionTab(AppPalette t, McpPolicy policy) {
+  /// 「连接与模式」页正文。
+  ///
+  /// 连接列表必须**懒建**:本机实测 384 条连接,每行是「复选框 + 两行文字 +
+  /// 下拉框」,一次性 mount 出来就是一次肉眼可见的卡顿。所以这一页不走
+  /// [_scroll] 的 `SingleChildScrollView + Column`,改成 `CustomScrollView`:
+  /// 固定头部 / 尾部各一个 `SliverToBoxAdapter`,中间的行列表交给 `SliverList`
+  /// 只造视口里的十几行 —— 切页与滚动都因此变顺。
+  Widget _connectionTab(AppPalette t, McpPolicy policy, double height) {
     final conns = context.watch<AppState>().connections;
     final orphans = _orphanNames(policy, conns);
-    return [
-      _field(t, '默认执行模式', ComboBox<String>(
-        items: const ['只读', '数据读写', '完全访问'],
-        value: policy.defaultMode.label,
-        onChanged: (v) => _save(policy.copyWith(defaultMode: _modeByLabel(v)),
-            reason: '默认模式未能写入:'),
-      ), description: _modeMatrix(policy)),
-      const SizedBox(height: 4),
-      CheckBox(
-        value: policy.connectionScopeAll,
-        label: '全部连接(含以后新增的)',
-        onChanged: (v) => _save(policy.copyWith(connectionScopeAll: v ?? true),
-            reason: '连接范围未能写入:'),
+    return SizedBox(
+      height: height,
+      child: CustomScrollView(
+        slivers: [
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            sliver: SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: _connectionHeader(t, policy, conns),
+              ),
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            sliver: SliverList.builder(
+              itemCount: conns.length,
+              itemBuilder: (_, i) => _connRow(t, policy, conns[i]),
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            sliver: SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: _connectionFooter(t, orphans, policy),
+              ),
+            ),
+          ),
+        ],
       ),
-      _hint(t, '取消勾选后只放行下面打勾的连接;未打勾的连接在任何模式下都不可见。'),
-      const SizedBox(height: 8),
-      if (conns.isEmpty) _line(t, '当前没有连接。', t.mutedForeground),
-      for (final c in conns) _connRow(t, policy, c),
-      if (orphans.isNotEmpty) ...[
-        const SizedBox(height: 8),
-        _line(t, '有 ${orphans.length} 条授权指向已不存在的连接:${orphans.join('、')}',
-            _kErrorColor),
-        Button(
-          text: '清理孤儿授权',
-          variant: ButtonVariant.ghost,
-          onPressed: () => _save(policy.copyWith(
-            connectionNames:
-                policy.connectionNames.where((n) => !orphans.contains(n)).toList(),
-            connections: policy.connections
-                .where((r) => !orphans.contains(r.connection))
-                .toList(),
-          ), reason: '清理未能写入:'),
+    );
+  }
+
+  /// 连接页固定头部(默认模式 / 连接范围),不参与懒建。
+  List<Widget> _connectionHeader(
+          AppPalette t, McpPolicy policy, List<ConnectionInfo> conns) =>
+      [
+        _field(t, '默认执行模式', ComboBox<String>(
+          items: const ['只读', '数据读写', '完全访问'],
+          value: policy.defaultMode.label,
+          onChanged: (v) => _save(policy.copyWith(defaultMode: _modeByLabel(v)),
+              reason: '默认模式未能写入:'),
+        ), description: _modeMatrix(policy)),
+        const SizedBox(height: 4),
+        CheckBox(
+          value: policy.connectionScopeAll,
+          label: '全部连接(含以后新增的)',
+          onChanged: (v) => _save(policy.copyWith(connectionScopeAll: v ?? true),
+              reason: '连接范围未能写入:'),
         ),
+        _hint(t, '取消勾选后只放行下面打勾的连接;未打勾的连接在任何模式下都不可见。'),
+        const SizedBox(height: 8),
+        if (conns.isEmpty) _line(t, '当前没有连接。', t.mutedForeground),
+      ];
+
+  /// 连接页固定尾部(孤儿授权提示),不参与懒建。
+  List<Widget> _connectionFooter(
+          AppPalette t, List<String> orphans, McpPolicy policy) =>
+      [
+        if (orphans.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          _line(t, '有 ${orphans.length} 条授权指向已不存在的连接:${orphans.join('、')}',
+              _kErrorColor),
+          Button(
+            text: '清理孤儿授权',
+            variant: ButtonVariant.ghost,
+            onPressed: () => _save(policy.copyWith(
+              connectionNames:
+                  policy.connectionNames.where((n) => !orphans.contains(n)).toList(),
+              connections: policy.connections
+                  .where((r) => !orphans.contains(r.connection))
+                  .toList(),
+            ), reason: '清理未能写入:'),
+          ),
+        ],
+      ];
+
+  /// 「连接与模式」页的骨架屏。
+  ///
+  /// 形状照着真实布局铺(一栏下拉 + 一行复选框 + 若干行「复选框 + 名称/地址
+  /// 两行 + 继承下拉」),落点与正文一致,换上去时不会跳位。
+  Widget _connectionSkeleton(AppPalette t, double height) {
+    Widget bar(double w, double h) => Skeleton(width: w, height: h, radius: 3);
+    return _scroll(t, height, [
+      bar(66, 12),
+      const SizedBox(height: 6),
+      // 模式下拉在正文里是整宽控件,占位也铺满,换上去时不跳位。
+      const Skeleton(height: 28, radius: 3),
+      const SizedBox(height: 14),
+      bar(160, 12),
+      const SizedBox(height: 6),
+      bar(300, 11),
+      const SizedBox(height: 14),
+      for (var i = 0; i < 8; i++) ...[
+        Row(children: [
+          bar(16, 16),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                bar(130, 12),
+                const SizedBox(height: 6),
+                bar(96, 10),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          bar(150, 24),
+        ]),
+        const SizedBox(height: 16),
       ],
-    ];
+    ]);
   }
 
   String _modeMatrix(McpPolicy policy) => switch (policy.defaultMode) {
@@ -557,30 +680,18 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
       _hint(t, 'agent 请求的行数越界时夹取到上限,不报错。'),
       const SizedBox(height: 6),
       _field(t, '查询超时(秒)', Row(children: [
-        Expanded(child: NumericUpDown(
-              value: policy.timeouts.readonlySecs.toDouble(),
-              min: 1,
-              max: 3600,
-              step: 5,
-              onChanged: (v) => _setTimeouts(policy, readonly: v.round()),
-            )),
-        SizedBox(width: 8, child: _hint(t, '只读')),
-        Expanded(child: NumericUpDown(
-              value: policy.timeouts.readWriteSecs.toDouble(),
-              min: 1,
-              max: 3600,
-              step: 5,
-              onChanged: (v) => _setTimeouts(policy, readWrite: v.round()),
-            )),
-        SizedBox(width: 8, child: _hint(t, '读写')),
-        Expanded(child: NumericUpDown(
-              value: policy.timeouts.fullSecs.toDouble(),
-              min: 1,
-              max: 3600,
-              step: 10,
-              onChanged: (v) => _setTimeouts(policy, full: v.round()),
-            )),
-        SizedBox(width: 8, child: _hint(t, '完全')),
+        _timeoutCell(t, '只读',
+            seconds: policy.timeouts.readonlySecs,
+            step: 5,
+            onChanged: (v) => _setTimeouts(policy, readonly: v.round())),
+        _timeoutCell(t, '读写',
+            seconds: policy.timeouts.readWriteSecs,
+            step: 5,
+            onChanged: (v) => _setTimeouts(policy, readWrite: v.round())),
+        _timeoutCell(t, '完全',
+            seconds: policy.timeouts.fullSecs,
+            step: 10,
+            onChanged: (v) => _setTimeouts(policy, full: v.round())),
       ]), description: 'SQLite / Access 没有服务端会话可取消:到点只能丢弃驱动实例并返回 QUERY_TIMEOUT。'),
       const SizedBox(height: 6),
       _pair(t, '并发专用连接', NumericUpDown(
@@ -776,6 +887,51 @@ class _McpSettingsDialogState extends State<McpSettingsDialog> {
       ),
     );
   }
+
+  /// 「查询超时(秒)」三个档位之一:前置短标签 + 数值框,三格等分整行宽度。
+  ///
+  /// 标签必须**前置**(「只读 30 / 读写 60 / 完全 300」):跟在数值框后面的话,
+  /// 读起来像是标注下一个档位。
+  Widget _timeoutCell(
+    AppPalette t,
+    String label, {
+    required int seconds,
+    required double step,
+    required ValueChanged<double> onChanged,
+  }) =>
+      Expanded(
+        child: Row(children: [
+          _inlineLabel(t, label),
+          Expanded(
+            child: NumericUpDown(
+              value: seconds.toDouble(),
+              min: 1,
+              max: 3600,
+              step: step,
+              onChanged: onChanged,
+            ),
+          ),
+        ]),
+      );
+
+  /// 控件行内的短标签(如「只读」)。
+  ///
+  /// **别用 `SizedBox(width: N)` 夹住它**:11.5 px 字号下「只读」实际字宽约 23 px,
+  /// 固定宽一旦给窄,`Text` 会竖排折成两行(约 32 px 高),超过控件行高后直接
+  /// 溢出画到行外 —— 表现就是标签糊在输入框上、文字重叠错位。横向间距交给
+  /// `Padding`,宽度让 `Text` 按内容自取。
+  Widget _inlineLabel(AppPalette t, String text) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Text(text,
+            softWrap: false,
+            maxLines: 1,
+            style: TextStyle(
+                fontSize: 11.5,
+                height: 1.4,
+                color: t.mutedForeground,
+                decoration: TextDecoration.none,
+                fontWeight: FontWeight.w400)),
+      );
 
   Widget _hint(AppPalette t, String text) => Padding(
         padding: const EdgeInsets.only(top: 2),
