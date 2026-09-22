@@ -141,6 +141,17 @@ class SqliteDriver implements DatabaseDriver {
   }
 
   @override
+  Future<List<String>> listSequences(String database, {String? schema}) async {
+    // SQLite 无独立序列对象(`AUTOINCREMENT` 靠内部 sqlite_sequence 表维护)
+    return const [];
+  }
+
+  @override
+  Future<SequenceDef?> readSequence(String database, String name,
+          {String? schema}) async =>
+      null;
+
+  @override
   Future<List<String>> listUsers(String database) async {
     // SQLite 为文件型数据库,无用户/角色管理
     return const [];

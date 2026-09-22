@@ -317,6 +317,65 @@ class SqlServerDriver implements DatabaseDriver {
     ];
   }
 
+  /// 序列:SQL Server 的序列是独立对象(与 `IDENTITY` 列属性不同),走 sys.sequences。
+  @override
+  Future<List<String>> listSequences(String database, {String? schema}) async {
+    final where = schema == null ? '' : "WHERE s.name = '${_literal(schema)}' ";
+    final r = await _runSql(
+      'SELECT q.name FROM ${_quoted(database)}.sys.sequences q '
+      'JOIN ${_quoted(database)}.sys.schemas s ON s.schema_id = q.schema_id '
+      '$where'
+      'ORDER BY q.name',
+    );
+    return [
+      for (final row in r.rows)
+        if (row['name'] != null) row['name'].toString(),
+    ];
+  }
+
+  @override
+  Future<SequenceDef?> readSequence(String database, String name,
+      {String? schema}) async {
+    final sch = schema ?? 'dbo';
+    // current_value 与 identity 一样只在**分发过**值之后才有意义(未用过为 NULL)。
+    final r = await _runSql(
+      'SELECT q.start_value, q.increment, q.minimum_value, q.maximum_value, '
+      'q.is_cycling, q.cache_size, q.current_value, t.name AS type_name '
+      'FROM ${_quoted(database)}.sys.sequences q '
+      'JOIN ${_quoted(database)}.sys.schemas s ON s.schema_id = q.schema_id '
+      'JOIN ${_quoted(database)}.sys.types t ON t.user_type_id = q.user_type_id '
+      "WHERE s.name = '${_literal(sch)}' AND q.name = '${_literal(name)}'",
+    );
+    if (r.rows.isEmpty) return null;
+    final row = r.rows.first;
+    String? at(String key) => row[key]?.toString();
+
+    final dataType = at('type_name');
+    final start = at('start_value');
+    final inc = at('increment') ?? '1';
+    final min = at('minimum_value');
+    final max = at('maximum_value');
+    final cycle =
+        (at('is_cycling') ?? '').toLowerCase() == 'true' || at('is_cycling') == '1';
+    final cache = at('cache_size');
+
+    final buf = StringBuffer('CREATE SEQUENCE ')
+      ..write(DdlBuilder.qualified('sqlserver', sch, name));
+    if (dataType != null && dataType.isNotEmpty) buf.write(' AS $dataType');
+    if (start != null) buf.write(' START WITH $start');
+    buf.write(' INCREMENT BY $inc');
+    if (min != null) buf.write(' MINVALUE $min');
+    if (max != null) buf.write(' MAXVALUE $max');
+    if (cache != null) buf.write(' CACHE $cache');
+    buf.write(cycle ? ' CYCLE' : ' NO CYCLE');
+
+    return SequenceDef(
+      createSql: buf.toString(),
+      lastValue: at('current_value'),
+      increment: inc,
+    );
+  }
+
   @override
   Future<TablePreview> previewTable(
     String database,

@@ -249,6 +249,72 @@ class PgsqlDriver implements DatabaseDriver {
     ];
   }
 
+  /// 序列 = `pg_class(relkind='S')`,并**排除归属列**的那些。
+  ///
+  /// `serial` 与 `GENERATED … AS IDENTITY` 背后都会自动建一条序列,它由建表语句
+  /// (列上的自增属性)一起生成,当成独立对象再同步一遍就重复了。`pg_depend` 里
+  /// `deptype='a'`(serial 的 OWNED BY)与 `'i'`(identity 的内部依赖)正是这批。
+  @override
+  Future<List<String>> listSequences(String database, {String? schema}) async {
+    final conn = _get();
+    final result = await conn.execute(
+      "SELECT c.relname FROM pg_class c "
+      "JOIN pg_namespace n ON n.oid = c.relnamespace "
+      "WHERE n.nspname = ${_lit(schema ?? _schemaOrPublic)} "
+      "AND c.relkind = 'S' "
+      "AND NOT EXISTS (SELECT 1 FROM pg_depend d "
+      "WHERE d.objid = c.oid AND d.classid = 'pg_class'::regclass "
+      "AND d.refclassid = 'pg_class'::regclass "
+      "AND d.deptype IN ('a', 'i')) "
+      "ORDER BY c.relname",
+    );
+    return [
+      for (final row in result)
+        if (row[0] != null) row[0].toString(),
+    ];
+  }
+
+  @override
+  Future<SequenceDef?> readSequence(String database, String name,
+      {String? schema}) async {
+    final conn = _get();
+    final sch = schema ?? _schemaOrPublic;
+    // pg_sequences(PG 10+):参数与最后值一次取齐。
+    // `last_value` 在「本次启动/重置后还没取过值」时为 NULL,不能当差异比。
+    final result = await conn.execute(
+      "SELECT data_type, start_value, min_value, max_value, increment_by, "
+      "cycle, cache_size, last_value FROM pg_sequences "
+      "WHERE schemaname = ${_lit(sch)} AND sequencename = ${_lit(name)}",
+    );
+    if (result.isEmpty) return null;
+    final row = result.first;
+    String? at(int i) => row[i]?.toString();
+    final dataType = at(0);
+    final start = at(1);
+    final min = at(2);
+    final max = at(3);
+    final inc = at(4) ?? '1';
+    final cycle = at(5)?.toLowerCase() == 'true';
+    final cache = at(6);
+
+    // 重建 CREATE SEQUENCE:两侧都走这条重建逻辑,文本即可直接比对。
+    final buf = StringBuffer('CREATE SEQUENCE ')
+      ..write(DdlBuilder.qualified('postgresql', sch, name));
+    if (dataType != null && dataType.isNotEmpty) buf.write(' AS $dataType');
+    if (start != null) buf.write(' START WITH $start');
+    buf.write(' INCREMENT BY $inc');
+    if (min != null) buf.write(' MINVALUE $min');
+    if (max != null) buf.write(' MAXVALUE $max');
+    if (cache != null) buf.write(' CACHE $cache');
+    buf.write(cycle ? ' CYCLE' : ' NO CYCLE');
+
+    return SequenceDef(
+      createSql: buf.toString(),
+      lastValue: at(7),
+      increment: inc,
+    );
+  }
+
   @override
   Future<TablePreview> previewTable(
     String database,

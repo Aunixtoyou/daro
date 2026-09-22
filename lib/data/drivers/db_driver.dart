@@ -113,6 +113,45 @@ class ColumnDef {
   final String comment;
 }
 
+/// 序列定义:「结构同步」比对序列用。
+///
+/// 序列没有「定义文本」可取(系统目录里只有参数),故由驱动侧把目录里的
+/// 参数**重建**成一条 `CREATE SEQUENCE ...` 语句,比对即文本比对。
+/// [lastValue] 单独拿出来:*「比较序列最后值」*只比它,且差异只生成
+/// `ALTER SEQUENCE ... RESTART WITH`(整条重建会把计数归零,绝不能当差异用)。
+class SequenceDef {
+  const SequenceDef({
+    required this.createSql,
+    this.lastValue,
+    this.increment = '1',
+  });
+
+  /// 重建的 `CREATE SEQUENCE <模式.名> ...` 语句(单行,参数齐全)
+  final String createSql;
+
+  /// 当前最后值(PG `last_value` / SQL Server `current_value`)。
+  /// 从未取过值时 PG 返回 NULL —— 此时**不参与**最后值比对
+  /// (没有「位置」可比,拿起始值去比会凭空造出差异)。
+  final String? lastValue;
+
+  /// 增量(PG `seqincrement` / SQL Server `increment`),用于推算下一个值
+  final String increment;
+
+  /// 序列下一次将要分发出去的值 = 最后值 + 增量。
+  ///
+  /// 「对齐两个序列」要比的是这个,而不是 [lastValue]:`RESTART WITH x` 设的是
+  /// **下一个**值,直接拿源的最后值会把目标的下一个值设成源已经发过的那个(重号)。
+  /// [lastValue] 缺失、或不是整数(数值型序列)时返回 null → 该序列不比最后值。
+  String? get nextValue {
+    final last = lastValue;
+    if (last == null) return null;
+    final l = int.tryParse(last);
+    if (l == null) return null;
+    final inc = int.tryParse(increment) ?? 1;
+    return '${l + inc}';
+  }
+}
+
 /// 数据库驱动抽象:统一各数据库类型的元数据与数据访问接口。
 ///
 /// UI 层(连接树 / 表数据页)只依赖本接口,新增数据库类型时
@@ -179,6 +218,25 @@ abstract class DatabaseDriver {
   /// 列出指定数据库下的存储过程([schema] 语义同 [listTables]。
   /// SQLite / Access 无存储过程概念,返回空列表)
   Future<List<String>> listProcedures(String database, {String? schema});
+
+  /// 列出指定数据库下的序列([schema] 语义同 [listTables])。
+  ///
+  /// 只有 PostgreSQL 家族与 SQL Server 把序列当独立对象(见 [kSequenceTypes]),
+  /// 其余驱动返回空列表 —— MySQL / MariaDB / SQLite / Access 的「自增」是列属性,
+  /// 不是一个能同步的对象。
+  ///
+  /// 注:各驱动是 `implements DatabaseDriver`,**不会继承**这里的默认实现,
+  /// 新增本方法时四个不支持序列的驱动也要各补一个空实现。
+  Future<List<String>> listSequences(String database, {String? schema}) async =>
+      const [];
+
+  /// 读取序列定义(重建的 `CREATE SEQUENCE` + 当前最后值),见 [SequenceDef]。
+  ///
+  /// 序列在系统目录里只有参数、没有定义文本,故由驱动侧重建;不支持序列的
+  /// 驱动返回 null(其 [listSequences] 也为空,不会走到这里)。
+  Future<SequenceDef?> readSequence(String database, String name,
+          {String? schema}) async =>
+      null;
 
   /// 列出数据库的用户/角色(MySQL: mysql.user;PG: pg_roles;SQL Server: sys.database_principals)
   Future<List<String>> listUsers(String database);
@@ -340,6 +398,19 @@ const kMaterializedViewTypes = {
   'aliyun-rds-postgres',
   'aliyun-polardb-postgres',
   'aliyun-oceanbase-postgres',
+};
+
+/// 有独立序列对象的数据库类型(「结构同步」的「比较序列 / 比较序列最后值」)。
+///
+/// PostgreSQL 走 `pg_class(relkind='S')` + `pg_sequences`、SQL Server 走
+/// `sys.sequences`;MySQL / MariaDB / SQLite / Access 无此对象(自增是列属性)。
+/// ⚠️ MariaDB 10.3+ 其实有 `CREATE SEQUENCE`,但目录口径与 PG 不同,暂未接入。
+const kSequenceTypes = {
+  'postgresql',
+  'aliyun-rds-postgres',
+  'aliyun-polardb-postgres',
+  'aliyun-oceanbase-postgres',
+  'sqlserver',
 };
 
 /// 判断指定数据库类型是否支持某个对象分类(按分类名匹配)。

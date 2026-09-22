@@ -193,6 +193,18 @@ class MariadbDriver implements DatabaseDriver {
     ];
   }
 
+  /// MariaDB 没有独立序列对象(AUTO_INCREMENT 是列属性),见 [kSequenceTypes]。
+  /// 注:MariaDB 10.3+ 其实有 `CREATE SEQUENCE`,但目录口径与 PG/SQL Server 不同
+  /// (序列在 information_schema 里以 SEQUENCE 表类型出现),暂未接入。
+  @override
+  Future<List<String>> listSequences(String database, {String? schema}) async =>
+      const [];
+
+  @override
+  Future<SequenceDef?> readSequence(String database, String name,
+          {String? schema}) async =>
+      null;
+
   @override
   Future<List<String>> listUsers(String database) async {
     final conn = await _get();

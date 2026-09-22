@@ -137,6 +137,17 @@ class AccessDriver implements DatabaseDriver {
   }
 
   @override
+  Future<List<String>> listSequences(String database, {String? schema}) async {
+    // Access 无独立序列对象(「自动编号」是列属性)
+    return const [];
+  }
+
+  @override
+  Future<SequenceDef?> readSequence(String database, String name,
+          {String? schema}) async =>
+      null;
+
+  @override
   Future<List<String>> listUsers(String database) async {
     try {
       final odbc = _get();

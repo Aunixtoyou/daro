@@ -278,6 +278,16 @@ class MysqlDriver implements DatabaseDriver {
     ];
   }
 
+  /// MySQL 没有独立序列对象(AUTO_INCREMENT 是列属性),见 [kSequenceTypes]。
+  @override
+  Future<List<String>> listSequences(String database, {String? schema}) async =>
+      const [];
+
+  @override
+  Future<SequenceDef?> readSequence(String database, String name,
+          {String? schema}) async =>
+      null;
+
   @override
   Future<List<String>> listUsers(String database) async {
     final conn = await _get();
