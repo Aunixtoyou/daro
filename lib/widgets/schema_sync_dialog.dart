@@ -49,7 +49,7 @@ const String kGroupByKind = '按对象类型分组';
 ///
 /// 界面为三步向导(参照主流工具的同步流程):
 /// ①设置页:顶部「源 → 目标」端点摘要横幅 + 两列端点选择(连接 / 数据库 / 模式,
-///   中间「⇅」交换)+ 两侧「信息」面板;底部「保存 / 加载配置文件 … 选项 / 比较」。
+///   中间「⇄」交换)+ 两侧「信息」面板;底部「保存 / 加载配置文件 … 选项 / 比较」。
 /// ②差异页:同一横幅 + 「按操作分组」下拉 + 三列差异表(源对象 | 操作 | 目标对象,
 ///   分组标题带勾选与展开),底部「DDL 比较 / 部署脚本」标签页;
 ///   比较时以覆盖层显示进度并可取消。
@@ -91,7 +91,7 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
   String? _tgtVersion;
 
   // ── 比对 / 部署状态 ────────────────────────────────────────
-  final SyncOptions _options = SyncOptions();
+  SyncOptions _options = SyncOptions();
   SyncPlan? _plan;
   SyncObject? _focused; // 差异表中聚焦的对象(DDL 比较显示它)
   bool _comparing = false;
@@ -102,14 +102,19 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
   int _total = 0;
 
   // ── 部署选项 / 消息日志 ────────────────────────────────────
-  bool _stopOnError = false;
-  bool _recompareAfterDeploy = true;
+  /// 部署选项:遇错继续 / 日志含查询。**两项默认都不勾**(对齐参考工具)。
+  /// 部署结束后**不自动重比** —— 重比是全量的,库大时耗时可观,而且刚看完
+  /// 执行日志就被换页容易让人懵;要重比点页脚的「重新比较」。
+  SyncDeployOptions _deploy = SyncDeployOptions();
   final List<String> _logLines = [];
   int _deployTotal = 0;
   int _deploySuccess = 0;
   int _deployFailed = 0;
   final Stopwatch _deployWatch = Stopwatch();
   final ScrollController _logScroll = ScrollController();
+  /// 日志文本是否处于「划选中」状态:选着字时自动滚动会把视口拽走,
+  /// 长日志里就永远选不中中间那段(见 [_scrollLogToBottom])。
+  bool _logSelecting = false;
   bool _copied = false;
 
   @override
@@ -136,7 +141,9 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
   }
 
   void _onMetadataChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    // 模式列表是异步到货的,到货时顺手补一次「唯一模式」的默认选中。
+    setState(_autoSelectSoleSchema);
   }
 
   // ── 端点辅助 ──────────────────────────────────────────────
@@ -166,6 +173,28 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
 
   bool _hasSchemaLayer(ConnectionInfo? conn) =>
       conn != null && kSchemaLayerTypes.contains(conn.typeId);
+
+  /// 库下只有唯一模式时(PostgreSQL 常见的 `public`)自动选中它,省掉一次
+  /// 无意义的点击;多模式仍然留空待选 —— 与 initState 的「不预选库 / 模式,
+  /// 避免误同步」取向一致:只有一种可能时才替用户拿主意。
+  ///
+  /// 已产出比对结果(或正在比对 / 部署)时不介入,免得悄悄换掉比对用的端点。
+  void _autoSelectSoleSchema() {
+    if (_comparing || _deploying || _plan != null) return;
+    if (_srcSchema == null) _srcSchema = _soleSchemaOf(_srcConn, _srcDb);
+    if (_tgtSchema == null) _tgtSchema = _soleSchemaOf(_tgtConn, _tgtDb);
+  }
+
+  /// 该库下的模式列表恰好一条时返回它,否则 null(未加载 / 无模式层 / 多模式)。
+  String? _soleSchemaOf(ConnectionInfo? conn, String? db) {
+    if (conn == null || db == null || db.isEmpty || !_hasSchemaLayer(conn)) {
+      return null;
+    }
+    // schemaStateOf 是「取或建」的,永远非空;未加载 / 加载失败时 schemas 为空。
+    final schemas =
+        widget.app.connectionManager.schemaStateOf(conn.name, db).schemas;
+    return schemas.length == 1 ? schemas.first : null;
+  }
 
   bool get _sourceReady => _srcConn != null && (_srcDb?.isNotEmpty ?? false);
   bool get _targetReady => _tgtConn != null && (_tgtDb?.isNotEmpty ?? false);
@@ -230,6 +259,8 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
       }
       _plan = null;
       _focused = null;
+      // 该库的模式列表可能早已缓存(不会再触发 metadata 回调),这里同步补一次。
+      _autoSelectSoleSchema();
     });
     final conn = source ? _srcConn : _tgtConn;
     if (conn != null && db != null && _hasSchemaLayer(conn)) {
@@ -296,15 +327,10 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
             conn: _srcConn, database: _srcDb, schema: _srcSchema),
         'target': _endpointJson(
             conn: _tgtConn, database: _tgtDb, schema: _tgtSchema),
-        'options': {
-          'tables': _options.tables,
-          'views': _options.views,
-          'functions': _options.functions,
-          'procedures': _options.procedures,
-          'ignoreComments': _options.ignoreComments,
-          'stripDefiner': _options.stripDefiner,
-          'ignoreDefinitionSpace': _options.ignoreDefinitionSpace,
-        },
+        'options': _options.toJson(),
+        // 部署选项与比对选项分开存。老配置文件没有这一块,加载时按「缺键保留
+        // 当前值」处理,不会把开关清成 false(见 SyncDeployOptions.loadJson)。
+        'deployOptions': _deploy.toJson(),
       };
 
   Map<String, dynamic> _endpointJson({
@@ -415,16 +441,11 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
       // 配置属于端点选择,回到设置页。
       _step = _Step.setup;
       if (opt is Map) {
-        _options
-          ..tables = opt['tables'] ?? _options.tables
-          ..views = opt['views'] ?? _options.views
-          ..functions = opt['functions'] ?? _options.functions
-          ..procedures = opt['procedures'] ?? _options.procedures
-          ..ignoreComments =
-              opt['ignoreComments'] ?? _options.ignoreComments
-          ..stripDefiner = opt['stripDefiner'] ?? _options.stripDefiner
-          ..ignoreDefinitionSpace = opt['ignoreDefinitionSpace'] ??
-              _options.ignoreDefinitionSpace;
+        _options.loadJson(Map<String, dynamic>.from(opt));
+      }
+      final dep = cfg['deployOptions'];
+      if (dep is Map) {
+        _deploy.loadJson(Map<String, dynamic>.from(dep));
       }
     });
     if (src != null) {
@@ -506,19 +527,23 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
         await showSchemaSyncOptionsDialog(context, current: _options);
     if (updated == null || !mounted) return;
     setState(() {
-      _options
-        ..tables = updated.tables
-        ..views = updated.views
-        ..functions = updated.functions
-        ..procedures = updated.procedures
-        ..ignoreComments = updated.ignoreComments
-        ..stripDefiner = updated.stripDefiner
-        ..ignoreDefinitionSpace = updated.ignoreDefinitionSpace;
+      // 弹窗返回的就是一份完整的选项,直接换掉(以前逐字段抄,加一个开关就要
+      // 记得在这里补一行,漏了就是「勾了没反应」)。
+      _options = updated.copy();
       // 选项变了,旧比对结果作废并回到设置页。
       _plan = null;
       _focused = null;
       _step = _Step.setup;
     });
+  }
+
+  /// 「部署选项」。与 [_openOptions] 不同:部署选项**不影响比对结果**,
+  /// 所以改了它不动作废旧比对,也不换页 —— 就地更新即可。
+  Future<void> _openDeployOptions() async {
+    final updated =
+        await showSchemaSyncDeployOptionsDialog(context, current: _deploy);
+    if (updated == null || !mounted) return;
+    setState(() => _deploy = updated.copy());
   }
 
   // ── 部署 + 消息日志 ────────────────────────────────────────
@@ -564,7 +589,8 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
       target: _target,
       selected: selected,
       driverFactory: widget.driverFactory,
-      stopOnError: _stopOnError,
+      // 「遇到错误时继续」**没勾**才中止(默认遇错即停,对齐参考工具)
+      stopOnError: !_deploy.continueOnError,
       onItemDone: (item) {
         if (!mounted) return;
         setState(() {
@@ -577,8 +603,11 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
           _logLines.add('[$seq/$_deployTotal] '
               '${item.object.action.label} ${item.object.kind.label} '
               '${item.object.name}');
-          _logLines.add('Query:');
-          _logLines.addAll(item.object.statements.map((s) => '$s;'));
+          // 「在消息日志中包含部署查询」没勾时只留结果行,日志短好读
+          if (_deploy.logQueries) {
+            _logLines.add('Query:');
+            _logLines.addAll(item.object.statements.map((s) => '$s;'));
+          }
           _logLines.add('Result: ${item.ok ? 'OK' : 'ERROR: ${item.error}'}');
           _logLines.add('-' * 40);
         });
@@ -592,11 +621,9 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
       _logLines.add('--End--');
     });
 
-    if (report.successCount > 0 && _recompareAfterDeploy) {
-      // 部署后重新比对,让差异表反映目标最新结构。
-      await _compare();
-      return;
-    }
+    // 失败明细必须弹。历史上这段排在「部署后自动重比」之后,而那段带 `return`,
+    // 于是「有成功也有失败」时用户看不到任何失败提示,只能去「消息日志」里
+    // 自己翻 —— 现在部署收尾只剩这一件事,也不会再自动换页。
     if (!report.allOk) {
       await MessageBox.show(
         context,
@@ -612,6 +639,8 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
 
   void _scrollLogToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // 用户正在划选日志时不抢视口:否则刚按住就被拽到底部,选不中中间那几行。
+      if (_logSelecting) return;
       if (_logScroll.hasClients) {
         _logScroll.jumpTo(_logScroll.position.maxScrollExtent);
       }
@@ -760,7 +789,8 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
     );
   }
 
-  // 单侧端点列:标题 + 连接 / 数据库 / 模式(标签在上、下拉在下)
+  // 单侧端点列:标题 + 连接 / 数据库(/ 模式,标签在上、下拉在下)。
+  // 「模式」行仅在有模式层的类型上渲染,见下面的 `if (showSchemaLayer)`。
   Widget _endpointColumn(AppPalette t, {required bool source}) {
     final conn = source ? _srcConn : _tgtConn;
     final database = source ? _srcDb : _tgtDb;
@@ -770,6 +800,10 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
     final dbItems = dbState?.databases ?? const <String>[];
     final dbLoading = dbState?.status == LoadStatus.loading;
     final hasSchemaLayer = _hasSchemaLayer(conn);
+    // 目标侧连接通常是最后才选的,若只按本侧连接判断,选完连接整列会往下跳一格。
+    // 两侧类型必然同源,所以「本侧或源侧有模式层」= 这一轮同步会不会用到模式,
+    // 提前把行占住(未选连接时它是禁用的)。
+    final showSchemaLayer = hasSchemaLayer || _hasSchemaLayer(_srcConn);
     final schemaState = (conn != null && database != null && hasSchemaLayer)
         ? cm.schemaStateOf(conn.name, database)
         : null;
@@ -788,7 +822,7 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
         ),
         const SizedBox(height: 10),
         _fieldLabel(t, '连接:'),
-        ComboBox<ConnectionInfo>(
+        _combo<ConnectionInfo>(
           items: source ? _eligibleConnections : _targetConnections,
           value: conn,
           hint: _eligibleConnections.isEmpty ? '无可用连接' : '选择连接',
@@ -801,7 +835,7 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
         ),
         const SizedBox(height: 8),
         _fieldLabel(t, '数据库:'),
-        ComboBox<String>(
+        _combo<String>(
           items: dbItems,
           value: database,
           enabled: conn != null && !dbLoading,
@@ -811,31 +845,60 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
           iconBuilder: (_) => const UiIcon(kDatabaseIcon, size: 15),
           onChanged: (v) => _onDatabaseChanged(source: source, db: v),
         ),
-        const SizedBox(height: 8),
-        _fieldLabel(t, '模式:'),
-        ComboBox<String>(
-          items: schemaItems,
-          value: schema,
-          enabled: conn != null && hasSchemaLayer && database != null,
-          hint: !hasSchemaLayer
-              ? '该类型无模式层'
-              : (database == null
-                  ? '先选数据库'
-                  : (schemaItems.isEmpty ? '默认模式' : '选择模式')),
-          iconBuilder: (_) => const UiIcon(kSchemaIcon, size: 15),
-          onChanged: (v) => setState(() {
-            if (source) {
-              _srcSchema = v;
-            } else {
-              _tgtSchema = v;
-            }
-            _plan = null;
-            _focused = null;
-          }),
-        ),
+        // 「模式」行只在有模式层的类型(PG / SQL Server)上出现:MySQL / MariaDB
+        // 的库即模式、文件型更无此层,留一个恒禁用的空下拉只是噪音,直接不画。
+        if (showSchemaLayer) ...[
+          const SizedBox(height: 8),
+          _fieldLabel(t, '模式:'),
+          _combo<String>(
+            items: schemaItems,
+            value: schema,
+            enabled: conn != null && database != null,
+            hint: database == null
+                ? '先选数据库'
+                : (schemaItems.isEmpty ? '默认模式' : '选择模式'),
+            iconBuilder: (_) => const UiIcon(kSchemaIcon, size: 15),
+            onChanged: (v) => setState(() {
+              if (source) {
+                _srcSchema = v;
+              } else {
+                _tgtSchema = v;
+              }
+              _plan = null;
+              _focused = null;
+            }),
+          ),
+        ],
       ],
     );
   }
+
+  /// 端点列的下拉统一走这里,三个都开 `searchable`:库 / 模式动辄上百个,靠滚动
+  /// 找人太慢。
+  ///
+  /// 注意用的是 `searchable` 而**不是** `editable` —— 前者输入只做**过滤**,值仍
+  /// 必须从列表里点选;后者允许提交任意文本,一旦手滑就能把不存在的库名带进比对。
+  Widget _combo<T extends Object>({
+    required List<T> items,
+    required T? value,
+    required ValueChanged<T?> onChanged,
+    String? hint,
+    bool enabled = true,
+    String Function(T)? itemToString,
+    Widget? Function(T)? iconBuilder,
+  }) =>
+      ComboBox<T>(
+        items: items,
+        value: value,
+        enabled: enabled,
+        hint: hint,
+        itemToString: itemToString,
+        iconBuilder: iconBuilder,
+        onChanged: onChanged,
+        searchable: true,
+        searchHint: '输入以筛选…',
+        noMatchText: '无匹配项',
+      );
 
   Widget _fieldLabel(AppPalette t, String text) => Padding(
         padding: const EdgeInsets.only(bottom: 3),
@@ -845,18 +908,41 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
         ),
       );
 
-  // 中间「⇅」交换按钮(与数据库行大致对齐)
+  // 中间左右箭头交换按钮(与数据库行大致对齐)
+  //
+  // 三个要点:
+  // ① 箭头是**左右**(交换语义是"源 ⇄ 目标",上下向会被读成排序 / 升降);
+  // ② 幽灵态:常态完全透明(无底无边),只在悬停 / 按下时浮出一层浅色,
+  //    因此按钮自身宽度要收窄 —— 否则会贴着两侧下拉框的边线,
+  //    看着像一条压在中间的分隔条;
+  // ③ 宽度按内容自适应,不能传纯 `text`(纯文字按钮会吃到 buttonMinWidth 73,
+  //    把两列端点硬推开),所以给 `child`、`text` 只留作语义标签。
   Widget _swapButton(AppPalette t) {
+    final dt = t.desktopTokensFor(context);
+    final disabled = _comparing ||
+        _deploying ||
+        (_srcConn == null && _tgtConn == null);
     return SizedBox(
-      width: 76,
+      // 槽宽 = 按钮宽 + 两侧各 ~19px 的呼吸间隙。Align 只做水平居中且
+      // 高度收成子组件高(heightFactor: 1),不会把按钮在纵向拉满整行。
+      width: 64,
       child: Padding(
         padding: const EdgeInsets.only(top: 92),
-        child: Button(
-          text: '⇅',
-          onPressed:
-              (_comparing || _deploying || (_srcConn == null && _tgtConn == null))
-                  ? null
-                  : _swapSides,
+        child: Align(
+          alignment: Alignment.topCenter,
+          heightFactor: 1,
+          child: Button(
+            // 图标按钮不需要纯文字按钮的横向内边距,压到 5 让热区更贴近图标
+            tokens: dt.copyWith(controlPaddingX: 5),
+            variant: ButtonVariant.ghost,
+            text: '交换源和目标',
+            onPressed: disabled ? null : _swapSides,
+            child: Icon(
+              Icons.swap_horiz,
+              size: 16,
+              color: disabled ? t.disabledForeground : t.foreground,
+            ),
+          ),
         ),
       ),
     );
@@ -1268,7 +1354,7 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
         : t.mutedForeground;
     return Row(
       children: [
-        ObjectCategoryIcon(category: _categoryOf(o.kind), size: 15),
+        _kindIcon(o.kind, 15),
         const SizedBox(width: 6),
         Flexible(
           child: Text(
@@ -1287,12 +1373,22 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
     );
   }
 
-  ObjectCategory _categoryOf(SyncObjectKind kind) => switch (kind) {
+  ObjectCategory? _categoryOf(SyncObjectKind kind) => switch (kind) {
         SyncObjectKind.table => ObjectCategory.table,
         SyncObjectKind.view => ObjectCategory.view,
         SyncObjectKind.function => ObjectCategory.function,
         SyncObjectKind.procedure => ObjectCategory.procedure,
+        // 序列不在 ObjectCategory 里,图标见 _kindIcon
+        SyncObjectKind.sequence => null,
       };
+
+  /// 差异行的对象图标。序列没有 [ObjectCategory] 成员,单用同风格的序列图标。
+  Widget _kindIcon(SyncObjectKind kind, double size) {
+    final c = _categoryOf(kind);
+    return c == null
+        ? UiIcon(kSequenceIcon, size: size)
+        : ObjectCategoryIcon(category: c, size: size);
+  }
 
   Widget _ddlComparePane(AppPalette t) {
     final o = _focused;
@@ -1340,7 +1436,8 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(8),
-              child: Text(
+              // DDL 和脚本一样要能划选复制。
+              child: SelectableText(
                 showEmpty ? emptyHint : body,
                 style: TextStyle(
                   fontFamily: 'Consolas',
@@ -1424,7 +1521,9 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
             color: t.surface,
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(10),
-              child: Text(
+              // 只读但要能划选复制 → SelectableText(不用 Input/Textarea,那会带上
+              // 编辑框的面与边框,和这里的「纯文本区」观感不符)。
+              child: SelectableText(
                 script.isEmpty ? '（未勾选任何可部署对象）' : script,
                 style: TextStyle(
                   fontFamily: 'Consolas',
@@ -1474,8 +1573,12 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
             child: SingleChildScrollView(
               controller: _logScroll,
               padding: const EdgeInsets.all(10),
-              child: Text(
+              // 同脚本区:只读 + 可划选复制。
+              child: SelectableText(
                 _logLines.isEmpty ? '（尚未执行部署）' : _logLines.join('\n'),
+                // 划选进行中就别再自动滚到底(见 _scrollLogToBottom)。
+                onSelectionChanged: (sel, _) =>
+                    _logSelecting = sel.baseOffset != sel.extentOffset,
                 style: TextStyle(
                   fontFamily: 'Consolas',
                   fontFamilyFallback: const ['monospace'],
@@ -1562,32 +1665,18 @@ class _SchemaSyncDialogState extends State<SchemaSyncDialog> {
           children: [
             ..._configButtons(busy),
             const SizedBox(width: 8),
-            DropDownButton(
-              trigger: Button(
-                onPressed: () {},
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: const [
-                    Text('部署选项'),
-                    SizedBox(width: 8),
-                    Text('▾', style: TextStyle(fontSize: 10)),
-                  ],
-                ),
+            // 带 ▾ 的普通按钮(不是下拉菜单):整颗按钮都用来开「部署选项」弹窗,
+            // ▾ 只提示「这里还有设置」(参考窗口就是这种形状)。
+            Button(
+              onPressed: busy ? null : () => _openDeployOptions(),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  Text('部署选项'),
+                  SizedBox(width: 8),
+                  Text('▾', style: TextStyle(fontSize: 10)),
+                ],
               ),
-              items: [
-                ListItem(
-                  title: '遇错停止',
-                  selected: _stopOnError,
-                  onSelect: () =>
-                      setState(() => _stopOnError = !_stopOnError),
-                ),
-                ListItem(
-                  title: '部署成功后重新比较',
-                  selected: _recompareAfterDeploy,
-                  onSelect: () => setState(
-                      () => _recompareAfterDeploy = !_recompareAfterDeploy),
-                ),
-              ],
             ),
             const Spacer(),
             Button(
@@ -1700,6 +1789,38 @@ class _DeployPreview extends StatelessWidget {
   }
 }
 
+/// 选项弹窗的强调色小节标题(参考窗口里「比较选项」/「部署选项」那一行)
+Widget _optionsHeading(AppPalette t, String text) => Text(
+      text,
+      style: TextStyle(
+        color: t.accent,
+        fontSize: 15,
+        fontWeight: FontWeight.w500,
+        decoration: TextDecoration.none,
+      ),
+    );
+
+/// 选项弹窗里的一行复选框 —— 「比较选项」与「部署选项」共用的版式。
+///
+/// [indent] 用于「比较表」下面那五个子块;[enabled] 置灰时值保留,
+/// 重新勾上父项即恢复。
+Widget _optionsCheck(
+  String label,
+  bool Function() get,
+  void Function(bool) set, {
+  double indent = 0,
+  bool enabled = true,
+}) =>
+    Padding(
+      padding: EdgeInsets.only(left: indent, top: 2, bottom: 2),
+      child: CheckBox(
+        value: get(),
+        label: label,
+        enabled: enabled,
+        onChanged: (v) => set(v ?? false),
+      ),
+    );
+
 /// 打开「选项」弹窗,返回用户确认后的 [SyncOptions];取消返回 null。
 Future<SyncOptions?> showSchemaSyncOptionsDialog(
   BuildContext context, {
@@ -1711,7 +1832,11 @@ Future<SyncOptions?> showSchemaSyncOptionsDialog(
   );
 }
 
-/// 「结构同步 → 选项」:对象类别开关 + 比对策略开关。
+/// 「结构同步 → 选项」:比对选项。
+///
+/// 版式对齐参考工具的「比较选项」弹窗:顶部一条强调色标题,下面一棵勾选列表 ——
+/// 「比较表」下挂主键 / 外键 / 唯一键 / 检查 / 排除五个**缩进子项**,其余平铺。
+/// 「比较表」不勾时子项一并置灰(值保留,重新勾上即恢复)。
 class SchemaSyncOptionsDialog extends StatefulWidget {
   const SchemaSyncOptionsDialog({super.key, required this.initial});
 
@@ -1724,79 +1849,168 @@ class SchemaSyncOptionsDialog extends StatefulWidget {
 class _SchemaSyncOptionsDialogState extends State<SchemaSyncOptionsDialog> {
   late final SyncOptions _opt = widget.initial;
 
+  /// 表子项的缩进量(对齐截图里「比较表」下方那五项)
+  static const double _kIndent = 24;
+
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
+    // 「确定」是默认按钮:白底 + 强调色边框(参考窗口的做法)
+    final defaultBtn = t.desktopTokensFor(context).copyWith(
+          buttonBorderColor: t.accent,
+        );
+    // 表子项的可用性跟随父项(值不动,只置灰)
+    final tbl = _opt.tables;
     return DialogBox(
-      title: '结构同步选项',
-      width: 380,
+      title: '选项',
+      width: 420,
       onClose: () => Navigator.of(context).pop(),
       footer: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          Button(text: '取消', onPressed: () => Navigator.of(context).pop()),
-          const SizedBox(width: 8),
           Button(
             text: '确定',
+            tokens: defaultBtn,
             onPressed: () => Navigator.of(context).pop(_opt),
           ),
+          const SizedBox(width: 8),
+          Button(text: '取消', onPressed: () => Navigator.of(context).pop()),
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+        padding: const EdgeInsets.fromLTRB(24, 14, 24, 10),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _sectionLabel(t, '同步对象'),
-            _check('表', () => _opt.tables, (v) => _opt.tables = v),
-            _check('视图', () => _opt.views, (v) => _opt.views = v),
-            _check('函数', () => _opt.functions, (v) => _opt.functions = v),
-            _check('过程', () => _opt.procedures, (v) => _opt.procedures = v),
-            const SizedBox(height: 14),
-            _sectionLabel(t, '比对策略'),
-            _check(
-              '忽略注释差异',
-              () => _opt.ignoreComments,
-              (v) => _opt.ignoreComments = v,
-            ),
-            _check(
-              '去掉 MySQL 定义中的 DEFINER 子句',
-              () => _opt.stripDefiner,
-              (v) => _opt.stripDefiner = v,
-            ),
-            _check(
-              '定义比较忽略空白差异',
-              () => _opt.ignoreDefinitionSpace,
-              (v) => _opt.ignoreDefinitionSpace = v,
-            ),
+            _optionsHeading(t, '比较选项'),
+            const SizedBox(height: 10),
+            // ── 表 + 它的五个子块(缩进;父项不勾则一起置灰) ──
+            _check('比较表', () => _opt.tables, (v) => _opt.tables = v),
+            _check('比较主键', () => _opt.primaryKeys,
+                (v) => _opt.primaryKeys = v,
+                indent: _kIndent, enabled: tbl),
+            _check('比较外键', () => _opt.foreignKeys,
+                (v) => _opt.foreignKeys = v,
+                indent: _kIndent, enabled: tbl),
+            _check('比较唯一键', () => _opt.uniqueKeys,
+                (v) => _opt.uniqueKeys = v,
+                indent: _kIndent, enabled: tbl),
+            _check('比较检查', () => _opt.checks, (v) => _opt.checks = v,
+                indent: _kIndent, enabled: tbl),
+            _check('比较排除', () => _opt.excludes, (v) => _opt.excludes = v,
+                indent: _kIndent, enabled: tbl),
+            // ── 其余对象类别 / 表的其余子块(平铺) ──
+            _check('比较视图', () => _opt.views, (v) => _opt.views = v),
+            // 「函数」管函数与存储过程:参考工具的列表里没有单独的过程项
+            _check('比较函数', () => _opt.functions, (v) => _opt.functions = v),
+            _check('比较索引', () => _opt.indexes, (v) => _opt.indexes = v),
+            _check('比较序列', () => _opt.sequences, (v) => _opt.sequences = v),
+            _check('比较触发器', () => _opt.triggers, (v) => _opt.triggers = v),
+            _check('比较规则', () => _opt.rules, (v) => _opt.rules = v),
+            _check('比较所有者', () => _opt.owners, (v) => _opt.owners = v),
+            const SizedBox(height: 6),
+            _check('用级联删除', () => _opt.cascadeDrop,
+                (v) => _opt.cascadeDrop = v),
+            _check('比较序列最后值', () => _opt.sequenceLastValue,
+                (v) => _opt.sequenceLastValue = v),
           ],
         ),
       ),
     );
   }
 
-  Widget _sectionLabel(AppPalette t, String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Text(
-          text,
-          style: TextStyle(
-            color: t.mutedForeground,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            decoration: TextDecoration.none,
-          ),
-        ),
-      );
+  /// 一行复选框:包一层 setState(版式见顶层 [_optionsCheck])
+  Widget _check(
+    String label,
+    bool Function() get,
+    void Function(bool) set, {
+    double indent = 0,
+    bool enabled = true,
+  }) =>
+      _optionsCheck(label, get, (v) => setState(() => set(v)),
+          indent: indent, enabled: enabled);
+}
 
-  Widget _check(String label, bool Function() get, void Function(bool) set) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: CheckBox(
-        value: get(),
-        label: label,
-        onChanged: (v) => setState(() => set(v ?? false)),
+/// 打开「部署选项」弹窗,返回确认后的 [SyncDeployOptions];取消返回 null。
+Future<SyncDeployOptions?> showSchemaSyncDeployOptionsDialog(
+  BuildContext context, {
+  required SyncDeployOptions current,
+}) {
+  return showDialog<SyncDeployOptions>(
+    context: context,
+    builder: (_) => SchemaSyncDeployOptionsDialog(initial: current.copy()),
+  );
+}
+
+/// 「结构同步 → 部署选项」:只决定差异**怎么执行**,与比对无关。
+///
+/// 版式与「比较选项」同一套壳(标题「选项」+ 强调色小节标题 + 勾选列表 +
+/// 白底蓝边的「确定」),两项都对齐参考工具且**默认不勾** —— 遇错即停、
+/// 消息日志不展开 SQL。
+class SchemaSyncDeployOptionsDialog extends StatefulWidget {
+  const SchemaSyncDeployOptionsDialog({super.key, required this.initial});
+
+  final SyncDeployOptions initial;
+
+  @override
+  State<SchemaSyncDeployOptionsDialog> createState() =>
+      _SchemaSyncDeployOptionsDialogState();
+}
+
+class _SchemaSyncDeployOptionsDialogState
+    extends State<SchemaSyncDeployOptionsDialog> {
+  late final SyncDeployOptions _opt = widget.initial;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Tokens.of(context);
+    // 「确定」是默认按钮:白底 + 强调色边框(与「比较选项」一致)
+    final defaultBtn = t.desktopTokensFor(context).copyWith(
+          buttonBorderColor: t.accent,
+        );
+    return DialogBox(
+      title: '选项',
+      width: 420,
+      onClose: () => Navigator.of(context).pop(),
+      footer: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          Button(
+            text: '确定',
+            tokens: defaultBtn,
+            onPressed: () => Navigator.of(context).pop(_opt),
+          ),
+          const SizedBox(width: 8),
+          Button(text: '取消', onPressed: () => Navigator.of(context).pop()),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 14, 24, 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _optionsHeading(t, '部署选项'),
+            const SizedBox(height: 10),
+            _check('遇到错误时继续', () => _opt.continueOnError,
+                (v) => _opt.continueOnError = v),
+            _check('在消息日志中包含部署查询', () => _opt.logQueries,
+                (v) => _opt.logQueries = v),
+          ],
+        ),
       ),
     );
   }
+
+  /// 一行复选框:包一层 setState(版式见顶层 [_optionsCheck])
+  Widget _check(
+    String label,
+    bool Function() get,
+    void Function(bool) set, {
+    double indent = 0,
+    bool enabled = true,
+  }) =>
+      _optionsCheck(label, get, (v) => setState(() => set(v)),
+          indent: indent, enabled: enabled);
 }

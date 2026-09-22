@@ -1708,6 +1708,15 @@ class DdlBuilder {
     }
     stmts.addAll(adds);
     stmts.addAll(comments);
+    // 表所有者变更:PG 无内联子句,补一条 ALTER … OWNER TO。
+    // 「结构同步」的「比较所有者」勾选时 _forTarget 会保留源侧所有者,差异由此落地;
+    // 设计表流程里两侧所有者都取自实表,相等 → 不产生语句。
+    if (isPg &&
+        target.owner.trim().isNotEmpty &&
+        !_sameText(original.owner, target.owner)) {
+      stmts
+          .add('ALTER TABLE $tbl OWNER TO ${ident(typeId, target.owner.trim())};');
+    }
     return stmts;
   }
 

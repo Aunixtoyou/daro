@@ -21,6 +21,11 @@ const String kDatabaseClosedIcon = 'assets/icons/ui/database_closed.svg';
 const String kSchemaIcon = 'assets/icons/ui/schema.svg';
 const String kSchemaClosedIcon = 'assets/icons/ui/schema_closed.svg';
 
+/// 序列图标。序列不是 [ObjectCategory] 的一员(那是连接树 / 功能区的对象分类,
+/// 加一个值会牵动树分组与面板),它目前只出现在「结构同步」的差异表里,
+/// 故单列一个资源常量而不进 [ObjectCategoryIcon.assetOf]。
+const String kSequenceIcon = 'assets/icons/ui/sequence.svg';
+
 /// 连接树顶层「连接分组」节点图标:实心文件夹(参考 Navicat 的连接分组)。
 /// 展开 / 折叠状态不切换图标,始终用这一个。
 const String kConnGroupIcon = 'assets/icons/ui/conn_group.svg';

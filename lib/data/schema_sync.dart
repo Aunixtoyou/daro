@@ -22,7 +22,8 @@ enum SyncObjectKind {
   table('表', 'TABLE'),
   view('视图', 'VIEW'),
   function('函数', 'FUNCTION'),
-  procedure('过程', 'PROCEDURE');
+  procedure('过程', 'PROCEDURE'),
+  sequence('序列', 'SEQUENCE');
 
   const SyncObjectKind(this.label, this.dropKeyword);
 
@@ -41,13 +42,19 @@ enum SyncObjectKind {
               (d, db, {schema}) => d.listFunctions(db, schema: schema),
             SyncObjectKind.procedure =>
               (d, db, {schema}) => d.listProcedures(db, schema: schema),
+            SyncObjectKind.sequence =>
+              (d, db, {schema}) => d.listSequences(db, schema: schema),
           };
 
-  /// [DatabaseDriver.getDefinition] 的 kind 参数(表无定义文本)
+  /// [DatabaseDriver.getDefinition] 的 kind 参数(表无定义文本)。
+  ///
+  /// 序列虽有 'sequence' 这个 kind,但走的是 [DatabaseDriver.readSequence]
+  /// (要额外读最后值),比对入口在 `_diffSequence`,不经 `_diffRoutine`。
   String? get definitionKind => switch (this) {
         SyncObjectKind.view => 'view',
         SyncObjectKind.function => 'function',
         SyncObjectKind.procedure => 'procedure',
+        SyncObjectKind.sequence => 'sequence',
         SyncObjectKind.table => null,
       };
 }
@@ -90,30 +97,59 @@ class SyncEndpoint {
       schema == null || schema!.isEmpty ? database : '$database.${schema!}';
 }
 
-/// 比对选项(「选项」按钮弹出的那组开关)。
+/// 结构同步的比对选项 —— 口径对齐参考工具的「比较选项」弹窗。
+///
+/// 界面映射:缩进在「比较表」之下的五项是表的**子块**;索引 / 触发器 / 规则 /
+/// 所有者 / 用级联删除在弹窗里是平铺项,但在 daro 的数据模型里同样属于表
+/// ([DesignTable] 的 `indexes` / `triggers` / `rules` / `owner`),实现上也是
+/// 裁表的子块。序列是独立对象类别。
 class SyncOptions {
+  // ── 参与比对的对象类别(平铺项) ──
   bool tables = true;
   bool views = true;
+
+  /// 函数。**同时涵盖存储过程**:参考工具的「比较选项」里没有单独的过程项,
+  /// 而 daro 数据层支持过程 —— 拆成两项会凭空多一个菜单里没有的开关,
+  /// 直接丢掉又白丢一项能力,故合并(与改前的默认行为一致)。
   bool functions = true;
-  bool procedures = true;
+  bool sequences = true;
 
-  /// 忽略注释差异:只过滤**独立**的注释语句(PG 的 `COMMENT ON …`、
-  /// MySQL 的表注释 `ALTER TABLE … COMMENT = …`)。MySQL 的列注释写在列定义里,
-  /// 无法从 MODIFY COLUMN 中剥掉,故该类型下列注释差异仍会出现。
-  bool ignoreComments = false;
+  /// 表的子块之一:索引(同样只作用于表,平铺显示只是为了对齐参考工具的版式)
+  bool indexes = true;
 
-  /// 去掉 MySQL 定义文本里的 `DEFINER=…@…` 子句(目标端没有该账号时 CREATE 会失败)
-  bool stripDefiner = true;
+  /// 表的子块之一:触发器(PostgreSQL:表上 / 视图上的规则与触发器)
+  bool triggers = true;
 
-  /// 例程定义比较时折叠空白(数据库返回的定义常差一个换行 / 缩进)
-  bool ignoreDefinitionSpace = true;
+  /// 表的子块之一:规则(仅 PostgreSQL)
+  bool rules = true;
+
+  /// 表的子块之一:所有者。勾选时把源侧所有者**搬到目标**并生成
+  /// `ALTER … OWNER TO`;取消勾选则完全不看所有者(改前的既有行为:所有者属
+  /// 实例级设置,跨库搬运可能因目标端没有同名角色而失败,故可关掉)。
+  bool owners = true;
+
+  // ── 「比较表」的子项(弹窗里缩进显示) ──
+  bool primaryKeys = true;
+  bool foreignKeys = true;
+  bool uniqueKeys = true;
+  bool checks = true;
+  bool excludes = true;
+
+  // ── 弹窗底部的两项 ──
+  /// 用级联删除:删对象时带 `CASCADE`(PostgreSQL 家族),连带删掉依赖它的对象。
+  /// 默认关 —— 误删的代价太大,要开得用户自己勾。
+  bool cascadeDrop = false;
+
+  /// 比较序列最后值:除了参数,还把两侧序列的**分发位置**对齐
+  /// (差异生成 `ALTER SEQUENCE … RESTART WITH`)。参考工具里默认勾选。
+  bool sequenceLastValue = true;
 
   /// 该对象类别是否参与比对
   bool enabledOf(SyncObjectKind kind) => switch (kind) {
         SyncObjectKind.table => tables,
         SyncObjectKind.view => views,
-        SyncObjectKind.function => functions,
-        SyncObjectKind.procedure => procedures,
+        SyncObjectKind.function || SyncObjectKind.procedure => functions,
+        SyncObjectKind.sequence => sequences,
       };
 
   /// 拷贝(弹窗回写用)
@@ -121,10 +157,106 @@ class SyncOptions {
     ..tables = tables
     ..views = views
     ..functions = functions
-    ..procedures = procedures
-    ..ignoreComments = ignoreComments
-    ..stripDefiner = stripDefiner
-    ..ignoreDefinitionSpace = ignoreDefinitionSpace;
+    ..sequences = sequences
+    ..indexes = indexes
+    ..triggers = triggers
+    ..rules = rules
+    ..owners = owners
+    ..primaryKeys = primaryKeys
+    ..foreignKeys = foreignKeys
+    ..uniqueKeys = uniqueKeys
+    ..checks = checks
+    ..excludes = excludes
+    ..cascadeDrop = cascadeDrop
+    ..sequenceLastValue = sequenceLastValue;
+
+  /// 「保存配置文件」写出的比对选项字段
+  Map<String, dynamic> toJson() => {
+        'tables': tables,
+        'views': views,
+        'functions': functions,
+        'sequences': sequences,
+        'indexes': indexes,
+        'triggers': triggers,
+        'rules': rules,
+        'owners': owners,
+        'primaryKeys': primaryKeys,
+        'foreignKeys': foreignKeys,
+        'uniqueKeys': uniqueKeys,
+        'checks': checks,
+        'excludes': excludes,
+        'cascadeDrop': cascadeDrop,
+        'sequenceLastValue': sequenceLastValue,
+      };
+
+  /// 「加载配置文件」回填比对选项。
+  ///
+  /// [json] 里**缺失或类型不对**的键一律保留当前值 —— 老版本配置文件里没有
+  /// 新增的开关(如 sequences / primaryKeys),不能因为缺键就把它们清成 false。
+  void loadJson(Map<String, dynamic> json) {
+    bool flag(String key, bool current) {
+      final v = json[key];
+      return v is bool ? v : current;
+    }
+
+    tables = flag('tables', tables);
+    views = flag('views', views);
+    functions = flag('functions', functions);
+    sequences = flag('sequences', sequences);
+    indexes = flag('indexes', indexes);
+    triggers = flag('triggers', triggers);
+    rules = flag('rules', rules);
+    owners = flag('owners', owners);
+    primaryKeys = flag('primaryKeys', primaryKeys);
+    foreignKeys = flag('foreignKeys', foreignKeys);
+    uniqueKeys = flag('uniqueKeys', uniqueKeys);
+    checks = flag('checks', checks);
+    excludes = flag('excludes', excludes);
+    cascadeDrop = flag('cascadeDrop', cascadeDrop);
+    sequenceLastValue = flag('sequenceLastValue', sequenceLastValue);
+  }
+}
+
+/// 结构同步的**部署**选项 —— 口径对齐参考工具的「部署选项」弹窗。
+///
+/// 与 [SyncOptions] 的区别:比对选项决定「哪些算差异」,部署选项只决定
+/// 「差异怎么执行」(失败怎么办、日志写多细),不参与比对结果。
+/// 两项在参考工具里都是**默认不勾**。
+class SyncDeployOptions {
+  /// 遇到错误时继续。
+  ///
+  /// 默认 false = 首个对象失败即中止,剩余对象以「未执行(前序失败)」记错
+  /// (与参考工具一致);勾上则跑完全部对象,最后统一汇总失败明细。
+  bool continueOnError = false;
+
+  /// 在消息日志中包含部署查询。
+  ///
+  /// 默认 false = 日志只留「[n/N] 动作 对象」与「Result:」两行;勾上则每个
+  /// 对象前额外展开它要执行的 SQL(排查问题时用)。
+  bool logQueries = false;
+
+  /// 拷贝(弹窗回写用;取消时丢弃副本,不动当前值)
+  SyncDeployOptions copy() => SyncDeployOptions()
+    ..continueOnError = continueOnError
+    ..logQueries = logQueries;
+
+  /// 「保存配置文件」写出的部署选项字段
+  Map<String, dynamic> toJson() => {
+        'continueOnError': continueOnError,
+        'logQueries': logQueries,
+      };
+
+  /// 「加载配置文件」回填部署选项;缺键 / 类型不对保留当前值
+  /// (老配置文件里没有这一块,不能因缺键就把开关清成 false)。
+  void loadJson(Map<String, dynamic> json) {
+    bool flag(String key, bool current) {
+      final v = json[key];
+      return v is bool ? v : current;
+    }
+
+    continueOnError = flag('continueOnError', continueOnError);
+    logQueries = flag('logQueries', logQueries);
+  }
 }
 
 /// 一个对象(表 / 视图 / 函数 / 过程)的比对结果。
@@ -177,6 +309,13 @@ class SyncObject {
   /// 直接落在对象上(而非外挂表),重新比较后勾选态自然随对象一起丢弃。
   bool? checked;
 
+  /// 该对象在 DDL 里引用到的**其它表名**(外键的目标表,已小写去空格)。
+  ///
+  /// 比对结束后据此对表对象做拓扑排序(见 [_orderTablesByDependency]):
+  /// 部署是逐对象顺序执行的,被引用的表排在后面就会失败,而失败原因看起来
+  /// 又像「表不存在」——实际是执行顺序问题。
+  final Set<String> dependsOn = {};
+
   /// 默认勾选策略:新建 / 修改默认勾选;**删除默认不勾选**
   /// (破坏性操作必须人工确认,避免一键把目标库多余对象清空)。
   bool get defaultSelected =>
@@ -210,9 +349,9 @@ class SyncPlan {
 
   int countOf(SyncAction action) => ofAction(action).length;
 
-  /// 已勾选且可部署的对象
-  List<SyncObject> get selected =>
-      objects.where((o) => o.selected && o.deployable).toList();
+  /// 已勾选且可部署的对象(按 [_deployOrder] 排过依赖顺序)
+  List<SyncObject> get selected => _deployOrder(
+      objects.where((o) => o.selected && o.deployable).toList());
 
   /// 部署脚本全文(按勾选顺序拼接)
   String deployScript() => [
@@ -507,6 +646,63 @@ List<(String?, String?)> _pairByName(List<String> src, List<String> tgt) {
 
 String _key(String name) => name.trim().toLowerCase();
 
+/// 部署顺序:先建 / 先改被引用的表,再轮到引用方;删表放到最后,且先删引用方。
+///
+/// 部署是「一个对象一条事务、按列表顺序执行」,而比对结果按**名字**排序,于是
+/// `CREATE TABLE cameras (... REFERENCES parking_gates)` 会排在 `parking_gates`
+/// 前面(目标库还没有它 → 42P01 relation does not exist);另一类是引用列的
+/// 主键由后面的对象才补上(42830 no unique constraint matching given keys)。
+/// 两类都不是数据问题,纯粹是顺序问题。
+List<SyncObject> _deployOrder(List<SyncObject> list) {
+  final others = [for (final o in list) if (o.kind != SyncObjectKind.table) o];
+  final tables = list.where((o) => o.kind == SyncObjectKind.table).toList();
+  return [
+    ..._topo(tables.where((o) => o.action != SyncAction.drop).toList(),
+        referencedFirst: true),
+    ...others,
+    // 删表放在最后:目标库里其它对象可能还引用它;若同时删多张互为外键的表,
+    // 引用方必须先删,否则同样撞外键约束。
+    ..._topo(tables.where((o) => o.action == SyncAction.drop).toList(),
+        referencedFirst: false),
+  ];
+}
+
+/// Kahn 拓扑排序:[referencedFirst] 为真时「被引用者在前」(建 / 改),
+/// 为假时「引用者在前」(删)。名字序作稳定基准,循环外键无法靠排序满足,
+/// 剩余对象退回原序收尾(交给数据库自己判错,总比整体卡住或丢对象好)。
+List<SyncObject> _topo(List<SyncObject> list, {required bool referencedFirst}) {
+  if (list.length < 2) return list;
+  final names = {for (final o in list) _key(o.name)};
+  final out = <SyncObject>[];
+  final placed = <String>{};
+  final pending = list.toList();
+  bool ready(SyncObject o) {
+    final self = _key(o.name);
+    return referencedFirst
+        // 依赖不在本列表里(目标库早已存在那张表)= 不需要等它
+        ? o.dependsOn
+            .every((d) => !names.contains(d) || d == self || placed.contains(d))
+        // 反向:还有引用本表的对象没出局,本表就还不能删
+        : list.every((r) =>
+            identical(r, o) ||
+            !r.dependsOn.contains(self) ||
+            placed.contains(_key(r.name)));
+  }
+
+  while (pending.isNotEmpty) {
+    final i = pending.indexWhere(ready);
+    if (i < 0) {
+      // 循环外键:排序无解,剩余按名字序收尾
+      out.addAll(pending);
+      break;
+    }
+    final o = pending.removeAt(i);
+    out.add(o);
+    placed.add(_key(o.name));
+  }
+  return out;
+}
+
 Future<SyncObject> _diffOne({
   required SyncObjectKind kind,
   required String typeId,
@@ -521,6 +717,16 @@ Future<SyncObject> _diffOne({
   try {
     if (kind == SyncObjectKind.table) {
       await _diffTable(
+        object: object,
+        typeId: typeId,
+        options: options,
+        source: source,
+        target: target,
+        sourceName: sourceName,
+        targetName: targetName,
+      );
+    } else if (kind == SyncObjectKind.sequence) {
+      await _diffSequence(
         object: object,
         typeId: typeId,
         options: options,
@@ -575,6 +781,18 @@ Future<void> _diffTable({
   object
     ..sourceDdl = srcText
     ..targetDdl = tgtText;
+  // 外键指向的表 = 部署时的依赖(见 [_topo])。删表时源侧没有该表,
+  // 依赖关系只能从目标侧结构读出来;自引用由 [_topo] 按名字排除。
+  for (final fk in (srcDesign ?? tgtDesign)?.foreignKeys ?? const <DesignForeignKey>[]) {
+    final ref = fk.refTable.trim();
+    if (ref.isNotEmpty) object.dependsOn.add(_key(ref));
+  }
+
+  // 比对用的副本:按「选项」把不参与比对的子块(主键 / 外键 / 唯一键 / 检查 /
+  // 排除 / 索引 / 触发器 / 规则 / 所有者)从**两侧同时**裁掉,否则同一处差异只
+  // 裁一侧会凭空多出一条。展示用的 DDL 仍是完整定义(上面的 srcText / tgtText)。
+  final srcCmp = srcDesign == null ? null : _stripByOptions(srcDesign, options);
+  final tgtCmp = tgtDesign == null ? null : _stripByOptions(tgtDesign, options);
 
   if (srcDesign == null && tgtDesign == null) {
     object
@@ -582,44 +800,50 @@ Future<void> _diffTable({
       ..note = '两侧都读不到表结构';
     return;
   }
-  // 驱动不支持结构反查(SQLite / Access 已在入口拦掉,这里兜住单表读取失败)
-  if (srcDesign == null || tgtDesign == null) {
-    final missing = srcDesign == null ? sourceName! : targetName!;
-    final side = srcDesign == null ? '源' : '目标';
-    if (srcDesign == null && tgtDesign != null) {
+  // **先按名字定缺失一侧**,再判反查失败:目标没有该表时 tgtDesign 必然为
+  // null(根本没去读),若先落进下面的反查分支就会去解引用 targetName! 而抛
+  // Null check → 被 _diffOne 兜成 blocked + 无操作,表现为「空库比对不出新建」。
+  if (targetName == null) {
+    if (srcDesign == null) {
       // 源侧读不到:无法生成创建语句,标错但不影响其它对象
       object
         ..blocked = true
-        ..note = '源库读不到表「$missing」的结构';
+        ..note = '源库读不到表「$sourceName」的结构';
       return;
     }
-    object
-      ..action = SyncAction.drop
-      ..statements = [dropObjectDdl(typeId, SyncObjectKind.table, target.endpoint.schema, missing)]
-      ..note = '$side库读不到该表结构,仅生成删除语句';
-    return;
-  }
-
-  if (targetName == null) {
-    // 要在目标新建:实例级对象(所有者 / 表空间 / 继承 / 集群)不跨库搬运,
-    // 目标端多半没有同名角色 / 表空间,带着会直接失败。
-    final desired = _forTarget(srcDesign, target);
+    // 要在目标新建:按**源的完整定义**建(子块开关只决定「什么算差异」,
+    // 不决定「新建的对象长什么样」——否则取消勾选「比较主键」会建出没有主键的表);
+    // 实例级选项(所有者 / 表空间 / 继承 / 集群)是否跨库搬运由选项决定,
+    // 表空间 / 继承 / 集群一律清空(目标端多半没有同名表空间)。
+    final desired = _forTarget(srcDesign, target, options: options);
     object
       ..action = SyncAction.create
-      ..statements = _applyComments(DdlBuilder.buildStatements(desired, typeId), options);
+      ..statements = DdlBuilder.buildStatements(desired, typeId);
     return;
   }
   if (sourceName == null) {
     object
       ..action = SyncAction.drop
       ..statements = [
-        dropObjectDdl(typeId, SyncObjectKind.table, target.endpoint.schema, targetName),
+        dropObjectDdl(typeId, SyncObjectKind.table, target.endpoint.schema, targetName,
+            cascade: options.cascadeDrop),
       ];
     return;
   }
+  // 两侧都列出了该表却有一侧反查不出结构(驱动不支持 / 单表读取失败):
+  // 无法比对,标错交人工处理——此时生成 DROP 会把读不到当成要删掉。
+  if (srcDesign == null || tgtDesign == null) {
+    final missing = srcDesign == null ? sourceName : targetName;
+    final side = srcDesign == null ? '源' : '目标';
+    object
+      ..blocked = true
+      ..note = '$side库读不到表「$missing」的结构';
+    return;
+  }
 
-  final desired = _forTarget(srcDesign, target, baseline: tgtDesign);
-  final blocked = DdlBuilder.alterUnsupported(desired, tgtDesign, typeId);
+  // 差异只在**裁过的副本**上算:未勾选的子块(如索引)差异不算差异
+  final desired = _forTarget(srcCmp!, target, baseline: tgtCmp, options: options);
+  final blocked = DdlBuilder.alterUnsupported(desired, tgtCmp!, typeId);
   if (blocked != null) {
     object
       ..action = SyncAction.alter
@@ -627,8 +851,7 @@ Future<void> _diffTable({
       ..note = blocked;
     return;
   }
-  final stmts =
-      _applyComments(DdlBuilder.buildAlterStatements(desired, tgtDesign, typeId), options);
+  final stmts = DdlBuilder.buildAlterStatements(desired, tgtCmp, typeId);
   if (stmts.isEmpty) {
     object.action = SyncAction.none;
     return;
@@ -659,8 +882,8 @@ Future<void> _diffRoutine({
       : await target.driver.getDefinition(
           target.endpoint.database, targetName, kind_,
           schema: target.endpoint.schema);
-  final srcText = _rewriteDefinition(srcDef, source, target, options);
-  final tgtText = _rewriteDefinition(tgtDef, target, target, options);
+  final srcText = _rewriteDefinition(srcDef, source, target);
+  final tgtText = _rewriteDefinition(tgtDef, target, target);
   object
     ..sourceDdl = srcText ?? ''
     ..targetDdl = tgtText ?? '';
@@ -680,7 +903,10 @@ Future<void> _diffRoutine({
   if (sourceName == null) {
     object
       ..action = SyncAction.drop
-      ..statements = [dropObjectDdl(typeId, kind, target.endpoint.schema, targetName)];
+      ..statements = [
+        dropObjectDdl(typeId, kind, target.endpoint.schema, targetName,
+            cascade: options.cascadeDrop),
+      ];
     return;
   }
   if (srcText == null || tgtText == null || srcText.isEmpty || tgtText.isEmpty) {
@@ -689,10 +915,8 @@ Future<void> _diffRoutine({
       ..note = '读不到${kind.label}「$targetName」的定义,无法比较';
     return;
   }
-  final same = options.ignoreDefinitionSpace
-      ? _collapseSpace(srcText) == _collapseSpace(tgtText)
-      : srcText == tgtText;
-  if (same) {
+  // 折叠空白后比对:数据库返回的定义常差一个换行 / 缩进,那不是结构差异。
+  if (_collapseSpace(srcText) == _collapseSpace(tgtText)) {
     object.action = SyncAction.none;
     return;
   }
@@ -701,20 +925,136 @@ Future<void> _diffRoutine({
   object
     ..action = SyncAction.alter
     ..statements = [
-      dropObjectDdl(typeId, kind, target.endpoint.schema, targetName),
+      dropObjectDdl(typeId, kind, target.endpoint.schema, targetName,
+          cascade: options.cascadeDrop),
       srcText,
     ];
 }
 
-/// 把源侧设计数据改写成「在目标侧落地」的形态:名字与模式跟随目标基线,
-/// 实例级选项清空(跨库搬运多半无效)。
-DesignTable _forTarget(DesignTable from, _Side target, {DesignTable? baseline}) {
+/// 序列比对。
+///
+/// 序列的参数没有「定义文本」可取,由驱动把系统目录里的参数重建成一条
+/// `CREATE SEQUENCE`([SequenceDef]);参数不等就是「要修改」,做法是重建。
+/// 另外「比较序列最后值」勾选时,把两个序列的**分发位置**也对齐 ——
+/// 位置差异只生成 `ALTER SEQUENCE … RESTART WITH`,不动参数。
+Future<void> _diffSequence({
+  required SyncObject object,
+  required String typeId,
+  required SyncOptions options,
+  required _Side source,
+  required _Side target,
+  required String? sourceName,
+  required String? targetName,
+}) async {
+  final srcDef = sourceName == null
+      ? null
+      : await source.driver.readSequence(
+          source.endpoint.database, sourceName,
+          schema: source.endpoint.schema);
+  final tgtDef = targetName == null
+      ? null
+      : await target.driver.readSequence(
+          target.endpoint.database, targetName,
+          schema: target.endpoint.schema);
+  object
+    ..sourceDdl = srcDef?.createSql ?? ''
+    ..targetDdl = tgtDef?.createSql ?? '';
+
+  if (targetName == null) {
+    if (srcDef == null) {
+      object
+        ..blocked = true
+        ..note = '源库读不到序列「$sourceName」的定义';
+      return;
+    }
+    object
+      ..action = SyncAction.create
+      ..statements = [
+        srcDef.createSql,
+        // 新建出来的序列停在起始值上;源序列若已用过,顺带把位置对齐
+        if (options.sequenceLastValue && srcDef.nextValue != null)
+          _restartDdl(typeId, target.endpoint.schema, sourceName!, srcDef.nextValue!),
+      ];
+    return;
+  }
+  if (sourceName == null) {
+    object
+      ..action = SyncAction.drop
+      ..statements = [
+        dropObjectDdl(typeId, SyncObjectKind.sequence, target.endpoint.schema,
+            targetName,
+            cascade: options.cascadeDrop),
+      ];
+    return;
+  }
+  if (srcDef == null || tgtDef == null) {
+    object
+      ..blocked = true
+      ..note = '读不到序列「$targetName」的定义,无法比较';
+    return;
+  }
+
+  final paramsSame =
+      _collapseSpace(srcDef.createSql) == _collapseSpace(tgtDef.createSql);
+  final srcNext = srcDef.nextValue;
+  final tgtNext = tgtDef.nextValue;
+  // 最后值只在「勾选了比较序列最后值」且**两侧都读得到**时才算差异:
+  // 未取过值的一侧 nextValue 为 null(没有位置可比),拿它去比会凭空造出差异。
+  final lastSame = !options.sequenceLastValue ||
+      srcNext == null ||
+      tgtNext == null ||
+      srcNext == tgtNext;
+  if (paramsSame && lastSame) {
+    object.action = SyncAction.none;
+    return;
+  }
+
+  object..action = SyncAction.alter;
+  if (!paramsSame) {
+    // 参数变了:重建(序列没有「一次改完所有参数」的稳妥 ALTER;重建后位置
+    // 会回到起始值,故勾了「比较序列最后值」时要补一条 RESTART)
+    object.statements = [
+      dropObjectDdl(typeId, SyncObjectKind.sequence, target.endpoint.schema,
+          targetName,
+          cascade: options.cascadeDrop),
+      srcDef.createSql,
+      if (options.sequenceLastValue && srcNext != null)
+        _restartDdl(typeId, target.endpoint.schema, targetName, srcNext),
+    ];
+    return;
+  }
+  // 只有位置不同:直接 RESTART,不动参数(重建会把使用中的序列打断)
+  object.statements = [
+    _restartDdl(typeId, target.endpoint.schema, targetName, srcNext!),
+  ];
+}
+
+/// `ALTER SEQUENCE … RESTART WITH n`:把序列的**下一次分发值**设为 n。
+///
+/// 注意这里传的是源序列的「最后值 + 增量」(见 [SequenceDef.nextValue]),不是
+/// 最后值本身 —— 后者会把目标的下一个值设成源已经发过的那个,直接撞号。
+String _restartDdl(String typeId, String? schema, String name, String nextValue) {
+  final ident = DdlBuilder.qualified(typeId, schema, name);
+  return 'ALTER SEQUENCE $ident RESTART WITH $nextValue';
+}
+
+/// 把源侧设计数据改写成「在目标侧落地」的形态:名字与模式跟随目标基线。
+///
+/// 所有者:**勾选了「比较所有者」才跨库搬运**(差异由此生成 `ALTER … OWNER TO`),
+/// 否则清空 —— 目标端多半没有同名角色,带着会直接失败。表空间 / 继承 / 集群
+/// 一律清空(同因,且参考工具的「比较选项」里没有对应开关)。
+DesignTable _forTarget(
+  DesignTable from,
+  _Side target, {
+  DesignTable? baseline,
+  SyncOptions? options,
+}) {
   final d = from.snapshot()
     ..schema = baseline?.schema ?? target.endpoint.schema
-    ..owner = ''
     ..tablespace = ''
     ..inherits = ''
     ..cluster = '';
+  if (options?.owners != true) d.owner = '';
   if (baseline != null) {
     // 名字必须与基线一致:否则差异生成会输出一条表重命名
     d.name = baseline.name;
@@ -723,41 +1063,51 @@ DesignTable _forTarget(DesignTable from, _Side target, {DesignTable? baseline}) 
   return d;
 }
 
-/// 过滤独立注释语句([SyncOptions.ignoreComments])。
-List<String> _applyComments(List<String> stmts, SyncOptions options) {
-  if (!options.ignoreComments) return stmts;
-  return stmts.where((s) {
-    final t = s.trimLeft();
-    if (t.startsWith('COMMENT ON')) return false;
-    // MySQL / MariaDB 的表注释是独立一条 ALTER … COMMENT = …
-    if (RegExp(r'^ALTER\s+TABLE\s+.*\bCOMMENT\b', caseSensitive: false).hasMatch(t) &&
-        !RegExp(r'\bCOLUMN\b', caseSensitive: false).hasMatch(t)) {
-      return false;
+/// 按「选项」裁掉**不参与比对**的表子块,返回副本(不改原对象)。
+///
+/// 只在比对与差异生成前用:`desired` 与 `tgtDesign` 必须同时裁,否则同一处
+/// 差异只裁一侧会凭空多出一条(例如取消了「比较索引」,却仍拿源侧索引去比
+/// 目标侧已裁空的索引列表)。
+DesignTable _stripByOptions(DesignTable d, SyncOptions o) {
+  final s = d.snapshot();
+  if (!o.primaryKeys) {
+    for (final c in s.columns) {
+      c.primaryKey = false;
     }
-    return true;
-  }).toList();
+    s.pkName = '';
+  }
+  if (!o.foreignKeys) s.foreignKeys.clear();
+  if (!o.uniqueKeys) s.uniqueKeys.clear();
+  if (!o.checks) s.checks.clear();
+  if (!o.excludes) s.excludes.clear();
+  if (!o.indexes) s.indexes.clear();
+  if (!o.triggers) s.triggers.clear();
+  if (!o.rules) s.rules.clear();
+  if (!o.owners) s.owner = '';
+  return s;
 }
 
 /// 定义文本改写:去掉 DEFINER 子句、把源库前缀换成目标库(MySQL 视图 / 函数
 /// 的定义文本自带 `` `库名`. `` 限定,不替换会把语句写回源库)。
+///
+/// 去 DEFINER 是**无条件**的:改前它是默认勾选的选项「去掉 MySQL 定义中的
+/// DEFINER 子句」,参考工具的「比较选项」里没有这一项,而目标端没有该账号时
+/// CREATE 必然失败,故固定执行。
 String? _rewriteDefinition(
   String? raw,
   _Side from,
   _Side to,
-  SyncOptions options,
 ) {
   if (raw == null) return null;
   var text = raw.trim();
   if (text.isEmpty) return text;
-  if (options.stripDefiner) {
-    text = text.replaceAllMapped(
-      RegExp(
-        r"DEFINER\s*=\s*(?:`[^`]*`|'[^']*'|\[[^\]]*\])@(?:`[^`]*`|'[^']*'|\[[^\]]*\])\s*",
-        caseSensitive: false,
-      ),
-      (_) => '',
-    );
-  }
+  text = text.replaceAllMapped(
+    RegExp(
+      r"DEFINER\s*=\s*(?:`[^`]*`|'[^']*'|\[[^\]]*\])@(?:`[^`]*`|'[^']*'|\[[^\]]*\])\s*",
+      caseSensitive: false,
+    ),
+    (_) => '',
+  );
   final fromDb = from.endpoint.database;
   final toDb = to.endpoint.database;
   if (DdlBuilder.isMysqlLike(from.connection.typeId) &&
@@ -769,11 +1119,23 @@ String? _rewriteDefinition(
 }
 
 /// 折叠所有空白(比较定义文本用:数据库返回的换行 / 缩进差异不算差异)。
+/// 改前是默认勾选的选项「定义比较忽略空白差异」,现固定执行(参考工具无此项)。
 String _collapseSpace(String s) =>
     s.replaceAll(RegExp(r'\s+'), ' ').trim();
 
 /// 目标端删除对象的语句(带模式限定;`IF EXISTS` 让重复部署不至于失败)。
-String dropObjectDdl(String typeId, SyncObjectKind kind, String? schema, String name) {
+///
+/// [cascade] 为真时补 `CASCADE`,连带删掉依赖该对象的对象 —— 对应「选项」里的
+/// 「用级联删除」。**只有 PostgreSQL 家族支持**,其余类型忽略该参数
+/// (MySQL 的 `DROP TABLE` 语法上收 `CASCADE` 却只当 `RESTRICT` 用,写了反而误导)。
+String dropObjectDdl(
+  String typeId,
+  SyncObjectKind kind,
+  String? schema,
+  String name, {
+  bool cascade = false,
+}) {
   final ident = DdlBuilder.qualified(typeId, schema, name);
-  return 'DROP ${kind.dropKeyword} IF EXISTS $ident';
+  final suffix = cascade && DdlBuilder.isPgLike(typeId) ? ' CASCADE' : '';
+  return 'DROP ${kind.dropKeyword} IF EXISTS $ident$suffix';
 }
