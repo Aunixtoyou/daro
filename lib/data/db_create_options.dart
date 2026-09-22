@@ -1,9 +1,14 @@
 /// 新建数据库的选项。不同数据库类型使用不同字段:
 ///
 /// - MySQL / MariaDB:[charset] + [collation](字符集 / 排序规则)
-/// - PostgreSQL:[encoding] + [template] + [owner](编码 / 模板 / 拥有者)
+/// - PostgreSQL:[encoding] + [template] + [owner] + [lcCollate] + [lcCtype]
+///   + [tablespace] + [connectionLimit] + [allowConnections] + [isTemplate],
+///   建库后可选执行 [extensions] 与 [comment]
 /// - SQL Server:[collation](排序规则,可空 = 服务器默认)
 /// - SQLite / Access(文件型):单文件即一个库,无独立建库概念,由菜单层禁用
+///
+/// PostgreSQL 的字段与 `CREATE DATABASE` 的子句一一对应,见
+/// [buildCreateDatabaseSql] / [buildCreateDatabasePostSql]。
 class CreateDatabaseOptions {
   const CreateDatabaseOptions({
     required this.name,
@@ -12,6 +17,14 @@ class CreateDatabaseOptions {
     this.encoding,
     this.template,
     this.owner,
+    this.lcCollate,
+    this.lcCtype,
+    this.tablespace,
+    this.connectionLimit,
+    this.allowConnections = true,
+    this.isTemplate = false,
+    this.extensions = const [],
+    this.comment,
   });
 
   /// 数据库名称(必填)
@@ -32,6 +45,30 @@ class CreateDatabaseOptions {
 
   /// PostgreSQL:拥有者(可空 = 当前用户)
   final String? owner;
+
+  /// PostgreSQL:排序规则(LC_COLLATE,可空 = 跟随模板)
+  final String? lcCollate;
+
+  /// PostgreSQL:字符分类(LC_CTYPE,可空 = 跟随模板)
+  final String? lcCtype;
+
+  /// PostgreSQL:表空间(可空 = pg_default)
+  final String? tablespace;
+
+  /// PostgreSQL:连接限制(-1 = 无限制;可空视为不输出该子句)
+  final int? connectionLimit;
+
+  /// PostgreSQL:是否允许连接(ALLOW_CONNECTIONS,默认 true)
+  final bool allowConnections;
+
+  /// PostgreSQL:是否作为模板(IS_TEMPLATE,默认 false)
+  final bool isTemplate;
+
+  /// PostgreSQL:建库后在**新库**中执行的 `CREATE EXTENSION`(仅扩展名)
+  final List<String> extensions;
+
+  /// PostgreSQL:数据库注释(COMMENT ON DATABASE,空 = 不输出)
+  final String? comment;
 }
 
 /// MySQL / MariaDB 常用字符集(首项为默认值)
@@ -96,11 +133,20 @@ const kSqlServerCollations = <String>[
   'Latin1_General_100_CI_AS',
 ];
 
+/// PostgreSQL 连接限制的「无限制」值(与 `CONNECTION LIMIT` 默认值一致)
+const int kPgConnectionLimitUnlimited = -1;
+
+/// 单引号字符串字面量转义(PostgreSQL:'' 表示一个单引号)
+String _quoteLiteral(String value) => "'${value.replaceAll("'", "''")}'";
+
+/// 标识符转义并加双引号(PostgreSQL 风格)
+String _quotePgIdent(String value) => '"${value.replaceAll('"', '""')}"';
+
 /// 按数据库类型生成 CREATE DATABASE 语句。
 ///
 /// 标识符引用规则与 AppState._ident 保持一致:
 /// PostgreSQL 双引号 / SQL Server 方括号 / MySQL·MariaDB 反引号。
-/// 选项为空时不附加对应子句,使用服务器默认值。
+/// 选项为空(或等于服务端默认)时不附加对应子句,使用服务器默认值。
 String buildCreateDatabaseSql(String typeId, CreateDatabaseOptions o) {
   final name = o.name.trim();
   switch (typeId) {
@@ -113,18 +159,39 @@ String buildCreateDatabaseSql(String typeId, CreateDatabaseOptions o) {
       if (collation.isNotEmpty) buf.write(' COLLATE $collation');
       return buf.toString();
     case 'postgresql':
-      final buf = StringBuffer('CREATE DATABASE "${name.replaceAll('"', '""')}"');
-      final encoding = o.encoding?.trim() ?? '';
-      final template = o.template?.trim() ?? '';
+      final clauses = <String>[];
       final owner = o.owner?.trim() ?? '';
+      final template = o.template?.trim() ?? '';
+      final encoding = o.encoding?.trim() ?? '';
+      final lcCollate = o.lcCollate?.trim() ?? '';
+      final lcCtype = o.lcCtype?.trim() ?? '';
+      final tablespace = o.tablespace?.trim() ?? '';
+      if (owner.isNotEmpty) clauses.add('OWNER = ${_quotePgIdent(owner)}');
+      if (template.isNotEmpty) clauses.add('TEMPLATE = ${_quotePgIdent(template)}');
       if (encoding.isNotEmpty) {
-        buf.write(" ENCODING '${encoding.replaceAll("'", "''")}'");
+        clauses.add('ENCODING = ${_quoteLiteral(encoding)}');
       }
-      if (template.isNotEmpty) buf.write(' TEMPLATE $template');
-      if (owner.isNotEmpty) {
-        buf.write(' OWNER "${owner.replaceAll('"', '""')}"');
+      if (lcCollate.isNotEmpty) {
+        clauses.add('LC_COLLATE = ${_quoteLiteral(lcCollate)}');
       }
-      return buf.toString();
+      if (lcCtype.isNotEmpty) {
+        clauses.add('LC_CTYPE = ${_quoteLiteral(lcCtype)}');
+      }
+      if (tablespace.isNotEmpty) {
+        clauses.add('TABLESPACE = ${_quotePgIdent(tablespace)}');
+      }
+      // 与默认值相同的布尔项不输出(默认 ALLOW_CONNECTIONS = true / IS_TEMPLATE = false)
+      if (!o.allowConnections) clauses.add('ALLOW_CONNECTIONS = false');
+      final limit = o.connectionLimit;
+      if (limit != null && limit != kPgConnectionLimitUnlimited) {
+        clauses.add('CONNECTION LIMIT = $limit');
+      }
+      if (o.isTemplate) clauses.add('IS_TEMPLATE = true');
+
+      final head = 'CREATE DATABASE ${_quotePgIdent(name)}';
+      if (clauses.isEmpty) return head;
+      // 多行排版:WITH 后每行一个子句,与 Navicat / pgAdmin 的预览风格一致
+      return '$head\n       WITH ${clauses.join('\n            ')}';
     case 'sqlserver':
       final buf = StringBuffer('CREATE DATABASE [${name.replaceAll(']', ']]')}]');
       final collation = o.collation?.trim() ?? '';
@@ -134,4 +201,40 @@ String buildCreateDatabaseSql(String typeId, CreateDatabaseOptions o) {
       // 文件型 / 未支持类型不会走到这里(菜单已禁用),兜底裸建
       return 'CREATE DATABASE $name';
   }
+}
+
+/// 建库**之后**要执行的语句(可为空列表)。
+///
+/// 这些语句必须在新库上下文中执行(见 `AppState.createDatabase`):
+/// - 扩展:`CREATE EXTENSION IF NOT EXISTS "x"`(PostgreSQL 专有)
+/// - 注释:`COMMENT ON DATABASE "x" IS '...'`(PostgreSQL 专有)
+///
+/// 其它数据库类型暂不支持扩展 / 库注释,恒返回空列表。
+List<String> buildCreateDatabasePostSql(
+  String typeId,
+  CreateDatabaseOptions o,
+) {
+  if (typeId != 'postgresql') return const [];
+  final name = o.name.trim();
+  if (name.isEmpty) return const [];
+  final ident = _quotePgIdent(name);
+
+  final sqls = <String>[];
+  for (final ext in o.extensions) {
+    final e = ext.trim();
+    if (e.isEmpty) continue;
+    sqls.add('CREATE EXTENSION IF NOT EXISTS ${_quotePgIdent(e)}');
+  }
+  final comment = o.comment?.trim() ?? '';
+  if (comment.isNotEmpty) {
+    sqls.add('COMMENT ON DATABASE $ident IS ${_quoteLiteral(comment)}');
+  }
+  return sqls;
+}
+
+/// SQL 预览用的完整脚本(建库语句 + 建库后语句,分号结尾)。
+String buildCreateDatabaseScript(String typeId, CreateDatabaseOptions o) {
+  final parts = <String>[buildCreateDatabaseSql(typeId, o)];
+  parts.addAll(buildCreateDatabasePostSql(typeId, o));
+  return parts.map((s) => '$s;').join('\n\n');
 }

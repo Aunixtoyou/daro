@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../data/connection_store.dart';
+import '../data/create_database_catalog.dart';
 import '../data/db_create_options.dart';
 import '../data/db_data.dart';
 import '../data/db_export.dart';
@@ -1429,8 +1430,11 @@ class AppState extends ChangeNotifier {
   }
 
   /// 新建数据库:按连接类型生成 CREATE DATABASE 语句(字符集 / 编码 /
-  /// 模板 / 排序规则等选项见 [CreateDatabaseOptions])并执行,
+  /// 模板 / 排序规则 / 表空间 / 连接限制等选项见 [CreateDatabaseOptions])并执行,
   /// 成功后刷新连接下的库列表。名称空 / 重名 / 无权限由服务端报错。
+  ///
+  /// 建库后的附加语句(PostgreSQL 的扩展 / 库注释,见
+  /// [buildCreateDatabasePostSql])在**新库**上下文中逐条执行。
   Future<DdlOutcome> createDatabase(
     ConnectionInfo conn,
     CreateDatabaseOptions options,
@@ -1438,12 +1442,68 @@ class AppState extends ChangeNotifier {
     final dbName = options.name.trim();
     if (dbName.isEmpty) return DdlOutcome(false, '数据库名不能为空');
     final sql = buildCreateDatabaseSql(conn.typeId, options);
+    final post = buildCreateDatabasePostSql(conn.typeId, options);
     try {
+      // PostgreSQL 的 CREATE DATABASE 不允许在事务块中执行,所以每条语句
+      // 单独 runQuery(驱动不会把它们并成一次多语句调用)。
       await connectionManager.runQuery(conn, sql, limit: 1);
-      await connectionManager.refreshDatabases(conn);
-      return DdlOutcome(true);
     } catch (e) {
       return DdlOutcome(false, e.toString());
+    }
+    for (final extra in post) {
+      try {
+        await connectionManager.runQuery(conn, extra,
+            database: dbName, limit: 1);
+      } catch (e) {
+        // 库已经建出来了,不能整体报「创建失败」——说明清楚并刷新列表
+        await connectionManager.refreshDatabases(conn);
+        return DdlOutcome(
+          false,
+          '数据库「$dbName」已创建,但附加语句执行失败:\n$e',
+        );
+      }
+    }
+    await connectionManager.refreshDatabases(conn);
+    return DdlOutcome(true);
+  }
+
+  /// 加载「新建数据库」对话框的下拉候选(PostgreSQL 的所有者 / 模板 /
+  /// 表空间 / 扩展)。
+  ///
+  /// 连接未打开、非 PostgreSQL 或任一查询失败时回退到内置兜底常量
+  /// (见 [DatabaseCreateCatalog.fallback]),对话框始终可用。
+  Future<DatabaseCreateCatalog> loadCreateDatabaseCatalog(
+    ConnectionInfo conn,
+  ) async {
+    final fallback = DatabaseCreateCatalog.fallback(username: conn.username);
+    if (conn.typeId != 'postgresql') return fallback;
+    if (!connectionManager.isConnected(conn.name)) return fallback;
+    try {
+      final ownersRow =
+          await connectionManager.runQuery(conn, kPgOwnerCatalogSql, limit: 500);
+      final templatesRow = await connectionManager.runQuery(
+          conn, kPgTemplateCatalogSql,
+          limit: 500);
+      final spacesRow = await connectionManager.runQuery(
+          conn, kPgTablespaceCatalogSql,
+          limit: 500);
+      final extsRow = await connectionManager.runQuery(
+          conn, kPgExtensionCatalogSql,
+          limit: 2000);
+      final owners = firstColumnOf(ownersRow.rows);
+      final templates = firstColumnOf(templatesRow.rows);
+      final tablespaces = firstColumnOf(spacesRow.rows);
+      final extensions = parseExtensionRows(extsRow.rows);
+      return DatabaseCreateCatalog(
+        owners: owners.isEmpty ? fallback.owners : owners,
+        templates: templates.isEmpty ? fallback.templates : templates,
+        tablespaces: tablespaces.isEmpty ? fallback.tablespaces : tablespaces,
+        extensions: extensions.isEmpty ? fallback.extensions : extensions,
+        loadedFromServer: true,
+      );
+    } catch (_) {
+      // 权限不足 / 连接中断:静默回退,不打断用户建库
+      return fallback;
     }
   }
 
