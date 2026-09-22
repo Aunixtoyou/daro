@@ -9,10 +9,10 @@ Flutter 构建的轻量级桌面数据库管理工具
 本项目创建之初致敬了navicat界面和操作习惯，后续将按照社区反馈进行迭代完善；本项目为完全免费使用，仅作为学习和分享Flutter技术探索，不提供任何技术支持和售后行为。
 
 </div>
-<img width="2544" height="1430" alt="image" src="https://github.com/user-attachments/assets/c1e907c6-112b-490b-a1f2-7b1ab08a1a78" />
-<img width="2544" height="1430" alt="image" src="https://github.com/user-attachments/assets/8c2b87ad-f382-472a-95ae-d984def3e6c1" />
-<img width="2544" height="1430" alt="image" src="https://github.com/user-attachments/assets/c64b96c7-d5ab-4d81-801b-bbc4b756d421" />
-<img width="2544" height="1430" alt="image" src="https://github.com/user-attachments/assets/5b47023c-4a1c-45c9-8f45-1ad40360d43e" />
+<img width="2544" height="1430" alt="daro 主界面（暗色）" src="docs/images/dark-overview.png" />
+<img width="2544" height="1430" alt="daro 主界面（明亮）" src="docs/images/light-overview.png" />
+<img width="2544" height="1430" alt="daro 对象面板与表列表（暗色）" src="docs/images/dark-object-panel.png" />
+<img width="2544" height="1430" alt="daro 对象面板与表列表（明亮）" src="docs/images/light-object-panel.png" />
 
 ---
 
