@@ -92,6 +92,12 @@ class AppPalette {
   Color get treeSelectedBg =>
       Color.alphaBlend(accent.withValues(alpha: 0.15), background);
 
+  /// 文本划选背景:同上做法但更实一档(15% 太淡,划选看不出范围)。
+  /// 不设 `textSelectionTheme` 时会落到 Material 3 基线的**紫色**(#6750A4),
+  /// 与本应用的蓝色强调色不是一家 —— 见 `buildAppTheme`。
+  Color get textSelectionBg =>
+      Color.alphaBlend(accent.withValues(alpha: 0.30), background);
+
   /// 拷贝并覆盖指定字段,用于主题定制时逐项修改。
   AppPalette copyWith({
     Color? background,
@@ -586,6 +592,14 @@ ThemeData buildAppTheme(Brightness brightness, AppPalette palette) {
     scaffoldBackgroundColor: palette.background,
     canvasColor: palette.background,
     popupMenuTheme: PopupMenuThemeData(color: palette.popover),
+    // 文本选区 / 光标:不设就会落到 Material 3 基线的紫色(#6750A4),
+    // 输入框、文本域、以及只读的 SelectableText(部署脚本 / 日志、SQL 预览)
+    // 全都会显示成紫色选区,与应用蓝色强调色不是一家。
+    textSelectionTheme: TextSelectionThemeData(
+      selectionColor: palette.textSelectionBg,
+      cursorColor: palette.accent,
+      selectionHandleColor: palette.accent,
+    ),
     // 全局滚动条：静止收窄，鼠标悬浮 / 拖动时恢复常规宽度
     scrollbarTheme: ScrollbarThemeData(
       thickness: scrollbarHoverThickness(),
