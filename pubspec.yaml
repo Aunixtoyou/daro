@@ -50,4 +50,7 @@ flutter:
     # 应用自绘图标集(矢量 SVG)
     - assets/icons/ui/
     - assets/icons/engines/
+    # 项目主页双平台品牌图标(「关于」弹窗用,单文件声明不牵连 brands/ 其余素材)
+    - assets/icons/brands/github.svg
+    - assets/icons/brands/gitee.svg
     - windows/runner/resources/

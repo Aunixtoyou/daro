@@ -10,6 +10,26 @@
     "trademark_owner": "Microsoft Corporation",
     "viewBox": "0 0 165.36159 156.44981"
   },
+  "gitee": {
+    "bytes": 606,
+    "candidates": [
+      "https://cdn.simpleicons.org/gitee"
+    ],
+    "mark": "红色圆弧 G 字标",
+    "source_url": "https://cdn.jsdelivr.net/npm/simple-icons@13/icons/gitee.svg",
+    "trademark_owner": "深圳奥思网络科技有限公司 (OSChina)",
+    "viewBox": "0 0 24 24"
+  },
+  "github": {
+    "bytes": 838,
+    "candidates": [
+      "https://cdn.simpleicons.org/github"
+    ],
+    "mark": "Invertocat 猫头",
+    "source_url": "https://cdn.jsdelivr.net/npm/simple-icons@13/icons/github.svg",
+    "trademark_owner": "GitHub, Inc. (Microsoft Corporation)",
+    "viewBox": "0 0 24 24"
+  },
   "mariadb": {
     "bytes": 1831,
     "candidates": [
