@@ -67,6 +67,7 @@ pubspec.lock
 /.qoder/
 /.scratch/
 /tmp_*
+/test/scratch_*
 /menus.csv
 /pr6.diff
 /pr6-comment.md
