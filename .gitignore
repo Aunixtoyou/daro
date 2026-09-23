@@ -59,3 +59,15 @@ pubspec.lock
 
 # 本地诊断输出(如 flutter analyze 重定向到根目录的日志,不入库)
 /analyze_out.txt
+
+# gen-l10n 的缺译报告(每次 codegen 重写的构建产物;内容由 test/l10n_parity_test.dart 守护)
+/l10n_untranslated.json
+
+# 会话临时产物(诊断脚本 / 一次性文案导出 / 本地工具权限设置,不入库)
+/.qoder/
+/.scratch/
+/tmp_*
+/menus.csv
+/pr6.diff
+/pr6-comment.md
+/package-lock.json
