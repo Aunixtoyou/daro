@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:base_ui_flutter/base_ui_flutter.dart' show Splitter;
 import '../app/app_state.dart';
+import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
 import '../widgets/top_menu.dart';
 import '../widgets/ribbon.dart';
@@ -13,6 +14,7 @@ import '../widgets/status_bar.dart';
 import '../widgets/view_tabs.dart';
 import '../widgets/table_data_page.dart';
 import '../widgets/query_page.dart';
+import '../widgets/command_line_page.dart';
 import '../widgets/table_designer_page.dart';
 import '../widgets/routine_design_page.dart';
 import '../widgets/view_design_page.dart';
@@ -82,21 +84,14 @@ class _MainPageState extends State<MainPage> {
                                     schema: tab.schema,
                                   );
                                 if (tab.type == TabType.design) {
-                                  // 设计标签标题带有 " (设计)" / " (新建)" 后缀以与数据页区分,
-                                  // 这里还原出真实对象名传给设计视图
-                                  const suffixDesign = ' (设计)';
-                                  const suffixNew = ' (新建)';
+                                  // 标题里的「(设计) / (新建)」是与语言无关的内部身份令牌,
+                                  // 这里剥掉它还原真实对象名(见 splitTabTitle)
+                                  final split = splitTabTitle(tab.title);
+                                  final name = split.name;
+                                  final isNew = split.isNew;
                                   final category = tab.routineCategory;
                                   if (category != null) {
                                     // 例程(过程 / 函数 / 视图)设计页
-                                    final isNew = tab.title.endsWith(suffixNew);
-                                    final suffix =
-                                        isNew ? suffixNew : suffixDesign;
-                                    final name = tab.title.endsWith(suffix)
-                                        ? tab.title.substring(
-                                            0,
-                                            tab.title.length - suffix.length)
-                                        : tab.title;
                                     if (category == ObjectCategory.view) {
                                       // 视图设计页(Navicat 风格:定义 / 规则 / 高级 / 注释 / SQL 预览)
                                       // 实体化视图不走此页:驱动无定义可读,且保存会误 DROP/CREATE
@@ -121,13 +116,6 @@ class _MainPageState extends State<MainPage> {
                                       comment: tab.routineComment ?? '',
                                     );
                                   }
-                                  final tableName =
-                                      tab.title.endsWith(suffixDesign)
-                                          ? tab.title.substring(
-                                              0,
-                                              tab.title.length -
-                                                  suffixDesign.length)
-                                          : tab.title;
                                   // 「设计表」与「新建表」共用同一设计器:
                                   // existingTable 非空 = 编辑模式(反查结构 + 保存 ALTER)
                                   return TableDesignerPage(
@@ -135,7 +123,7 @@ class _MainPageState extends State<MainPage> {
                                     connection: tab.connection!,
                                     database: tab.database!,
                                     schema: tab.schema,
-                                    existingTable: tableName,
+                                    existingTable: isNew ? null : name,
                                   );
                                 }
                                 if (tab.type == TabType.query)
@@ -144,6 +132,11 @@ class _MainPageState extends State<MainPage> {
                                     connection: tab.connection,
                                     database: tab.database,
                                     schema: tab.schema,
+                                  );
+                                if (tab.type == TabType.commandLine)
+                                  return CommandLinePage(
+                                    connection: tab.connection!,
+                                    database: tab.database!,
                                   );
                                 if (tab.type == TabType.createTable)
                                   return TableDesignerPage(

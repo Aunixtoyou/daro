@@ -30,6 +30,10 @@ const String kSequenceIcon = 'assets/icons/ui/sequence.svg';
 /// 展开 / 折叠状态不切换图标,始终用这一个。
 const String kConnGroupIcon = 'assets/icons/ui/conn_group.svg';
 
+/// 命令列界面标签图标:自绘终端瓦片。命令列不是 [ObjectCategory] 的一员,
+/// 故与序列一样单列资源常量,不进 [ObjectCategoryIcon.assetOf]。
+const String kConsoleIcon = 'assets/icons/ui/console.svg';
+
 /// 对象分类图标组件:渲染自绘彩色 SVG(与 Ribbon 分类按钮一致)。
 ///
 /// 连接树分组节点 / 树中对象实例 / 对象面板实例 / 打开标签页 的图标

@@ -4,37 +4,59 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../data/connection_store.dart';
 import '../data/create_database_catalog.dart';
+import '../data/database_edit_catalog.dart';
 import '../data/db_create_options.dart';
 import '../data/db_data.dart';
+import '../data/db_edit_options.dart';
 import '../data/db_export.dart';
 import '../data/db_import.dart';
 import '../data/drivers/db_driver.dart';
+import '../data/locale_store.dart';
 import '../data/saved_query_store.dart';
 import '../data/sql_file_run.dart';
 import '../data/table_design.dart';
 import '../data/theme_store.dart';
+import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
+import 'cli_console.dart';
 import 'connection_manager.dart';
 import 'mcp_service.dart';
 
-/// 中部视图标签的类型:对象浏览页 / 表数据页 / 查询编辑页 / 表设计器
-enum TabType { object, table, query, design, createTable }
+/// 中部视图标签的类型:对象浏览页 / 表数据页 / 查询编辑页 / 表设计器 / 命令列界面
+enum TabType { object, table, query, design, createTable, commandLine }
 
 /// 中部对象页当前浏览的对象分类(对应连接树的分组节点)
 enum ObjectCategory { table, view, materializedView, function, procedure, user, query, backup }
 
 extension ObjectCategoryX on ObjectCategory {
   /// 分类显示名(唯一数据源:Ribbon 按钮、连接树分组、对象面板均取此处,
-  /// user 分类显示「角色」)
-  String get label => switch (this) {
-        ObjectCategory.table => '表',
-        ObjectCategory.view => '视图',
-        ObjectCategory.materializedView => '实体化视图',
-        ObjectCategory.function => '函数',
-        ObjectCategory.procedure => '过程',
-        ObjectCategory.user => '角色',
-        ObjectCategory.query => '查询',
-        ObjectCategory.backup => '备份',
+  /// user 分类显示「角色」)。
+  ///
+  /// 显示名随界面语言变化,而本类拿不到 `BuildContext`,故由调用方把
+  /// [AppLocalizations] 传进来;枚举的 `.name` 仍是稳定的英文标识,
+  /// 用于能力匹配与持久化,不受语言影响。
+  String labelOf(AppLocalizations l) => switch (this) {
+        ObjectCategory.table => l.catTable,
+        ObjectCategory.view => l.catView,
+        ObjectCategory.materializedView => l.catMaterializedView,
+        ObjectCategory.function => l.catFunction,
+        ObjectCategory.procedure => l.catProcedure,
+        ObjectCategory.user => l.catRole,
+        ObjectCategory.query => l.catQuery,
+        ObjectCategory.backup => l.catBackup,
+      };
+
+  /// 复数形态:英语的「删除 3 个 Tables」这类句子需要它,中文与日语没有单复数
+  /// 变形、与 [labelOf] 同形。带数量的提示一律用它。
+  String pluralOf(AppLocalizations l) => switch (this) {
+        ObjectCategory.table => l.catTablePlural,
+        ObjectCategory.view => l.catViewPlural,
+        ObjectCategory.materializedView => l.catMaterializedViewPlural,
+        ObjectCategory.function => l.catFunctionPlural,
+        ObjectCategory.procedure => l.catProcedurePlural,
+        ObjectCategory.user => l.catRole,
+        ObjectCategory.query => l.catQuery,
+        ObjectCategory.backup => l.catBackup,
       };
 }
 
@@ -223,6 +245,7 @@ class AppState extends ChangeNotifier {
       _loadPersisted(),
       _loadSavedQueries(),
       loadCustomTheme(),
+      loadLanguage(),
     ]);
     // MCP 起宿主放在连接加载之后:否则 agent 抢在首帧前连上只会看到空连接列表。
     unawaited(_initialLoad.then((_) => mcp.bootstrap()));
@@ -230,6 +253,10 @@ class AppState extends ChangeNotifier {
 
   /// 主题模式:默认跟随系统,可在顶部菜单手动切换
   ThemeMode themeMode = ThemeMode.system;
+
+  /// 语言偏好: null = 跟随系统,可在「工具 → 选项… → 常规」里手动切换。
+  /// 生效语言由 [resolveLocale] 结合系统语言算出。
+  String? languageCode;
 
   /// 真实连接管理:驱动连接池 + 树元数据懒加载状态
   final ConnectionManager connectionManager = ConnectionManager();
@@ -747,7 +774,7 @@ class AppState extends ChangeNotifier {
         objectCategory = category;
         _clearTableSelection();
       }
-      activeTab = '对象';
+      activeTab = objectsTabKey;
       notifyListeners();
       return;
     }
@@ -756,7 +783,7 @@ class AppState extends ChangeNotifier {
       objectCategory = category;
       _clearTableSelection();
     }
-    activeTab = '对象';
+    activeTab = objectsTabKey;
     notifyListeners();
     // 通知连接树选中分组节点(仅高亮联动,不触发数据加载)
     treeNavigate.value++;
@@ -841,11 +868,50 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ── 语言 ──────────────────────────────────────────────────
+
+  /// 语言偏好持久化存储(应用支持目录 locale.json)
+  final LocaleStore _localeStore = LocaleStore();
+
+  /// 启动时读取语言偏好;文件缺失 / 损坏时保持「跟随系统」
+  Future<void> loadLanguage() async {
+    final stored = await _localeStore.load();
+    if (stored == languageCode) return;
+    languageCode = stored;
+    notifyListeners();
+  }
+
+  /// 切换界面语言:[code] 传 null 表示改回跟随系统。立即生效并落盘。
+  ///
+  /// 落盘失败(只读目录等)不影响本次会话,故不向上抛。
+  void setLanguageCode(String? code) {
+    if (languageCode == code) return;
+    languageCode = code;
+    notifyListeners();
+    unawaited(_localeStore.save(code).catchError((_) {}));
+  }
+
+  /// 当前生效的 locale:[languageCode] 为空时按系统语言解析。
+  ///
+  /// [system] 仅供测试注入;运行时读平台语言。
+  Locale resolveLocale([Locale? system]) => resolveAppLocale(
+        override: languageCode,
+        system: system ?? WidgetsBinding.instance.platformDispatcher.locale,
+      );
+
   /// 已打开的标签(不含固定的"对象"首页)
   final List<OpenTab> tabs = [];
 
-  /// 当前活动标签标题,"对象"表示对象浏览页
-  String activeTab = '对象';
+  /// 「对象」首页标签的**身份标识**。
+  ///
+  /// 标签身份一直是标题字符串([activeTab] 与 [OpenTab.title] 比对),但固定首页
+  /// 的标题要随界面语言显示成「对象 / Objects / オブジェクト」—— 拿译文当身份,
+  /// 切一次语言活动标签就找不到自己了。故这里存一个不可能与表名撞车的哨兵,
+  /// 显示文案由 [OpenTab] 之外按词条取。
+  static const String objectsTabKey = '@@objects';
+
+  /// 当前活动标签标题,[objectsTabKey] 表示对象浏览页
+  String activeTab = objectsTabKey;
 
   String selectedTable = '';
 
@@ -1003,7 +1069,7 @@ class AppState extends ChangeNotifier {
 
     final tab = OpenTab(
       TabType.design,
-      '$name (设计)',
+      '$name$kTabDesignTitleSuffix',
       null,
       connection,
       database,
@@ -1012,7 +1078,7 @@ class AppState extends ChangeNotifier {
 
     final exists =
         tabs.any((t) => t.type == TabType.design && t.key == tab.key);
-    activeTab = '$name (设计)';
+    activeTab = '$name$kTabDesignTitleSuffix';
     if (!exists) {
       tabs.add(tab);
     }
@@ -1033,6 +1099,52 @@ class AppState extends ChangeNotifier {
       objectDatabase,
       objectSchema,
     ));
+    activeTab = title;
+    notifyListeners();
+  }
+
+  // ── 命令列界面 ──────────────────────────────────────────────
+
+  /// 每个命令列会话一次取回的最大行数(交给驱动下推 LIMIT,不拉整表)
+  static const int cliRowLimit = 1000;
+
+  /// 标签标题(= 会话键)→ 命令列会话。输出与历史存在这里而不是页面 State:
+  /// 切换标签会销毁页面(见 main_page 的按类型分发),存这里才不会丢日志。
+  final Map<String, CliConsole> _cliConsoles = {};
+
+  /// 命令列标签的标题(内部身份:连接名|库名 + 不参与翻译的令牌后缀)
+  static String cliTabTitle(String connection, String database) =>
+      '$connection|$database$kTabCliTitleSuffix';
+
+  /// 取(或首次创建)某连接 + 库的命令列会话
+  CliConsole cliConsoleFor(String connection, String database) {
+    return _cliConsoles[cliTabTitle(connection, database)] ??= CliConsole(
+      database: database,
+      typeId: connectionByName(connection)?.typeId ?? '',
+      rowLimit: cliRowLimit,
+      executor: (sql) async {
+        final conn = connectionByName(connection);
+        if (conn == null) throw StateError('连接「$connection」已不存在');
+        if (!hasDriver(conn)) {
+          throw UnsupportedError('暂不支持 ${conn.typeId} 类型的连接');
+        }
+        return connectionManager.runQuery(conn, sql,
+            database: database, limit: cliRowLimit);
+      },
+    );
+  }
+
+  /// 打开命令列界面:每个「连接 + 库」一个标签,已存在则直接激活。
+  /// 会话上下文即该库,提示符与切库都由 [CliConsole] 负责。
+  void openCommandLine({
+    required String connection,
+    required String database,
+  }) {
+    final title = cliTabTitle(connection, database);
+    if (!tabs.any((tab) => tab.title == title)) {
+      tabs.add(OpenTab(TabType.commandLine, title, null, connection, database));
+    }
+    setObjectContext(connection, database);
     activeTab = title;
     notifyListeners();
   }
@@ -1209,13 +1321,25 @@ class AppState extends ChangeNotifier {
       }
       _tableStatus.remove(tab.key);
     }
-    if (activeTab == title) activeTab = '对象';
+    _releaseCliConsoles(closing);
+    if (activeTab == title) activeTab = objectsTabKey;
     notifyListeners();
+  }
+
+  /// 释放被关闭标签的命令列会话(输出缓冲 + 历史随标签一起销毁)
+  void _releaseCliConsoles(Iterable<OpenTab> closing) {
+    for (final tab in closing) {
+      if (tab.type == TabType.commandLine) {
+        _cliConsoles.remove(tab.title)?.dispose();
+      }
+    }
   }
 
   /// 关闭除 [title] 外的所有标签,并激活该标签
   void closeOtherTabs(String title) {
+    final closing = tabs.where((tab) => tab.title != title).toList();
     tabs.removeWhere((tab) => tab.title != title);
+    _releaseCliConsoles(closing);
     activeTab = title;
     notifyListeners();
   }
@@ -1224,16 +1348,20 @@ class AppState extends ChangeNotifier {
   void closeTabsToRight(String title) {
     final index = tabs.indexWhere((tab) => tab.title == title);
     if (index < 0) return;
-    final closing = tabs.sublist(index + 1).map((tab) => tab.title).toSet();
+    final closingTabs = tabs.sublist(index + 1);
+    final closing = closingTabs.map((tab) => tab.title).toSet();
     tabs.removeRange(index + 1, tabs.length);
+    _releaseCliConsoles(closingTabs);
     if (closing.contains(activeTab)) activeTab = title;
     notifyListeners();
   }
 
   /// 关闭全部标签,回到"对象"页
   void closeAllTabs() {
+    final closing = List<OpenTab>.of(tabs);
     tabs.clear();
-    activeTab = '对象';
+    _releaseCliConsoles(closing);
+    activeTab = objectsTabKey;
     notifyListeners();
   }
 
@@ -1505,6 +1633,144 @@ class AppState extends ChangeNotifier {
       // 权限不足 / 连接中断:静默回退,不打断用户建库
       return fallback;
     }
+  }
+
+  /// 读取「编辑数据库」对话框的一次性快照:库属性 + 注释、所有者 / 表空间候选,
+  /// 以及该库的可用 / 已安装扩展清单。
+  ///
+  /// 三段查询分开兜底,因为失败的影响面不同:
+  /// - 属性读不到 → [DatabaseEditSnapshot.loadedFromServer] = false,表单基准不可信,
+  ///   对话框据此禁用「确定」(否则会拿错现状生成出一堆无谓的 `ALTER DATABASE`);
+  /// - 候选读不到 → 用现状值 + 内置常量补齐下拉,不阻塞编辑;
+  /// - 扩展读不到 → [DatabaseEditSnapshot.extensionsLoaded] = false,扩展页显示
+  ///   说明而非空列表(空列表会被误读成「该库没装任何扩展」)。
+  ///
+  /// 属性查的是集群共享目录(`pg_database`),不带 `database:`;扩展视图是每库
+  /// 一份,必须落在目标库上下文里查。
+  Future<DatabaseEditSnapshot> loadDatabaseEditSnapshot(
+    ConnectionInfo conn,
+    String database,
+  ) async {
+    var props =
+        PgDatabaseProps.unknown(database, owner: conn.username.trim());
+    var loaded = false;
+    try {
+      // PG 18 把 pg_database.datencoding 改名为 encoding,先问版本再拼查询
+      final version = parseServerVersion((await connectionManager
+              .runQuery(conn, kPgServerVersionSql, limit: 1))
+          .rows);
+      final rows = (await connectionManager.runQuery(
+              conn,
+              pgDatabasePropsSql(database,
+                  pg18Plus: (version ?? 0) >=
+                      kPgEncodingColumnRenamedVersion),
+              limit: 2))
+          .rows;
+      final parsed = parseDatabasePropsRow(rows, database);
+      if (parsed != null) {
+        props = parsed;
+        loaded = true;
+      }
+    } catch (_) {
+      // 库不存在 / 无权限:保持 unknown,由对话框禁用保存
+    }
+
+    List<String> owners = const [];
+    List<String> tablespaces = const [];
+    try {
+      owners = firstColumnOf((await connectionManager
+              .runQuery(conn, kPgOwnerCatalogSql, limit: 500))
+          .rows);
+      tablespaces = firstColumnOf((await connectionManager
+              .runQuery(conn, kPgTablespaceCatalogSql, limit: 500))
+          .rows);
+    } catch (_) {
+      // 候选读不到时下面按现状值 + 内置常量补齐
+    }
+    // 当前值一定得能在下拉里选回来(权限受限的实例上候选可能不含它)
+    List<String> withCurrent(List<String> items, String current,
+            List<String> fallback) =>
+        [
+          if (current.isNotEmpty) current,
+          ...items.isEmpty ? fallback : items,
+        ].toSet().toList()
+          ..sort();
+
+    final ext = await _loadDatabaseExtensions(conn, database);
+
+    return DatabaseEditSnapshot(
+      props: props,
+      owners: withCurrent(owners, props.owner, const []),
+      tablespaces:
+          withCurrent(tablespaces, props.tablespace, kPgTablespaceFallback),
+      availableExtensions: ext.$1,
+      installedExtensions: ext.$2,
+      loadedFromServer: loaded,
+      extensionsLoaded: ext.$3,
+    );
+  }
+
+  /// 目标库的扩展清单:返回 (未安装的可用扩展, 已安装扩展, 是否读取成功)。
+  ///
+  /// 两条查询都带 `database:`,把会话定位到目标库(PG 家族的 `useDatabase`
+  /// 实现为断开重连,与 [createDatabase] 建库后语句同一套路)。
+  Future<(List<PgExtensionInfo>, List<PgExtensionInfo>, bool)>
+      _loadDatabaseExtensions(
+    ConnectionInfo conn,
+    String database,
+  ) async {
+    try {
+      final available = parseExtensionVersionRows((await connectionManager
+              .runQuery(conn, kPgAvailableExtensionsSql,
+                  database: database, limit: 2000))
+          .rows);
+      final installed = parseExtensionVersionRows((await connectionManager
+              .runQuery(conn, kPgInstalledExtensionsSql,
+                  database: database, limit: 2000))
+          .rows);
+      return (available, installed, true);
+    } catch (_) {
+      // 低版本服务端 / 权限不足:列表留空,由对话框给出说明
+      return (
+        const <PgExtensionInfo>[],
+        const <PgExtensionInfo>[],
+        false,
+      );
+    }
+  }
+
+  /// 执行「编辑数据库」的差异语句,语句由
+  /// [buildEditDatabaseStatements] 依据快照现状与表单值算出。
+  ///
+  /// 按执行上下文分流:
+  /// - 库级语句(`ALTER DATABASE` / `COMMENT ON DATABASE`)按库名寻址,**不带**
+  ///   `database:` —— PG 家族切换上下文等于断开重连,而 `SET TABLESPACE` 恰恰
+  ///   要求目标库没有活动连接,切过去只会自己挡住自己;
+  /// - 扩展语句必须落在目标库,带 `database:`。
+  ///
+  /// 逐条执行、遇错即停:DDL 之间无事务保证,回滚不在职责范围内,把失败的那条
+  /// 原文与服务端错误一起返回,由对话框展示。
+  Future<DdlOutcome> applyDatabaseEdits(
+    ConnectionInfo conn,
+    DatabaseEditSnapshot snapshot,
+    DatabaseEditForm form,
+  ) async {
+    final database = snapshot.props.name;
+    final typeId = conn.typeId;
+    final batches = <(String, String?)>[
+      for (final s in buildDatabaseLevelEditStatements(
+          typeId: typeId, current: snapshot.props, form: form))
+        (s, null),
+      for (final s in buildExtensionEditStatements(typeId, form)) (s, database),
+    ];
+    for (final (sql, db) in batches) {
+      try {
+        await connectionManager.runQuery(conn, sql, database: db, limit: 1);
+      } catch (e) {
+        return DdlOutcome(false, '$sql;\n\n$e');
+      }
+    }
+    return DdlOutcome(true);
   }
 
   /// 新建模式(仅支持模式层的类型:PostgreSQL / SQL Server):
@@ -2482,7 +2748,7 @@ class AppState extends ChangeNotifier {
         t.connection == connection &&
         t.database == database &&
         t.schema == schema &&
-        (t.title == name || t.title == '$name (设计)'));
+        (t.title == name || t.title == '$name$kTabDesignTitleSuffix'));
     final sel = detailSelection.value;
     if (sel != null &&
         sel.kind == NodeKind.table &&
@@ -2512,7 +2778,7 @@ class AppState extends ChangeNotifier {
     selectTable(name);
     final tab = OpenTab(
       TabType.design,
-      isNew ? '$name (新建)' : '$name (设计)',
+      isNew ? '$name$kTabNewTitleSuffix' : '$name$kTabDesignTitleSuffix',
       null,
       connection,
       database,
