@@ -7,6 +7,7 @@ import 'package:daro/app/app_state.dart';
 import 'package:daro/data/db_data.dart';
 import 'package:daro/theme/app_theme.dart';
 import 'package:daro/widgets/create_database_dialog.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 /// 渲染守护:新建数据库对话框的标签页结构 (常规 / 扩展 / 注释 / SQL 预览)、
 /// 各类型的字段集合、以及"切页 + 输入后 SQL 预览跟随"这条链路。
@@ -30,6 +31,9 @@ Future<void> _open(WidgetTester tester, ConnectionInfo conn) async {
   await tester.pumpWidget(ChangeNotifierProvider<AppState>(
     create: (_) => AppState(),
     child: MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       theme: ThemeData(brightness: Brightness.light),
       home: TokenScope(
         tokens: AppTheme.light.toDesktopTokens(),

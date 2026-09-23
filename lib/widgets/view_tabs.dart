@@ -2,6 +2,7 @@ import 'package:base_ui_flutter/base_ui_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../app/app_state.dart';
+import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
 import 'object_category_icon.dart';
 
@@ -22,9 +23,10 @@ class ViewTabs extends StatelessWidget {
     final activeTab = context.select<AppState, String>((a) => a.activeTab);
     final app = context.read<AppState>();
     final t = Tokens.of(context);
+    final l = context.l10n;
 
     // 活动标签在完整标签列表(含固定"对象"页)中的位置;未找到时回到 0
-    final activeIndex = activeTab == '对象'
+    final activeIndex = activeTab == AppState.objectsTabKey
         ? 0
         : app.tabs.indexWhere((tab) => tab.title == activeTab) + 1;
 
@@ -48,23 +50,43 @@ class ViewTabs extends StatelessWidget {
         // 纯标签条场景:不需要内容区
         contentPadding: EdgeInsets.zero,
         tabs: [
-          // 固定的"对象"标签:不可关闭,无右键菜单
-          const TabItem(label: '对象'),
+          // 固定的"对象"标签:不可关闭,无右键菜单。显示名走词条,
+          // 身份另用 AppState.objectsTabKey 哨兵,切换语言不影响活动标签
+          TabItem(label: l.tabObjects),
           for (final tab in app.tabs)
             TabItem(
-              label: tab.title,
+              label: _tabLabel(context, tab),
               // 与连接树分组同一套图标,保证标签图标与分组一致:
-              // 查询 → 查询图;表数据 / 新建表 → 表图;设计页按对象分类取图
-              icon: ObjectCategoryIcon(
-                category: _tabCategory(tab),
-                size: 16,
-              ),
+              // 查询 → 查询图;表数据 / 新建表 → 表图;设计页按对象分类取图;
+              // 命令列界面 → 自绘终端图(它不是对象分类,不走 ObjectCategoryIcon)
+              icon: tab.type == TabType.commandLine
+                  ? const UiIcon(kConsoleIcon, size: 16)
+                  : ObjectCategoryIcon(
+                      category: _tabCategory(tab),
+                      size: 16,
+                    ),
               onClose: () => context.read<AppState>().closeTab(tab.title),
               contextMenuItems: _tabMenuItems(context, tab.title),
             ),
         ],
       ),
     );
+  }
+
+  /// 标签显示名:标题里的「 (设计) / (新建)」是与语言无关的身份令牌
+  /// (见 locale_config 的 splitTabTitle),显示时换成本地词条,
+  /// 于是切换语言后已打开的标签显示也跟着变,而身份与迁移逻辑不受影响。
+  String _tabLabel(BuildContext context, OpenTab tab) {
+    final l = context.l10n;
+    // 命令列标签的标题整体是内部身份(连接名|库名 + 令牌后缀),按类型另拼显示名
+    if (tab.type == TabType.commandLine) {
+      return '${tab.connection} - ${l.tabCommandLine}';
+    }
+    final split = splitTabTitle(tab.title);
+    if (split.name == tab.title) return tab.title; // 无令牌后缀,原样显示
+    return split.isNew
+        ? '${split.name}${l.tabNewSuffix}'
+        : '${split.name}${l.tabDesignSuffix}';
   }
 
   /// 标签图标分类:与连接树分组图标同源。
@@ -81,7 +103,7 @@ class ViewTabs extends StatelessWidget {
   void _activate(BuildContext context, int index) {
     final app = context.read<AppState>();
     if (index == 0) {
-      app.activateTab('对象');
+      app.activateTab(AppState.objectsTabKey);
     } else if (index - 1 < app.tabs.length) {
       app.activateTab(app.tabs[index - 1].title);
     }
@@ -90,26 +112,27 @@ class ViewTabs extends StatelessWidget {
   /// 标签右键菜单:关闭 / 关闭其他 / 关闭右侧 / 全部关闭(仿 DBeaver)
   List<MenuModel> _tabMenuItems(BuildContext context, String title) {
     final app = context.read<AppState>();
+    final l = context.l10n;
     final index = app.tabs.indexWhere((tab) => tab.title == title);
     return [
       MenuItem(
-        text: '关闭',
+        text: l.tabCtxClose,
         shortcut: 'Ctrl+W',
         onPressed: () => app.closeTab(title),
       ),
       MenuItem(
-        text: '关闭其他选项卡',
+        text: l.tabCtxCloseOthers,
         enabled: app.tabs.length > 1,
         onPressed: () => app.closeOtherTabs(title),
       ),
       MenuItem(
-        text: '关闭右侧的选项卡',
+        text: l.tabCtxCloseRight,
         enabled: index >= 0 && index < app.tabs.length - 1,
         onPressed: () => app.closeTabsToRight(title),
       ),
       const MenuSeparator(),
       MenuItem(
-        text: '全部关闭',
+        text: l.tabCtxCloseAll,
         shortcut: 'Ctrl+Shift+W',
         onPressed: () => app.closeAllTabs(),
       ),

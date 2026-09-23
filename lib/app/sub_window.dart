@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../widgets/connection_password_window.dart';
+import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
 
 /// `desktop_multi_window` 子窗口的公共装配。
@@ -43,6 +44,12 @@ Widget? buildSubWindowApp(List<String> args) {
   final dynamic decoded = jsonDecode(args[2]);
   if (decoded is! Map) return null;
   final payload = Map<String, dynamic>.from(decoded);
+  // 语言由父侧随参数带过来(见 openSubWindow):本引擎看不到主窗口的 AppState,
+  // 但文案、原生标题栏与字体回退都必须跟主窗口同一种语言。
+  final dynamic lang = payload['lang'];
+  if (lang is String && kSupportedLanguageCodes.contains(lang)) {
+    currentLanguageCode = lang;
+  }
   return kSubWindowBuilders[payload['type']]?.call(payload);
 }
 
@@ -156,7 +163,8 @@ Future<T?> openSubWindow<T>({
   try {
     final controller = await WindowController.create(WindowConfiguration(
       hiddenAtLaunch: true,
-      arguments: jsonEncode(args(channelName)),
+      // 语言随参数带过去:子窗口是另一个引擎,拿不到 AppState(见 buildSubWindowApp)
+      arguments: jsonEncode({...args(channelName), 'lang': currentLanguageCode}),
     ));
     if (controller.windowId.isEmpty) throw MissingPluginException();
 
@@ -308,7 +316,11 @@ Widget buildSubWindowAppRoot({
       child: MaterialApp(
         title: title,
         debugShowCheckedModeBanner: false,
-        theme: buildAppTheme(brightness, palette),
+        theme:
+            buildAppTheme(brightness, palette, languageCode: currentLanguageCode),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
+        locale: Locale(currentLanguageCode),
         home: SubWindowBody(palette: palette, child: child),
       ),
     ),

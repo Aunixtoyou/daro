@@ -5,6 +5,7 @@ import 'package:window_manager/window_manager.dart';
 import 'app/app_state.dart';
 import 'app/mcp_service.dart';
 import 'app/sub_window.dart';
+import 'l10n/locale_config.dart';
 import 'pages/main_page.dart';
 import 'theme/app_theme.dart';
 
@@ -54,6 +55,12 @@ class DbApp extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
 
+    // 生效语言:用户显式选择优先,否则跟随系统(未命中兜底英语)。
+    final locale = app.resolveLocale();
+    // 镜像到引擎级变量:子窗口是另一个引擎、按入口参数各自维护,而主窗口这里
+    // 每次重建都同步一次,供拿不到 BuildContext 的角落(字体回退、子窗口参数)取用。
+    currentLanguageCode = locale.languageCode;
+
     // 根据主题模式解析实际亮度:跟随系统时读平台亮度。
     // 这里不依赖 Theme.of,因为 TokenScope 需要放在 MaterialApp 之上,
     // 才能覆盖 Dialog / Overlay 等 Navigator 上的弹窗(它们拿不到 home 里的 TokenScope)。
@@ -89,9 +96,14 @@ class DbApp extends StatelessWidget {
                 type: MaterialType.transparency,
                 child: const MainPage(),
               ),
-              theme: buildAppTheme(Brightness.light, app.effectiveLight),
-              darkTheme: buildAppTheme(Brightness.dark, app.effectiveDark),
+              theme: buildAppTheme(Brightness.light, app.effectiveLight,
+                  languageCode: locale.languageCode),
+              darkTheme: buildAppTheme(Brightness.dark, app.effectiveDark,
+                  languageCode: locale.languageCode),
               themeMode: app.themeMode,
+              localizationsDelegates: kAppLocalizationsDelegates,
+              supportedLocales: kSupportedLocales,
+              locale: locale,
             ),
           ),
         ),

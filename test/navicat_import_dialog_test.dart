@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 // 导入向导的端到端测试:临时目录里放一份真实格式的 .ncx,走「粘贴/选路径 → 自动
 // 解析(回车或失焦触发) → 勾选 → 导入」全链路,并检查 connections.json 真的落了盘、
@@ -29,6 +30,9 @@ const _ncx = '''
 Widget harness(AppState app, Widget home) => ChangeNotifierProvider<AppState>.value(
       value: app,
       child: MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         theme: ThemeData(brightness: Brightness.dark),
         home: home,
       ),

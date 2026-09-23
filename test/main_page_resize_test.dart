@@ -7,10 +7,12 @@ import 'package:daro/widgets/view_tabs.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/material.dart';
+import 'pin_system_locale.dart';
 
 /// 主布局接线验证:拖动分隔条真的改变左右侧栏宽度(用真实 DbApp 装配)。
 void main() {
   Future<AppState> pumpApp(WidgetTester tester) async {
+    pinSystemChineseLocale(tester);
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);

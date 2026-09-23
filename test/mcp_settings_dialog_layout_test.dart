@@ -5,6 +5,7 @@ import 'package:daro/widgets/mcp_settings_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 // MCP 设置对话框的**版式**守护(与 mcp_settings_dialog_test.dart 的纯逻辑轨互补)。
 //
@@ -29,6 +30,9 @@ void main() {
           child: TokenScope(
             tokens: palette.toDesktopTokens(),
             child: MaterialApp(
+              locale: const Locale('zh'),
+              localizationsDelegates: kAppLocalizationsDelegates,
+              supportedLocales: kSupportedLocales,
               theme: buildAppTheme(Brightness.light, palette),
               home: const Center(child: McpSettingsDialog()),
             ),

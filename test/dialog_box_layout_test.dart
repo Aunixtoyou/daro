@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:daro/app/app_state.dart';
 import 'package:daro/pages/connection_dialog_page.dart';
 import 'package:daro/theme/app_theme.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 void main() {
   testWidgets('DialogBox shrink-wraps scrollable body', (tester) async {
@@ -15,6 +16,9 @@ void main() {
 
     var popped = false;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Scaffold(
         body: Builder(
           builder: (context) => Center(
@@ -87,6 +91,9 @@ void main() {
     await tester.pumpWidget(ChangeNotifierProvider<AppState>(
       create: (_) => AppState(),
       child: MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         theme: ThemeData(brightness: Brightness.light),
         home: TokenScope(
           tokens: AppTheme.light.toDesktopTokens(),

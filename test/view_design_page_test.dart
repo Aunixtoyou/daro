@@ -3,11 +3,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:daro/app/app_state.dart';
 import 'package:daro/widgets/view_design_page.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 void main() {
   Widget harness() => ChangeNotifierProvider(
         create: (_) => AppState(),
         child: MaterialApp(
+          locale: const Locale('zh'),
+          localizationsDelegates: kAppLocalizationsDelegates,
+          supportedLocales: kSupportedLocales,
           theme: ThemeData(brightness: Brightness.dark),
           // 与 main.dart 同构:应用根部有 Material,base-ui 的 Input(TextField)需要
           home: const Material(
@@ -125,6 +129,9 @@ void main() {
     await tester.pumpWidget(ChangeNotifierProvider.value(
       value: app,
       child: MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         theme: ThemeData(brightness: Brightness.dark),
         home: const SizedBox.expand(
           child: ViewDesignPage(

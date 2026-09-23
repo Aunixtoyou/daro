@@ -2,6 +2,7 @@ import 'package:daro/data/db_data.dart';
 import 'package:daro/pages/connection_dialog_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 // 连接向导两步冒烟:新建走「选类型 → 填表单」,编辑直接进表单;
 // 结果与「测试连接」都由宿主(ConnectionDialogPage)注入,弹窗内容与宿主解耦。
@@ -23,6 +24,9 @@ void main() {
   }) async {
     final results = <ConnectionInfo?>[];
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: SizedBox(
         width: kConnectionEditorContentSize.width,
         height: kConnectionEditorContentSize.height,

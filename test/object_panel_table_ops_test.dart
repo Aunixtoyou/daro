@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 // 对象面板表列表的四项交互:框选多选、F2 内联改名、Ctrl+C / Ctrl+V 复制粘贴表、
 // Del 删除选中表。
@@ -126,6 +127,9 @@ Future<({AppState app, _FakeDriver driver})> _panelWith(
     ChangeNotifierProvider<AppState>.value(
       value: app,
       child: MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         // 与 main.dart 同构:Input 内的 TextField 需要 Material 祖先
         home: const Material(child: ObjectPanel()),
       ),

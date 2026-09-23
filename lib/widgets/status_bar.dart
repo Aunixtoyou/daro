@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:base_ui_flutter/base_ui_flutter.dart';
 import '../app/app_state.dart';
 import '../app/mcp_service.dart';
+import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
 import '../data/mcp_policy_store.dart' show McpPolicyLoadStatus;
 import 'mcp_settings_dialog.dart';
@@ -37,6 +38,7 @@ class StatusBar extends StatelessWidget {
           tableStatus
         ) = panels;
         final activeTabModel = context.read<AppState>().activeTabModel;
+        final l = context.l10n;
         return ValueListenableBuilder<Set<String>>(
           valueListenable: app.selectionNotifier,
           builder: (_, selected, __) {
@@ -77,12 +79,14 @@ class StatusBar extends StatelessWidget {
                       tableStatus != null) ...[
                     Text(
                       tableStatus.selectedRowCount > 1
-                          ? '已选 ${tableStatus.selectedRowCount} 行'
-                              '（共 ${tableStatus.totalRows ?? '?'} 条）'
-                              '于第 ${tableStatus.page} 页'
-                          : '第 ${tableStatus.currentRecord} 条记录'
-                              '（共 ${tableStatus.totalRows ?? '?'} 条）'
-                              '于第 ${tableStatus.page} 页',
+                          ? l.statusSelectedRows(
+                              '${tableStatus.selectedRowCount}',
+                              '${tableStatus.totalRows ?? '?'}',
+                              '${tableStatus.page}')
+                          : l.statusRecordPosition(
+                              '${tableStatus.currentRecord}',
+                              '${tableStatus.totalRows ?? '?'}',
+                              '${tableStatus.page}'),
                       style: TextStyle(fontSize: 12, color: t.mutedForeground),
                     ),
                     const SizedBox(width: 12),
@@ -91,7 +95,7 @@ class StatusBar extends StatelessWidget {
                   // 仅在活动标签为"对象"(对象浏览页)时展示
                   if (activeTabModel == null) ...[
                     IconBtn(
-                      tooltip: '详细布局',
+                      tooltip: l.tipDetailedLayout,
                       selected: gridLayout,
                       onTap: () => app.setObjectLayout(true),
                       size: const Size(26, 22),
@@ -101,7 +105,7 @@ class StatusBar extends StatelessWidget {
                         height: 14,
                         child: CustomPaint(
                           painter: _LayoutPainter(
-                            color: gridLayout ? t.accent : t.mutedForeground,
+                            color: t.mutedForeground,
                             isGrid: true,
                           ),
                         ),
@@ -109,7 +113,7 @@ class StatusBar extends StatelessWidget {
                     ),
                     const SizedBox(width: 2),
                     IconBtn(
-                      tooltip: '列表',
+                      tooltip: l.tipListLayout,
                       selected: !gridLayout,
                       onTap: () => app.setObjectLayout(false),
                       size: const Size(26, 22),
@@ -119,16 +123,23 @@ class StatusBar extends StatelessWidget {
                         height: 14,
                         child: CustomPaint(
                           painter: _LayoutPainter(
-                            color: !gridLayout ? t.accent : t.mutedForeground,
+                            color: t.mutedForeground,
                             isGrid: false,
                           ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 6),
                   ],
+                  Separator(
+                    orientation: Axis.vertical,
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 5,
+                    ),
+                  ),
                   IconBtn(
-                    tooltip: '左侧栏',
+                    tooltip: l.tipLeftPanel,
                     selected: leftVisible,
                     onTap: () => app.toggleLeftPanel(),
                     size: const Size(26, 22),
@@ -138,7 +149,7 @@ class StatusBar extends StatelessWidget {
                       height: 14,
                       child: CustomPaint(
                         painter: _PanelTogglePainter(
-                          color: leftVisible ? t.accent : t.mutedForeground,
+                          color: t.mutedForeground,
                           isRight: false,
                         ),
                       ),
@@ -146,7 +157,7 @@ class StatusBar extends StatelessWidget {
                   ),
                   const SizedBox(width: 2),
                   IconBtn(
-                    tooltip: '右侧栏',
+                    tooltip: l.tipRightPanel,
                     selected: rightVisible,
                     onTap: () => app.toggleRightPanel(),
                     size: const Size(26, 22),
@@ -156,7 +167,7 @@ class StatusBar extends StatelessWidget {
                       height: 14,
                       child: CustomPaint(
                         painter: _PanelTogglePainter(
-                          color: rightVisible ? t.accent : t.mutedForeground,
+                          color: t.mutedForeground,
                           isRight: true,
                         ),
                       ),
@@ -211,6 +222,7 @@ class StatusBar extends StatelessWidget {
     AppState app,
   ) {
     final c = AppColors.of(context);
+    final l = context.l10n;
     // 对象标签:显示面包屑导航(当前对象浏览上下文)
     if (activeTabModel == null) {
       if (selectedCount > 0) {
@@ -219,7 +231,7 @@ class StatusBar extends StatelessWidget {
             _buildBreadcrumb(context, t, app),
             const SizedBox(width: 16),
             Text(
-              '已选择 $selectedCount 项',
+              l.statusObjectsSelected('$selectedCount'),
               style: TextStyle(fontSize: 12, color: t.mutedForeground),
             ),
           ],
@@ -253,7 +265,7 @@ class StatusBar extends StatelessWidget {
           Icon(Icons.storage, size: 13, color: c.iconSuccess),
           const SizedBox(width: 6),
           Text(
-            target ?? '未选择数据库',
+            target ?? context.l10n.statusNoDatabase,
             style: TextStyle(fontSize: 12, color: t.foreground),
           ),
         ],
@@ -269,7 +281,7 @@ class StatusBar extends StatelessWidget {
     final db = app.objectDatabase;
     if (conn == null || db == null) {
       return Text(
-        '未选择数据库',
+        context.l10n.statusNoDatabase,
         style: TextStyle(fontSize: 12, color: t.disabledForeground),
       );
     }
@@ -285,8 +297,8 @@ class StatusBar extends StatelessWidget {
 }
 
 /// 对象面板布局图标 painter:
-/// - isGrid=true : 2x2 圆角方阵(详细布局)
-/// - isGrid=false: 3 条横线(列表)
+/// - isGrid=true : 3x3 圆角小方点阵(详细布局)
+/// - isGrid=false: 方块项目符号 + 横线(列表布局)
 class _LayoutPainter extends CustomPainter {
   final Color color;
   final bool isGrid;
@@ -300,32 +312,54 @@ class _LayoutPainter extends CustomPainter {
       ..style = PaintingStyle.fill;
 
     if (isGrid) {
-      const gap = 2.0;
-      final cellW = (size.width - gap) / 2;
-      final cellH = (size.height - gap) / 2;
-      const r = Radius.circular(1.2);
-      for (var row = 0; row < 2; row++) {
-        for (var col = 0; col < 2; col++) {
-          final rect = Rect.fromLTWH(
-            col * (cellW + gap),
-            row * (cellH + gap),
-            cellW,
-            cellH,
+      const gap = 2.2;
+      const cell = 3.2;
+      final span = cell * 3 + gap * 2;
+      final ox = (size.width - span) / 2;
+      final oy = (size.height - span) / 2;
+      const r = Radius.circular(0.8);
+      for (var row = 0; row < 3; row++) {
+        for (var col = 0; col < 3; col++) {
+          canvas.drawRRect(
+            RRect.fromRectAndRadius(
+              Rect.fromLTWH(
+                ox + col * (cell + gap),
+                oy + row * (cell + gap),
+                cell,
+                cell,
+              ),
+              r,
+            ),
+            paint,
           );
-          canvas.drawRRect(RRect.fromRectAndRadius(rect, r), paint);
         }
       }
     } else {
-      const lineCount = 3;
-      const lineGap = 2.0;
-      final lineH = (size.height - lineGap * (lineCount - 1)) / lineCount;
-      final r = Radius.circular(lineH / 2);
-      for (var i = 0; i < lineCount; i++) {
-        final y = i * (lineH + lineGap);
+      const rows = 3;
+      const lineH = 2.2;
+      const gap = 2.4;
+      const bullet = 2.6;
+      const textX = 5.4;
+      final span = rows * lineH + (rows - 1) * gap;
+      final oy = (size.height - span) / 2;
+      for (var i = 0; i < rows; i++) {
+        final y = oy + i * (lineH + gap);
         canvas.drawRRect(
           RRect.fromRectAndRadius(
-            Rect.fromLTWH(0, y, size.width, lineH),
-            r,
+            Rect.fromLTWH(
+              0,
+              y + (lineH - bullet) / 2,
+              bullet,
+              bullet,
+            ),
+            const Radius.circular(0.6),
+          ),
+          paint,
+        );
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(textX, y, size.width - textX, lineH),
+            Radius.circular(lineH / 2),
           ),
           paint,
         );
@@ -338,6 +372,7 @@ class _LayoutPainter extends CustomPainter {
       old.color != color || old.isGrid != isGrid;
 }
 
+/// 左右侧栏开关图标 painter:圆角外框 + 靠对应一侧的空心圆角竖条
 class _PanelTogglePainter extends CustomPainter {
   final Color color;
   final bool isRight;
@@ -349,25 +384,31 @@ class _PanelTogglePainter extends CustomPainter {
     final strokePaint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
+      ..strokeWidth = 1.0;
 
-    final fillPaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(0.5, 0.5, size.width - 1.0, size.height - 1.0),
+        const Radius.circular(2.0),
+      ),
+      strokePaint,
+    );
 
-    final rect = Rect.fromLTWH(0.6, 0.6, size.width - 1.2, size.height - 1.2);
-    canvas.drawRect(rect, strokePaint);
-
-    final barWidth = size.width * 0.32;
+    // 竖条与外框四周各留 1.5px 空隙,避免两条描边在小尺寸下糊成一团
+    const inset = 3.0;
+    const barWidth = 4.6;
     final bar = isRight
         ? Rect.fromLTWH(
-            size.width - barWidth - 0.6,
-            0.6,
+            size.width - inset - barWidth,
+            inset,
             barWidth,
-            size.height - 1.2,
+            size.height - inset * 2,
           )
-        : Rect.fromLTWH(0.6, 0.6, barWidth, size.height - 1.2);
-    canvas.drawRect(bar, fillPaint);
+        : Rect.fromLTWH(inset, inset, barWidth, size.height - inset * 2);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(bar, const Radius.circular(1.2)),
+      strokePaint,
+    );
   }
 
   @override
@@ -508,7 +549,7 @@ class _HistoryPopup extends StatelessWidget {
                   Icon(Icons.history, size: 14, color: t.mutedForeground),
                   const SizedBox(width: 6),
                   Text(
-                    'SQL 执行历史 (${history.length})',
+                    context.l10n.sqlHistoryTitle('${history.length}'),
                     style: TextStyle(
                       fontSize: 12,
                       color: t.foreground,
@@ -546,7 +587,7 @@ class _HistoryPopup extends StatelessWidget {
                               Padding(
                                 padding: const EdgeInsets.only(right: 6),
                                 child: Text(
-                                  '最新',
+                                  context.l10n.sqlHistoryLatest,
                                   style: TextStyle(
                                     fontSize: 10,
                                     color: t.accent,
@@ -598,6 +639,7 @@ class _McpIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     final mcp = context.watch<McpService>();
     final t = Tokens.of(context);
+    final l = context.l10n;
 
     // 按策略启用/启动进度构建文案与图标
     IconData iconData;
@@ -606,25 +648,24 @@ class _McpIndicator extends StatelessWidget {
 
     if (!mcp.policy.enabled) {
       // 策略未启用:灰色插头
-      tooltipText = 'MCP 服务已禁用(点击打开设置)';
+      tooltipText = l.mcpTipDisabled;
       iconData = Icons.power_off_rounded;
       iconColor = t.disabledForeground;
     } else if (mcp.policyStatus == McpPolicyLoadStatus.corrupted) {
       // 策略加载失败:红色感叹号
-      tooltipText = 'MCP 策略加载失败(点击查看详情)';
+      tooltipText = l.mcpTipCorrupted;
       iconData = Icons.error_outline;
       iconColor = const Color(0xffd93025);
     } else if (!mcp.isRunning) {
       // 策略启用但未启动
-      tooltipText = 'MCP 服务已启用但未监听(点击打开设置)';
+      tooltipText = l.mcpTipIdle;
       iconData = Icons.power_settings_new;
       iconColor = t.mutedForeground;
     } else {
       // 正常监听中:绿色,带活动连接数
       final calls = mcp.activeCalls;
-      tooltipText = calls > 0
-          ? 'MCP 运行中 ($calls 个调用)'
-          : 'MCP 运行中(点击打开设置)';
+      tooltipText =
+          calls > 0 ? l.mcpTipRunningCalls('$calls') : l.mcpTipRunning;
       iconData = Icons.power_settings_new;
       iconColor = const Color(0xff2e9e4f);
     }

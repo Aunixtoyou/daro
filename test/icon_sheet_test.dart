@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 const _names = [
   'table', 'view', 'materialized_view', 'function', 'procedure',
@@ -82,6 +83,9 @@ void main() {
     // SVG 资源经事件循环异步解码，必须放在 runAsync 里，否则整列画不出来
     await tester.runAsync(() async {
       await tester.pumpWidget(MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         home: Scaffold(
           body: Column(
             children: [
@@ -149,6 +153,9 @@ void main() {
     final darkKey = GlobalKey();
     await tester.runAsync(() async {
       await tester.pumpWidget(MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         home: Scaffold(
           body: Row(
             children: [

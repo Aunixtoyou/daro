@@ -13,6 +13,7 @@ import 'package:daro/widgets/data_export_wizard.dart';
 import 'package:daro/widgets/data_import_wizard.dart';
 import 'package:daro/widgets/result_export_dialog.dart';
 import 'package:daro/widgets/sql_file_run_dialog.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 // 导入 / 导出向导的渲染冒烟测试:逐步走通对话框骨架,控件在 DialogBox 的
 // IntrinsicHeight 约束下不抛布局异常,按钮可用态随表单进度变化。
@@ -123,6 +124,9 @@ void _mockPathProvider() {
 Widget harness(AppState app, Widget child) => ChangeNotifierProvider<AppState>.value(
       value: app,
       child: MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         theme: ThemeData(brightness: Brightness.dark),
         home: Material(type: MaterialType.transparency, child: child),
       ),

@@ -20,6 +20,68 @@
 
 ---
 
+## 多语言(i18n)
+
+支持 **简体中文 / English / 日本語**,机制为官方 `flutter gen-l10n` + ARB + 类型化 getter。
+
+| 位置 | 职责 |
+|---|---|
+| `l10n.yaml` | codegen 配置(输入输出目录、`AppLocalizations` 类名、缺译报告) |
+| `lib/l10n/app_zh.arb` | **模板文件**(中文即源文案),新增 key 先写这里 |
+| `lib/l10n/app_en.arb` / `app_ja.arb` | 英/日译文;key 集合与占位符声明须与模板完全一致 |
+| `lib/l10n/app_localizations*.dart` | codegen 产物,**已入库**(见下) |
+| `lib/l10n/locale_config.dart` | 唯一配置点:支持语言表 / 兜底 / delegate / `context.l10n` 扩展 / 字体回退 / `splitTabTitle` |
+| `AppState.languageCode` | 语言状态:`null` = 跟随系统,非空 = 用户手选并**永久覆盖**系统检测(与 `themeMode` 同构) |
+
+取用方式:
+
+```dart
+final l = context.l10n;                 // 方法开头取一次,后续用 l.xxx
+Text(context.l10n.someKey);             // 只用一次时内联
+MenuItem(text: l.actionOpen(label));    // 带占位符
+```
+
+### 改文案的步骤(顺序不能错)
+
+1. `app_zh.arb` 加 key(含 `@key` 的 `placeholders` 声明)→ 再补 `app_en.arb` / `app_ja.arb`
+2. **`flutter gen-l10n`**
+3. 代码里引用 getter
+4. `flutter test test/l10n_parity_test.dart`
+
+> **生成的 `app_localizations*.dart` 必须提交**:`flutter analyze` 与 `flutter test`
+> 都**不会**触发 codegen,不入库别人拉下来直接编译失败。
+> 占位符一律声明为 `String`(数字传 `'${count}'`);生成的方法参数按占位符名
+> **字母序**排列,与 ARB 正文里的语序无关。
+> `test/l10n_parity_test.dart` 守护三件事:key 集合一致、占位符声明与正文 `{x}` 对应、
+> 每个 key 都已生成成员(即漏跑 codegen 会红)。
+
+### 不进翻译范围
+
+数据库返回的原始错误信息、连接名 / 库名等用户数据、MCP 工具描述与错误码文本。
+语言自称(简体中文 / English / 日本語)固定不译。
+
+### 已知坑
+
+- **浮层里的文案**:`Popover.content` 的 builder 可能挂在 Localizations 作用域之外
+  (同 `TokenScope.maybeOf` 的兜底原因)。在外层 `final l = context.l10n;` 捕获后闭包使用,
+  不要在弹层内部现取。参考 `database_tree.dart` 的 `_buildBottomBar`。
+- **多占位符按声明顺序传参**:`gen-l10n` 生成的是**位置参数**,顺序 = ARB 里
+  `placeholders` 的**声明顺序**(不是字母序)。参数全是 `String`,写反了编译期不报错,
+  只在界面上渲染成「约万1.2」。约定:**按中文正文里出现的先后声明**,调用方即可按语序传参;
+  迁移老 key 时若声明顺序与语序不一致,要么整批改(ARB + 所有调用点),要么不动,别只改一侧。
+  该不变量由 `test/l10n_parity_test.dart` 守护(三语声明顺序一致 + 生成签名与声明一致)。
+- **本地化字符串不能当 ID**:固定标签页用哨兵 `AppState.objectsTabKey == '@@objects'`;
+  标签后缀 `kTabDesignTitleSuffix = ' (设计)'` / `kTabNewTitleSuffix` 是语言无关的内部标记,
+  渲染时经 `splitTabTitle` 拆解再翻译。
+- **数字缩写**:万/亿 与 K/M 的进位基数按 `l.localeName` 分支,见 `object_panel.dart`
+  的 `_formatRowEstimate`。
+- **widget 测试必须钉语言**,否则"跟随系统"会让本机与 CI 结果不一致:
+  直接 pump `MaterialApp` 的用例加 `locale: const Locale('zh')` +
+  `kAppLocalizationsDelegates` / `kSupportedLocales`;
+  pump 真实 `DbApp` 的用例改调 `test/pin_system_locale.dart` 的 `pinSystemChineseLocale(tester)`。
+
+---
+
 ## MCP 服务(默认关闭)
 
 daro 内置一个本地 Model Context Protocol (MCP) HTTP 服务器,允许 AI Agent 通过标准协议调用数据库工具。安全策略为**默认关闭、按需开启**。
@@ -101,6 +163,12 @@ daro/
 │   │   ├── mcp_protocol.dart     # JSON-RPC 2.0 信封构造
 │   │   ├── mcp_http_host.dart    # Streamable HTTP 端点 + Bearer auth
 │   │   └── mcp_client_configs.dart # 客户端配置生成(免鉴权/带Token两种格式)
+│   ├── l10n/                     # 多语言(见「多语言(i18n)」章节)
+│   │   ├── app_zh.arb            # 模板 = 中文源文案
+│   │   ├── app_en.arb            # 英文译文
+│   │   ├── app_ja.arb            # 日文译文
+│   │   ├── app_localizations*.dart # gen-l10n 产物，已入库
+│   │   └── locale_config.dart    # 支持语言表 / delegate / context 扩展 / 字体回退
 │   ├── pages/
 │   │   └── main_page.dart     # 主页面布局：顶栏 + Ribbon + 三栏 + 状态栏
 │   ├── theme/
@@ -338,6 +406,11 @@ context.read<AppState>().setThemeMode(ThemeMode.dark);
 
 ## 编码规范
 
+### 表格密度与单元格对齐
+- 数据网格行高 **22**、单元格横向留白 **6**（`table_data_page.dart` / `query_page.dart` 的文件级常量），不用 base-ui 控件默认的 28 / `controlPaddingX`(12)——那是按钮的量。
+- 列内对齐由 `DataGridViewColumn.alignment` 决定：**数值列 `Alignment.centerRight`、其余 `centerLeft`**，组件负责把内容垂直居中（表数据页按列类型判，`columnIsNumeric`；结果网格无类型元数据，按值判）。
+- 编辑器同理：`InlineEditor` 传 `height: 行高` + 与显示态同向的 `textAlign`，进编辑时文字不跳位。
+
 ### 颜色
 - **应用 widget**：通过 `Tokens.of(context)` 取色，不硬编码 `Color(0xff…)`
 - **base-ui-flutter 组件**：通过 `DesktopTokens` 取色，不接受 `Color` 参数
@@ -357,6 +430,12 @@ context.read<AppState>().setThemeMode(ThemeMode.dark);
 ## 构建与验证
 
 ```bash
+# 改过 lib/l10n/*.arb 后必须手动跑(analyze / test 都不触发 codegen)
+flutter gen-l10n
+
+# 本地化一致性守护
+flutter test test/l10n_parity_test.dart
+
 # 静态分析
 flutter analyze
 

@@ -2,6 +2,7 @@ import 'package:base_ui_flutter/base_ui_flutter.dart';
 import 'package:flutter/material.dart';
 import '../app/app_state.dart';
 import '../data/routine_sql.dart';
+import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
 
 /// 函数向导完成结果(由 [FunctionWizardDialog] 返回)
@@ -301,7 +302,7 @@ class _FunctionWizardDialogState extends State<FunctionWizardDialog> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '编辑 ${_category.label} ${_name.isNotEmpty ? '«$_name»' : ''} 的参数列表',
+          '编辑 ${_category.labelOf(context.l10n)} ${_name.isNotEmpty ? '«$_name»' : ''} 的参数列表',
           style: TextStyle(
             fontSize: 13,
             color: t.accent,

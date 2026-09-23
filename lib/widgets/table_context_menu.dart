@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../app/app_state.dart';
 import '../data/db_data.dart';
+import '../l10n/locale_config.dart';
 import 'data_export_wizard.dart';
 import 'data_import_wizard.dart';
 import 'table_copy_rename_dialog.dart';
@@ -27,12 +28,14 @@ void showTableContextMenu({
   required Offset position,
 }) {
   final isOpen = app.connectionManager.isConnected(conn.name);
+  final l = context.l10n;
+  final tableLabel = l.catTable;
   showContextMenu(
     context,
     position: position,
     items: [
       MenuItem(
-        text: '打开表',
+        text: l.actionOpen(tableLabel),
         onPressed: () => app.openTable(
           table,
           connection: conn.name,
@@ -41,17 +44,17 @@ void showTableContextMenu({
         ),
       ),
       MenuItem(
-        text: '删除表',
+        text: l.actionDelete(tableLabel),
         enabled: isOpen,
         onPressed: () => _deleteTable(context, app, conn, database, table, schema),
       ),
       MenuItem(
-        text: '清空表',
+        text: l.actionClear(tableLabel),
         enabled: isOpen,
         onPressed: () => _clearTable(context, app, conn, database, table, schema),
       ),
       MenuItem(
-        text: '设计表',
+        text: l.actionDesign(tableLabel),
         enabled: isOpen,
         onPressed: () => app.designTable(
           table,
@@ -62,12 +65,12 @@ void showTableContextMenu({
       ),
       MenuSeparator(),
       MenuItem(
-        text: '转储SQL',
+        text: l.ctxDumpSql,
         enabled: isOpen,
         onPressed: () => _dumpTable(context, app, conn, database, table, schema),
       ),
       MenuItem(
-        text: '导入向导',
+        text: l.importWizard,
         enabled: isOpen,
         onPressed: () => showDataImportWizard(
           context,
@@ -79,7 +82,7 @@ void showTableContextMenu({
         ),
       ),
       MenuItem(
-        text: '导出向导',
+        text: l.exportWizard,
         enabled: isOpen,
         onPressed: () => showDataExportWizard(
           context,
@@ -91,7 +94,7 @@ void showTableContextMenu({
         ),
       ),
       MenuItem(
-        text: '复制重命名',
+        text: l.ctxCopyRename,
         enabled: isOpen,
         onPressed: () => _copyRenameTable(context, app, conn, database, table, schema),
       ),
@@ -108,14 +111,15 @@ Future<void> _deleteTable(
   String table,
   String? schema,
 ) async {
+  final l = context.l10n;
+  final title = l.actionDelete(l.catTable);
   final result = await MessageBox.show(
     context,
-    title: '删除表',
-    message: '确定要删除表「$table」吗?\n'
-        '此操作会永久删除该表及其所有数据,且不可恢复。',
+    title: title,
+    message: l.deleteObjectConfirmOne(l.catTable, table),
     type: MessageBoxType.warning,
     buttons: MessageBoxButtons.okCancel,
-    okText: '删除',
+    okText: l.btnDelete,
   );
   if (result != MessageBoxResult.ok || !context.mounted) return;
   final outcome = await app.dropTable(conn, database, table, schema: schema);
@@ -123,10 +127,10 @@ Future<void> _deleteTable(
   if (!outcome.ok) {
     MessageBox.show(
       context,
-      title: '删除表',
-      message: '删除失败:\n${outcome.error}',
+      title: title,
+      message: l.deleteFailedDetail('${outcome.error}'),
       type: MessageBoxType.error,
-      okText: '知道了',
+      okText: l.btnGotIt,
     );
   }
 }
@@ -140,14 +144,15 @@ Future<void> _clearTable(
   String table,
   String? schema,
 ) async {
+  final l = context.l10n;
+  final title = l.actionClear(l.catTable);
   final result = await MessageBox.show(
     context,
-    title: '清空表',
-    message: '确定要清空表「$table」吗?\n'
-        '此操作会删除该表全部数据(保留表结构),且不可恢复。',
+    title: title,
+    message: l.clearConfirmOne(l.catTable, table),
     type: MessageBoxType.warning,
     buttons: MessageBoxButtons.okCancel,
-    okText: '清空',
+    okText: l.btnClear,
   );
   if (result != MessageBoxResult.ok || !context.mounted) return;
   final outcome =
@@ -156,10 +161,10 @@ Future<void> _clearTable(
   if (!outcome.ok) {
     MessageBox.show(
       context,
-      title: '清空表',
-      message: '清空失败:\n${outcome.error}',
+      title: title,
+      message: l.clearFailedDetail('${outcome.error}'),
       type: MessageBoxType.error,
-      okText: '知道了',
+      okText: l.btnGotIt,
     );
   }
 }
@@ -173,10 +178,11 @@ Future<void> _dumpTable(
   String table,
   String? schema,
 ) async {
+  final l = context.l10n;
   final location = await getSaveLocation(
-    acceptedTypeGroups: [XTypeGroup(label: 'SQL 文件', extensions: ['sql'])],
+    acceptedTypeGroups: [XTypeGroup(label: l.sqlFileTypeLabel, extensions: ['sql'])],
     suggestedName: '${table}_structure.sql',
-    confirmButtonText: '保存',
+    confirmButtonText: l.btnSave,
   );
   if (location == null || !context.mounted) return;
 
@@ -184,10 +190,10 @@ Future<void> _dumpTable(
   if (sql == null || !context.mounted) {
     MessageBox.show(
       context,
-      title: '转储SQL',
-      message: '结构读取失败:\n表不可用或连接已断开,请先打开连接重试。',
+      title: l.ctxDumpSql,
+      message: l.dumpStructureReadFailed,
       type: MessageBoxType.error,
-      okText: '知道了',
+      okText: l.btnGotIt,
     );
     return;
   }
@@ -199,20 +205,20 @@ Future<void> _dumpTable(
     if (!context.mounted) return;
     MessageBox.show(
       context,
-      title: '转储SQL',
-      message: '文件写入失败:\n$e',
+      title: l.ctxDumpSql,
+      message: l.dumpWriteFailed('$e'),
       type: MessageBoxType.error,
-      okText: '知道了',
+      okText: l.btnGotIt,
     );
     return;
   }
   if (!context.mounted) return;
   MessageBox.show(
     context,
-    title: '转储SQL',
-    message: '已导出「$table」结构(仅结构,不含数据)到:\n${location.path}',
+    title: l.ctxDumpSql,
+    message: l.dumpDatabaseDone(table, location.path),
     type: MessageBoxType.info,
-    okText: '知道了',
+    okText: l.btnGotIt,
   );
 }
 
@@ -248,14 +254,15 @@ void showRoutineContextMenu({
   String? schema,
   required Offset position,
 }) {
-  final label = category.label;
+  final l = context.l10n;
+  final label = category.labelOf(l);
   final isOpen = app.connectionManager.isConnected(conn.name);
   showContextMenu(
     context,
     position: position,
     items: [
       MenuItem(
-        text: '设计$label',
+        text: l.actionDesign(label),
         enabled: isOpen,
         onPressed: () => app.designRoutine(
           name,
@@ -266,7 +273,7 @@ void showRoutineContextMenu({
         ),
       ),
       MenuItem(
-        text: '删除$label',
+        text: l.actionDelete(label),
         enabled: isOpen,
         onPressed: () =>
             _deleteRoutine(context, app, category, conn, database, name, schema),
@@ -285,14 +292,16 @@ Future<void> _deleteRoutine(
   String name,
   String? schema,
 ) async {
-  final label = category.label;
+  final l = context.l10n;
+  final label = category.labelOf(l);
+  final title = l.actionDelete(label);
   final result = await MessageBox.show(
     context,
-    title: '删除$label',
-    message: '确定要删除$label「$name」吗?\n此操作会永久删除该对象,且不可恢复。',
+    title: title,
+    message: l.deleteObjectConfirmOne(label, name),
     type: MessageBoxType.warning,
     buttons: MessageBoxButtons.okCancel,
-    okText: '删除',
+    okText: l.btnDelete,
   );
   if (result != MessageBoxResult.ok || !context.mounted) return;
   final failed = await app.dropObjects(
@@ -306,10 +315,10 @@ Future<void> _deleteRoutine(
   if (failed.isNotEmpty) {
     MessageBox.show(
       context,
-      title: '删除$label',
-      message: '删除失败:\n$failed',
+      title: title,
+      message: l.deleteFailedDetail(failed.join(', ')),
       type: MessageBoxType.error,
-      okText: '知道了',
+      okText: l.btnGotIt,
     );
   }
 }

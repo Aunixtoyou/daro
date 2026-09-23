@@ -6,6 +6,7 @@ import 'package:daro/app/app_state.dart';
 import 'package:daro/data/db_data.dart';
 import 'package:daro/data/drivers/db_driver.dart';
 import 'package:daro/main.dart';
+import 'pin_system_locale.dart';
 import 'package:daro/widgets/database_tree.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -118,6 +119,7 @@ void main() {
   });
 
   Future<AppState> pumpApp(WidgetTester tester) async {
+    pinSystemChineseLocale(tester);
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);

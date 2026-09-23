@@ -12,11 +12,14 @@ import '../app/connection_manager.dart';
 import '../data/db_data.dart';
 import '../data/db_types.dart';
 import '../data/drivers/db_driver.dart';
+import '../data/table_design.dart';
 import '../pages/connection_dialog_page.dart';
+import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
 import 'connection_password_window.dart';
 import 'create_database_dialog.dart';
 import 'create_schema_dialog.dart';
+import 'database_edit_dialog.dart';
 import 'function_wizard_dialog.dart';
 import 'object_category_icon.dart';
 import 'rename_schema_dialog.dart';
@@ -249,6 +252,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     String? database,
     String? schema,
   }) {
+    final l = context.l10n;
     final willExpand = !_expanded.contains(key);
     if (!willExpand) {
       _toggle(key); // 收起时无需加载
@@ -266,10 +270,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     _opened.add(key);
     // 状态栏记录打开操作
     app.logTreeAction(switch (kind) {
-      NodeKind.connection => '已打开连接「${conn.name}」',
-      NodeKind.database => '已打开数据库「$database」',
-      NodeKind.schema => '已打开模式「$schema」',
-      _ => '已打开',
+      NodeKind.connection => l.openedConnection(conn.name),
+      NodeKind.database => l.openedDatabase('$database'),
+      NodeKind.schema => l.openedSchema('$schema'),
+      _ => l.openedBare,
     });
     switch (kind) {
       case NodeKind.connection:
@@ -297,7 +301,8 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   /// 切换分组节点展开/折叠并在状态栏记录日志(分组打开/关闭=展开/折叠)
   void _toggleGroup(AppState app, String groupKey, String label, bool wasExpanded) {
     _toggle(groupKey);
-    app.logTreeAction(wasExpanded ? '已关闭「$label」' : '已打开「$label」');
+    final l = context.l10n;
+    app.logTreeAction(wasExpanded ? l.closedNamed(label) : l.openedNamed(label));
   }
 
   // ── 内联改名:F2 / 菜单进入编辑,无弹窗 ─────────────────────────
@@ -357,9 +362,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
 
   /// 新建分组用的默认名:「未命名分组」,重名递增序号
   String _uniqueGroupName(AppState app) {
+    final l = context.l10n;
     final taken = {for (final g in app.groupNames) g.toLowerCase()};
     for (var i = 0;; i++) {
-      final name = i == 0 ? '未命名分组' : '未命名分组 ${i + 1}';
+      final name = i == 0 ? l.unnamedGroup : l.unnamedGroupNumbered('${i + 1}');
       if (!taken.contains(name.toLowerCase())) return name;
     }
   }
@@ -393,12 +399,13 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     final app = context.read<AppState>();
     if (!app.renameGroup(old, name)) {
       if (!mounted) return;
+      final l = context.l10n;
       MessageBox.show(
         context,
-        title: '重命名分组',
-        message: '已存在同名分组「$name」(不区分大小写)。',
+        title: l.renameGroupTitle,
+        message: l.groupAlreadyExists(name),
         type: MessageBoxType.error,
-        okText: '知道了',
+        okText: l.btnGotIt,
         tokens: Tokens.read(context).desktopTokensFor(context),
       );
       return;
@@ -446,7 +453,8 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       } catch (_) {
         // 不影响主流程:改名已生效,仅记录日志不弹窗
       }
-      app.logTreeAction('已重命名连接「$old」为「${updated.name}」');
+      final l = context.l10n;
+      app.logTreeAction(l.renamedConnection(updated.name, old));
     }
   }
 
@@ -470,16 +478,17 @@ class _DatabaseTreeState extends State<DatabaseTree> {
           ? '${conn.name}|$database|${ObjectCategory.table.name}|$name'
           : '${conn.name}|$database|$schema|${ObjectCategory.table.name}|$name';
       if (_selectedNode.value != null) _selectedNode.value = newKey;
-      app.logTreeAction('已重命名表「$old」为「$name」');
+      app.logTreeAction(context.l10n.renamedTable(name, old));
       return;
     }
     if (!mounted) return;
+    final l = context.l10n;
     MessageBox.show(
       context,
-      title: '重命名表',
-      message: '重命名失败:\n${outcome.error}',
+      title: l.renameTableTitle,
+      message: l.renameFailedDetail('${outcome.error}'),
       type: MessageBoxType.error,
-      okText: '知道了',
+      okText: l.btnGotIt,
       tokens: Tokens.read(context).desktopTokensFor(context),
     );
   }
@@ -495,36 +504,45 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     Offset position,
   ) {
     final connected = app.connectionManager.isConnected(conn.name);
+    final l = context.l10n;
+    // 刷新仅对已加载出子节点(库列表)的连接可用
+    final hasDbChildren =
+        app.connectionManager.databaseStateOf(conn.name).databases.isNotEmpty;
     showContextMenu(
       context,
       position: position,
       items: [
         if (!connected)
           MenuItem(
-            text: '打开连接',
+            text: l.ctxOpenConnection,
             onPressed: () => _openConnectionNode(app, conn),
           )
         else
           MenuItem(
-            text: '关闭连接',
+            text: l.ctxCloseConnection,
             onPressed: () => _closeConnectionNode(app, conn),
           ),
         MenuItem(
-          text: '新建数据库',
+          text: l.ctxRefresh,
+          enabled: hasDbChildren,
+          onPressed: () => _openConnectionNode(app, conn),
+        ),
+        MenuItem(
+          text: l.ctxNewDatabase,
           // 需连接处于打开状态(驱动已建立)才可建库;
           // 文件型数据库(SQLite / Access)无独立库概念,不支持建库
           enabled: connected && !_isFileBasedType(conn),
           onPressed: () => _createDatabaseNode(app, conn),
         ),
         MenuSeparator(),
-        MenuItem(text: '编辑连接', onPressed: () => _editConnectionNode(app, conn)),
-        MenuItem(text: '复制连接', onPressed: () => app.copyConnection(conn)),
+        MenuItem(text: l.ctxEditConnection, onPressed: () => _editConnectionNode(app, conn)),
+        MenuItem(text: l.ctxCopyConnection, onPressed: () => app.copyConnection(conn)),
         MenuItem(
           // 移动到分组:纯视图变化,不断驱动、不动已打开的标签(两者都按连接名索引)
-          text: '移动到分组',
+          text: l.ctxMoveToGroup,
           children: [
             MenuItem(
-              text: '未分组',
+              text: l.ctxUngrouped,
               enabled: conn.group.isNotEmpty,
               onPressed: () => app.moveConnectionToGroup(conn, ''),
             ),
@@ -536,13 +554,13 @@ class _DatabaseTreeState extends State<DatabaseTree> {
               ),
             const MenuSeparator(),
             MenuItem(
-              text: '新建分组',
+              text: l.ctxNewGroup,
               onPressed: () => _createGroupInline(app, moveConn: conn),
             ),
           ],
         ),
         MenuSeparator(),
-        MenuItem(text: '删除连接', onPressed: () => _deleteConnectionNode(app, conn)),
+        MenuItem(text: l.ctxDeleteConnection, onPressed: () => _deleteConnectionNode(app, conn)),
       ],
     );
   }
@@ -557,17 +575,24 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     Offset position,
   ) {
     final members = app.connections.where((c) => c.group == group).length;
+    final l = context.l10n;
     showContextMenu(
       context,
       position: position,
       items: [
         MenuItem(
-          text: '新建连接…',
+          text: l.ctxNewConnectionEllipsis,
           onPressed: () => _newConnectionInGroup(context, app, group),
         ),
         MenuSeparator(),
         MenuItem(
-          text: '重命名分组',
+          text: l.ctxRefresh,
+          enabled: members > 0,
+          onPressed: () => app.reloadConnections(),
+        ),
+        MenuSeparator(),
+        MenuItem(
+          text: l.ctxRenameGroup,
           onPressed: () {
             _selectedNode.value = 'g:$group';
             setState(() {
@@ -578,7 +603,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
           },
         ),
         MenuItem(
-          text: members == 0 ? '删除分组' : '删除分组(含 $members 条连接)',
+          text: members == 0 ? l.ctxDeleteGroup : l.ctxDeleteGroupWith('$members'),
           onPressed: () => _deleteGroupNode(context, app, group, members),
         ),
       ],
@@ -606,15 +631,15 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     int memberCount,
   ) async {
     if (memberCount > 0) {
+      final l = context.l10n;
       final confirm = await MessageBox.show(
         context,
-        title: '删除分组',
-        message: '删除分组「$group」不会删除其中的 $memberCount 条连接,'
-            '它们会回落到未分组。继续?',
+        title: l.ctxDeleteGroup,
+        message: l.deleteGroupConfirm('$memberCount', group),
         type: MessageBoxType.warning,
         buttons: MessageBoxButtons.yesNo,
-        yesText: '删除分组',
-        noText: '取消',
+        yesText: l.ctxDeleteGroup,
+        noText: l.btnCancel,
         tokens: Tokens.read(context).desktopTokensFor(context),
       );
       if (confirm != MessageBoxResult.yes || !mounted) return;
@@ -649,7 +674,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     if (app.objectConnection == conn.name) {
       app.clearObjectContext();
     }
-    app.logTreeAction('已关闭连接「${conn.name}」');
+    app.logTreeAction(context.l10n.closedConnection(conn.name));
     await app.connectionManager.disconnect(conn.name);
   }
 
@@ -659,6 +684,43 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       context: context,
       builder: (_) => CreateDatabaseDialog(connection: conn),
     );
+  }
+
+  // ── 右键菜单「刷新」:仅对已加载出子节点的节点可用 ──
+
+  /// 库 / 模式下的对象列表是否已加载完成(分组行会随之渲染)
+  bool _objectsLoaded(
+      AppState app, ConnectionInfo conn, String database, String? schema) {
+    final state = schema == null
+        ? app.connectionManager.tableStateOf(conn.name, database)
+        : app.connectionManager.tableStateOf(conn.name, database,
+            schema: schema);
+    return state.status == LoadStatus.loaded;
+  }
+
+  /// 库节点在树中是否有子行:模式层节点,或已加载出的对象分组
+  bool _databaseHasChildren(
+      AppState app, ConnectionInfo conn, String database) {
+    final schemas =
+        app.connectionManager.schemaStateOf(conn.name, database).schemas;
+    if (schemas.isNotEmpty) return true;
+    return _objectsLoaded(app, conn, database, null);
+  }
+
+  /// 刷新库节点:重拉模式列表 + 库级对象列表
+  Future<void> _refreshDatabaseNode(
+      AppState app, ConnectionInfo conn, String database) async {
+    if (kSchemaLayerTypes.contains(conn.typeId)) {
+      await app.connectionManager.refreshSchemas(conn, database);
+    }
+    await app.connectionManager.refreshDatabase(conn, database);
+  }
+
+  /// 刷新某库 / 模式下的对象列表
+  Future<void> _refreshObjectsNode(
+      AppState app, ConnectionInfo conn, String database, String? schema) {
+    return app.connectionManager
+        .refreshDatabase(conn, database, schema: schema);
   }
 
   // ── 数据库节点右键菜单:打开 / 新建模式 / 删除 / 新建查询 / 转储SQL ──
@@ -681,50 +743,72 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     // 「打开/关闭」菜单项按打开状态(_opened)显隐,与图标状态保持一致:
     // 打开过 = 显示「关闭」,未打开 = 显示「打开」,与是否折叠无关
     final isOpened = _opened.contains(dbKey);
+    final l = context.l10n;
     showContextMenu(
       context,
       position: position,
       items: [
         if (!isOpened)
           MenuItem(
-            text: '打开',
+            text: l.ctxOpen,
             onPressed: () => _openDatabaseNode(app, conn, database),
           )
         else
           MenuItem(
-            text: '关闭',
+            text: l.ctxClose,
             onPressed: () => _closeDatabaseNode(app, conn, dbKey, database),
           ),
+        MenuItem(
+          text: l.ctxRefresh,
+          enabled: isOpen && _databaseHasChildren(app, conn, database),
+          onPressed: () => _refreshDatabaseNode(app, conn, database),
+        ),
         // 仅支持模式层的类型(PostgreSQL / SQL Server)可新建模式;
         // 需连接存活且数据库已打开(展开),否则模式列表未加载
         if (kSchemaLayerTypes.contains(conn.typeId))
           MenuItem(
-            text: '新建模式',
+            text: l.ctxNewSchema,
             enabled: isOpen && isExpanded,
             onPressed: () => _createSchemaNode(app, conn, database),
           ),
         MenuItem(
-          text: '删除',
+          text: l.ctxDelete,
           // 文件型数据库(SQLite / Access)的库节点即文件本身,不可删除
           enabled: isOpen && !_isFileBasedType(conn),
           onPressed: () => _deleteDatabaseNode(app, conn, database),
         ),
+        // 编辑数据库:目前仅 PostgreSQL 家族有对应能力(库属性 / 注释 / 扩展)
+        if (DdlBuilder.isPgLike(conn.typeId))
+          MenuItem(
+            text: l.ctxEditDatabase,
+            enabled: isOpen,
+            onPressed: () => _editDatabaseNode(app, conn, database),
+          ),
         MenuSeparator(),
-        MenuItem(text: '新建查询', onPressed: () => _newQueryNode(app, conn, database)),
+        MenuItem(text: l.ctxNewQuery, onPressed: () => _newQueryNode(app, conn, database)),
+        // 命令列界面:打开绑定到该库的文本式控制台(会话按需连接,
+        // 连不上或类型不支持时由命令行以 ERROR 行回显,不另弹对话框)
+        MenuItem(
+          text: l.menuCommandLine,
+          onPressed: () => app.openCommandLine(
+            connection: conn.name,
+            database: database,
+          ),
+        ),
         // 转储SQL:仅无模式层类型(MySQL 等,database 即 schema)在数据库节点提供;
         // 有模式层的类型(PG / SQL Server)在模式节点右键提供
         if (!kSchemaLayerTypes.contains(conn.typeId)) ...[
           MenuSeparator(),
           MenuItem(
-            text: '转储SQL文件',
+            text: l.ctxDumpSql,
             enabled: isOpen,
             children: [
-              MenuItem(text: '仅结构', onPressed: () => _dumpDatabaseNode(app, conn, database)),
+              MenuItem(text: l.ctxStructureOnly, onPressed: () => _dumpDatabaseNode(app, conn, database)),
             ],
           ),
           // 还原侧入口:与转储配对,把 .sql 脚本逐条执行到该库
           MenuItem(
-            text: '运行SQL文件',
+            text: l.ctxRunSql,
             enabled: isOpen,
             onPressed: () => showRunSqlFileDialog(
               context,
@@ -751,6 +835,19 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     );
   }
 
+  /// 「编辑数据库」:仅 PostgreSQL 家族提供。库名不变(对话框不做 RENAME),
+  /// 因此关闭后无需刷新树;注释等变化由详情面板在下次选中时重读。
+  Future<void> _editDatabaseNode(
+      AppState app, ConnectionInfo conn, String database) async {
+    await showDialog<bool>(
+      context: context,
+      builder: (_) => DatabaseEditDialog(
+        connection: conn,
+        database: database,
+      ),
+    );
+  }
+
   // ── 模式节点右键菜单:打开模式 / 关闭模式 / 编辑模式 / 删除模式 ──
 
   /// 右键模式节点:弹出上下文菜单。
@@ -770,45 +867,52 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     // 「打开/关闭」菜单项按打开状态(_opened)显隐,与图标状态保持一致:
     // 打开过 = 显示「关闭模式」,未打开 = 显示「打开模式」,与是否折叠无关
     final isOpened = _opened.contains(key);
+    final l = context.l10n;
     showContextMenu(
       context,
       position: position,
       items: [
         if (isOpened)
           MenuItem(
-            text: '关闭模式',
+            text: l.ctxCloseSchema,
             onPressed: () =>
                 _closeSchemaNode(app, conn, database, key, schema),
           )
         else
           MenuItem(
-            text: '打开模式',
+            text: l.ctxOpenSchema,
             onPressed: () => _openSchemaNode(app, conn, database, schema),
           ),
+        MenuItem(
+          text: l.ctxRefresh,
+          enabled: connected && _objectsLoaded(app, conn, database, schema),
+          onPressed: () =>
+              _refreshObjectsNode(app, conn, database, schema),
+        ),
         MenuSeparator(),
         // SQL Server 无 ALTER SCHEMA RENAME 语法,编辑模式仅 PostgreSQL 家族展示
         if (kRenameSchemaTypes.contains(conn.typeId))
           MenuItem(
-            text: '编辑模式',
+            text: l.ctxEditSchema,
             enabled: connected,
             onPressed: () => _renameSchemaNode(app, conn, database, schema),
           ),
         MenuItem(
-          text: '删除模式',
+          text: l.ctxDeleteSchema,
           enabled: connected,
           onPressed: () => _deleteSchemaNode(app, conn, database, schema),
         ),
         MenuSeparator(),
         MenuItem(
-          text: '转储SQL文件',
+          text: l.ctxDumpSql,
           enabled: connected,
           children: [
-            MenuItem(text: '仅结构', onPressed: () => _dumpSchemaNode(app, conn, database, schema)),
+            MenuItem(text: l.ctxStructureOnly, onPressed: () => _dumpSchemaNode(app, conn, database, schema)),
           ],
         ),
         // 还原侧入口:与转储配对,执行上下文定位到该模式
         MenuItem(
-          text: '运行SQL文件',
+          text: l.ctxRunSql,
           enabled: connected,
           onPressed: () => showRunSqlFileDialog(
             context,
@@ -839,7 +943,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         _expanded.add(key);
         _opened.add(key);
       });
-      app.logTreeAction('已打开模式「$schema」');
+      app.logTreeAction(context.l10n.openedSchema(schema));
       app.connectionManager.expandSchema(conn, database, schema);
     }
   }
@@ -871,7 +975,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         app.objectSchema == schema) {
       app.clearObjectContext();
     }
-    app.logTreeAction('已关闭模式「$schema」');
+    app.logTreeAction(context.l10n.closedSchema(schema));
   }
 
   /// 「编辑模式」:打开重命名对话框(ALTER SCHEMA ... RENAME TO)
@@ -890,14 +994,14 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   /// 「删除模式」:确认后 DROP SCHEMA;顺带清理树中该模式子树的展开 / 选中状态
   Future<void> _deleteSchemaNode(
       AppState app, ConnectionInfo conn, String database, String schema) async {
+    final l = context.l10n;
     final result = await MessageBox.show(
       context,
-      title: '删除模式',
-      message: '确定要删除模式「$schema」吗?\n'
-          '此操作会永久删除该模式及其全部对象,且不可恢复。',
+      title: l.ctxDeleteSchema,
+      message: l.deleteSchemaConfirm(schema),
       type: MessageBoxType.warning,
       buttons: MessageBoxButtons.okCancel,
-      okText: '删除',
+      okText: l.btnDelete,
     );
     if (result != MessageBoxResult.ok || !mounted) return;
     final key = '${conn.name}|$database|$schema';
@@ -913,10 +1017,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     if (!outcome.ok) {
       MessageBox.show(
         context,
-        title: '删除模式',
-        message: '删除失败:\n${outcome.error}',
+        title: l.ctxDeleteSchema,
+        message: l.deleteFailedDetail('${outcome.error}'),
         type: MessageBoxType.error,
-        okText: '知道了',
+        okText: l.btnGotIt,
       );
     }
   }
@@ -933,7 +1037,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         _expanded.add(key);
         _opened.add(key);
       });
-      app.logTreeAction('已打开数据库「$database」');
+      app.logTreeAction(context.l10n.openedDatabase(database));
       app.connectionManager.expandDatabase(conn, database);
     }
   }
@@ -962,30 +1066,75 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     if (app.objectConnection == conn.name && app.objectDatabase == database) {
       app.clearObjectContext();
     }
-    app.logTreeAction('已关闭数据库「$database」');
+    app.logTreeAction(context.l10n.closedDatabase(database));
   }
 
-  // ── 分组节点右键菜单:表分组的新建表 ──
+  // ── 对象分组节点右键菜单:刷新 + 按分类的新建入口 ──
 
-  /// 右键分组节点:仅「表」分组提供「新建表」。
+  /// 右键对象分组(表 / 视图 / 函数 / 过程 / 用户…)节点。
+  /// 「刷新」仅在该分组下有对象时可用;新建表 / 函数 / 过程按分类追加。
   /// 打开/关闭由单击分组完成,不占菜单项。
-  void _showGroupMenu(
+  void _showObjectGroupMenu(
     BuildContext context,
     AppState app,
     ConnectionInfo conn,
     String database,
     String? schema,
+    ObjectCategory category,
     Offset position,
   ) {
+    final isOpen = app.connectionManager.isConnected(conn.name);
+    final state = schema == null
+        ? app.connectionManager.tableStateOf(conn.name, database)
+        : app.connectionManager.tableStateOf(conn.name, database,
+            schema: schema);
+    final hasObjects = _itemsOf(state, category).isNotEmpty;
+    final l = context.l10n;
     showContextMenu(
       context,
       position: position,
       items: [
         MenuItem(
-          text: '新建表',
-          enabled: app.connectionManager.isConnected(conn.name),
-          onPressed: () => _createTableNode(app, conn, database, schema: schema),
+          text: l.ctxRefresh,
+          enabled: isOpen && hasObjects,
+          onPressed: () => _refreshObjectsNode(app, conn, database, schema),
         ),
+        if (category == ObjectCategory.table) ...[
+          MenuSeparator(),
+          MenuItem(
+            text: l.ctxNewTable,
+            enabled: isOpen,
+            onPressed: () =>
+                _createTableNode(app, conn, database, schema: schema),
+          ),
+        ] else if (category == ObjectCategory.function ||
+            category == ObjectCategory.procedure) ...[
+          MenuSeparator(),
+          MenuItem(
+            text: l.ctxNewFunction,
+            enabled: isOpen,
+            onPressed: () => showFunctionWizard(
+              context,
+              app: app,
+              connection: conn.name,
+              database: database,
+              schema: schema,
+              initialCategory: ObjectCategory.function,
+            ),
+          ),
+          MenuItem(
+            text: l.ctxNewProcedure,
+            enabled: isOpen,
+            onPressed: () => showFunctionWizard(
+              context,
+              app: app,
+              connection: conn.name,
+              database: database,
+              schema: schema,
+              initialCategory: ObjectCategory.procedure,
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -998,61 +1147,17 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     app.newTableDesigner(connection: conn.name, database: database, schema: schema);
   }
 
-  /// 右键函数 / 过程分组节点:「新建函数 / 新建过程」(进入函数向导)。
-  /// 打开/关闭由单击分组完成,不占菜单项。
-  void _showRoutineGroupMenu(
-    BuildContext context,
-    AppState app,
-    ConnectionInfo conn,
-    String database,
-    String? schema,
-    Offset position, {
-    required ObjectCategory category,
-  }) {
-    final isOpen = app.connectionManager.isConnected(conn.name);
-    showContextMenu(
-      context,
-      position: position,
-      items: [
-        MenuItem(
-          text: '新建函数',
-          enabled: isOpen,
-          onPressed: () => showFunctionWizard(
-            context,
-            app: app,
-            connection: conn.name,
-            database: database,
-            schema: schema,
-            initialCategory: ObjectCategory.function,
-          ),
-        ),
-        MenuItem(
-          text: '新建过程',
-          enabled: isOpen,
-          onPressed: () => showFunctionWizard(
-            context,
-            app: app,
-            connection: conn.name,
-            database: database,
-            schema: schema,
-            initialCategory: ObjectCategory.procedure,
-          ),
-        ),
-      ],
-    );
-  }
-
   /// 「删除」:确认后 DROP DATABASE;顺带清理树中该库子树的展开 / 选中状态
   Future<void> _deleteDatabaseNode(
       AppState app, ConnectionInfo conn, String database) async {
+    final l = context.l10n;
     final result = await MessageBox.show(
       context,
-      title: '删除数据库',
-      message: '确定要删除数据库「$database」吗?\n'
-          '此操作会永久删除该数据库及其所有数据,且不可恢复。',
+      title: l.deleteDatabaseTitle,
+      message: l.deleteDatabaseConfirm(database),
       type: MessageBoxType.warning,
       buttons: MessageBoxButtons.okCancel,
-      okText: '删除',
+      okText: l.btnDelete,
     );
     if (result != MessageBoxResult.ok || !mounted) return;
     final key = '${conn.name}|$database';
@@ -1068,10 +1173,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     if (!outcome.ok) {
       MessageBox.show(
         context,
-        title: '删除数据库',
-        message: '删除失败:\n${outcome.error}',
+        title: l.deleteDatabaseTitle,
+        message: l.deleteFailedDetail('${outcome.error}'),
         type: MessageBoxType.error,
-        okText: '知道了',
+        okText: l.btnGotIt,
       );
     }
   }
@@ -1085,10 +1190,11 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   /// 「转储SQL文件 → 仅结构」:选择保存位置,生成结构 DDL 并落盘
   Future<void> _dumpDatabaseNode(
       AppState app, ConnectionInfo conn, String database) async {
+    final l = context.l10n;
     final location = await getSaveLocation(
-      acceptedTypeGroups: [XTypeGroup(label: 'SQL 文件', extensions: ['sql'])],
+      acceptedTypeGroups: [XTypeGroup(label: l.sqlFileTypeLabel, extensions: ['sql'])],
       suggestedName: '${database}_structure.sql',
-      confirmButtonText: '保存',
+      confirmButtonText: l.btnSave,
     );
     if (location == null || !mounted) return;
 
@@ -1096,10 +1202,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     if (sql == null || !mounted) {
       MessageBox.show(
         context,
-        title: '转储SQL文件',
-        message: '结构读取失败:\n数据库不可用或连接已断开,请先打开连接重试。',
+        title: l.ctxDumpSql,
+        message: l.dumpStructureReadFailed,
         type: MessageBoxType.error,
-        okText: '知道了',
+        okText: l.btnGotIt,
       );
       return;
     }
@@ -1111,30 +1217,31 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       if (!mounted) return;
       MessageBox.show(
         context,
-        title: '转储SQL文件',
-        message: '文件写入失败:\n$e',
+        title: l.ctxDumpSql,
+        message: l.dumpWriteFailed('$e'),
         type: MessageBoxType.error,
-        okText: '知道了',
+        okText: l.btnGotIt,
       );
       return;
     }
     if (!mounted) return;
     MessageBox.show(
       context,
-      title: '转储SQL文件',
-      message: '已导出「$database」结构(仅结构,不含数据)到:\n${location.path}',
+      title: l.ctxDumpSql,
+      message: l.dumpDatabaseDone(database, location.path),
       type: MessageBoxType.info,
-      okText: '知道了',
+      okText: l.btnGotIt,
     );
   }
 
   /// 「转储SQL文件 → 仅结构」(模式级):选择保存位置,生成该模式下结构 DDL 并落盘
   Future<void> _dumpSchemaNode(
       AppState app, ConnectionInfo conn, String database, String schema) async {
+    final l = context.l10n;
     final location = await getSaveLocation(
-      acceptedTypeGroups: [XTypeGroup(label: 'SQL 文件', extensions: ['sql'])],
+      acceptedTypeGroups: [XTypeGroup(label: l.sqlFileTypeLabel, extensions: ['sql'])],
       suggestedName: '${schema}_structure.sql',
-      confirmButtonText: '保存',
+      confirmButtonText: l.btnSave,
     );
     if (location == null || !mounted) return;
 
@@ -1142,10 +1249,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     if (sql == null || !mounted) {
       MessageBox.show(
         context,
-        title: '转储SQL文件',
-        message: '结构读取失败:\n数据库不可用或连接已断开,请先打开连接重试。',
+        title: l.ctxDumpSql,
+        message: l.dumpStructureReadFailed,
         type: MessageBoxType.error,
-        okText: '知道了',
+        okText: l.btnGotIt,
       );
       return;
     }
@@ -1157,20 +1264,20 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       if (!mounted) return;
       MessageBox.show(
         context,
-        title: '转储SQL文件',
-        message: '文件写入失败:\n$e',
+        title: l.ctxDumpSql,
+        message: l.dumpWriteFailed('$e'),
         type: MessageBoxType.error,
-        okText: '知道了',
+        okText: l.btnGotIt,
       );
       return;
     }
     if (!mounted) return;
     MessageBox.show(
       context,
-      title: '转储SQL文件',
-      message: '已导出「$schema」模式结构(仅结构,不含数据)到:\n${location.path}',
+      title: l.ctxDumpSql,
+      message: l.dumpSchemaDone(schema, location.path),
       type: MessageBoxType.info,
-      okText: '知道了',
+      okText: l.btnGotIt,
     );
   }
 
@@ -1209,7 +1316,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
       _expanded.add(conn.name);
       _opened.add(conn.name);
     });
-    app.logTreeAction('已打开连接「${conn.name}」');
+    app.logTreeAction(context.l10n.openedConnection(conn.name));
     app.connectionManager.expandConnection(target);
   }
 
@@ -1218,14 +1325,15 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   /// 驱动不存活自动重连。成功树中显示最新库列表,失败弹窗明确报错。
   Future<void> _openConnectionNode(AppState app, ConnectionInfo conn) async {
     _selectNode(conn.name);
+    final l = context.l10n;
     if (!hasDriver(conn)) {
       _expandNode(conn.name);
       MessageBox.show(
         context,
-        title: '打开连接',
-        message: '连接「${conn.name}」的数据库类型(${conn.typeId})暂不支持,无法打开。',
+        title: l.ctxOpenConnection,
+        message: l.openConnectionUnsupported(conn.name, conn.typeId),
         type: MessageBoxType.warning,
-        okText: '知道了',
+        okText: l.btnGotIt,
       );
       return;
     }
@@ -1247,14 +1355,14 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     if (ok) {
       // 连接成功后标记为已打开并记录日志
       setState(() => _opened.add(conn.name));
-      app.logTreeAction('已打开连接「${conn.name}」');
+      app.logTreeAction(l.openedConnection(conn.name));
     } else {
       MessageBox.show(
         context,
-        title: '打开连接',
-        message: '连接「${conn.name}」失败:\n$message',
+        title: l.ctxOpenConnection,
+        message: l.openConnectionFailed(message, conn.name),
         type: MessageBoxType.error,
-        okText: '知道了',
+        okText: l.btnGotIt,
       );
     }
   }
@@ -1316,14 +1424,14 @@ class _DatabaseTreeState extends State<DatabaseTree> {
 
   /// 「删除连接」:确认后删除并断开驱动;顺带清理树中该连接的展开状态
   Future<void> _deleteConnectionNode(AppState app, ConnectionInfo conn) async {
+    final l = context.l10n;
     final result = await MessageBox.show(
       context,
-      title: '删除连接',
-      message: '确定要删除连接「${conn.name}」吗?\n'
-          '已打开的该连接标签页仍会保留,但将无法继续访问。',
+      title: l.ctxDeleteConnection,
+      message: l.deleteConnectionConfirm(conn.name),
       type: MessageBoxType.warning,
       buttons: MessageBoxButtons.okCancel,
-      okText: '删除',
+      okText: l.btnDelete,
     );
     if (result != MessageBoxResult.ok || !mounted) return;
     setState(() {
@@ -1407,13 +1515,15 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                 Icon(Icons.dns_outlined, size: 28, color: t.disabledForeground),
                 const SizedBox(height: 10),
                 Text(
-                  hasFilter ? '没有匹配的连接' : '暂无连接',
+                  hasFilter
+                      ? context.l10n.noMatchingConnections
+                      : context.l10n.noConnectionsYet,
                   style: TextStyle(color: t.mutedForeground, fontSize: 13),
                 ),
                 if (!hasFilter) ...[
                   const SizedBox(height: 4),
                   Text(
-                    '点击工具栏「连接」按钮新建连接',
+                    context.l10n.clickToolbarNewConnection,
                     style: TextStyle(color: t.disabledForeground, fontSize: 12),
                   ),
                 ],
@@ -1520,9 +1630,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
   void _dropIntoGroup(AppState app, ConnectionInfo conn, String group) {
     if (conn.group == group) return;
     app.moveConnectionToGroup(conn, group);
+    final l = context.l10n;
     app.logTreeAction(group.isEmpty
-        ? '已把连接「${conn.name}」移到未分组'
-        : '已把连接「${conn.name}」移入分组「$group」');
+        ? l.movedConnectionToUngrouped(conn.name)
+        : l.movedConnectionToGroup(group, conn.name));
   }
 
   /// 连接分组的放置目标:接受被拖动的连接并移入本分组。
@@ -1593,7 +1704,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  '释放以移到「未分组」',
+                  context.l10n.dropToUngroup,
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w400,
@@ -1744,7 +1855,8 @@ class _DatabaseTreeState extends State<DatabaseTree> {
 
     // 尚未实现驱动的类型:展开仅提示,不发请求
     if (!supported) {
-      rows.add(_hintNode(context, depth: base + 1, text: '暂不支持该类型,待实现驱动'));
+      rows.add(_hintNode(
+          context, depth: base + 1, text: context.l10n.driverNotImplemented));
       return rows;
     }
 
@@ -1759,7 +1871,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         rows.add(_hintNode(
           context,
           depth: base + 1,
-          text: '加载失败: ${dbState.error}',
+          text: context.l10n.loadFailedDetail('${dbState.error}'),
           isAction: true,
           onTap: () => manager.retryExpandConnection(conn),
         ));
@@ -1927,7 +2039,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         rows.add(_hintNode(
           context,
           depth: groupDepth,
-          text: '加载失败: ${objState.error}',
+          text: context.l10n.loadFailedDetail('${objState.error}'),
           isAction: true,
           onTap: () => schema == null
               ? manager.retryExpandDatabase(conn, database)
@@ -1950,7 +2062,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
             context,
             key: groupKey,
             depth: groupDepth,
-            text: group.category.label,
+            text: group.category.labelOf(context.l10n),
             icon: group.icon,
             color: _groupColor(context, group.category),
             // 与 Ribbon 分类按钮同源的自绘 SVG
@@ -1962,7 +2074,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
             selected: sel == groupKey,
             kind: NodeKind.tableGroup,
             onToggle: () =>
-                _toggleGroup(app, groupKey, group.category.label, isExpanded),
+                _toggleGroup(app, groupKey, group.category.labelOf(context.l10n), isExpanded),
             // 空分组(打开后无数据)不显示折叠按钮
             noArrow: groupItems.isEmpty,
             onSelect: () {
@@ -1970,7 +2082,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
               // 单击分组:仅选中并同步对象面板分类,不展开/折叠
               app.setObjectContext(conn.name, database,
                   category: group.category, schema: schema);
-              app.activateTab('对象');
+              app.activateTab(AppState.objectsTabKey);
               // 详情面板展示父节点信息(模式层存在时为模式,否则为数据库)
               app.detailSelection.value = schema == null
                   ? SelectedNode(
@@ -1986,17 +2098,10 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                       database: database,
                     );
             },
-            // 右键菜单:表分组提供新建表;函数 / 过程分组提供新建函数 / 新建过程
+            // 右键菜单:刷新 + 按分类的新建入口
             // (打开/关闭由单击完成,不占菜单)
-            onContextMenu: group.category == ObjectCategory.table
-                ? (position) => _showGroupMenu(
-                    context, app, conn, database, schema, position)
-                : group.category == ObjectCategory.function ||
-                        group.category == ObjectCategory.procedure
-                    ? (position) => _showRoutineGroupMenu(
-                        context, app, conn, database, schema, position,
-                        category: group.category)
-                    : null,
+            onContextMenu: (position) => _showObjectGroupMenu(context, app, conn,
+                database, schema, group.category, position),
           ),
         ),
       );
@@ -2006,7 +2111,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         rows.add(_hintNode(
           context,
           depth: groupDepth + 1,
-          text: '读取失败',
+          text: context.l10n.readFailed,
           isAction: true,
           onTap: () => schema == null
               ? manager.retryExpandDatabase(conn, database)
@@ -2259,7 +2364,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
         ),
         if (isAction)
           Text(
-            '点击重试',
+            context.l10n.clickToRetry,
             style: TextStyle(fontSize: 12, color: t.accent),
           ),
       ],
@@ -2286,6 +2391,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
     bool hasFilter,
   ) {
     final app = context.read<AppState>();
+    final l = context.l10n;
     final selectedDbTypes =
         context.select<AppState, Set<String>>((a) => a.selectedDbTypes);
 
@@ -2321,7 +2427,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
               padding: const EdgeInsets.only(left: 6, top: 3, bottom: 3),
               child: SearchInput(
                 controller: _searchController,
-                hintText: '搜索连接...',
+                hintText: l.searchConnectionsHint,
                 onChanged: app.setTreeSearchText,
                 onCleared: () => app.setTreeSearchText(''),
               ),
@@ -2359,7 +2465,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                               Icon(Icons.tune, size: 15, color: t.disabledForeground),
                               const SizedBox(width: 6),
                               Text(
-                                '数据库类型筛选',
+                                l.dbTypeFilter,
                                 style: TextStyle(
                                   fontFamily: dt.fontFamily,
                                   fontSize: dt.fontSize,
@@ -2383,7 +2489,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                                       trailing: o.supported
                                           ? null
                                           : Text(
-                                              '未实现',
+                                              l.notImplemented,
                                               style: TextStyle(
                                                 fontFamily: dt.fontFamily,
                                                 fontSize: 11,
@@ -2404,7 +2510,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                               app.clearTreeFilter();
                             },
                             child: Text(
-                              '全部清除',
+                              l.clearAllFilters,
                               style: TextStyle(
                                 fontFamily: dt.fontFamily,
                                 fontSize: dt.fontSize,
@@ -2423,7 +2529,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                   icon: Icons.unfold_less,
                   iconSize: 15,
                   color: t.mutedForeground,
-                  tooltip: '折叠全部',
+                  tooltip: l.collapseAll,
                   size: const Size(26, 26),
                   // 无展开节点时禁用(onTap 为 null → 灰显不可点)。分组默认展开,
                   // 所以「还有可折叠的东西」= 有展开的连接层级 或 还有未折叠的分组

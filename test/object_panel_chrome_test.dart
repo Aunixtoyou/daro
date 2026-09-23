@@ -5,6 +5,7 @@ import 'package:daro/widgets/object_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 /// 对象面板的铬件层级守护。
 ///
@@ -33,6 +34,9 @@ void main() {
         child: TokenScope(
           tokens: palette.toDesktopTokens(),
           child: MaterialApp(
+            locale: const Locale('zh'),
+            localizationsDelegates: kAppLocalizationsDelegates,
+            supportedLocales: kSupportedLocales,
             theme: ThemeData(brightness: Brightness.light),
             home: const Material(
               type: MaterialType.transparency,

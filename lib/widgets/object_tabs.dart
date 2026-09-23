@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../app/app_state.dart';
+import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
 
 // 中部面板底部的对象路径标签:连接 > 数据库(高亮)。
@@ -27,7 +28,7 @@ class ObjectTabs extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Text(
-                '未选择数据库',
+                context.l10n.statusNoDatabase,
                 style: TextStyle(fontSize: 12.5, color: t.disabledForeground),
               ),
             )

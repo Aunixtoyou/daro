@@ -9,6 +9,7 @@ import 'package:daro/widgets/database_tree.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'pin_system_locale.dart';
 
 // 「打开连接前需要补录密码,用户却关掉了弹窗」的回归:
 // 整次打开作废——连接节点不展开、不标记已打开、不记日志,转圈指示器撤下。
@@ -41,6 +42,7 @@ void main() {
   });
 
   Future<AppState> pumpApp(WidgetTester tester) async {
+    pinSystemChineseLocale(tester);
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);

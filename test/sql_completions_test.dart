@@ -5,6 +5,7 @@ import 'package:daro/data/sql_completions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:re_editor/re_editor.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 /// 构造已加载 schema 的 ConnectionManager:
 /// 表 [tables]、视图 [views]、函数 [functions] 及各自注释映射
@@ -60,6 +61,9 @@ void main() {
   testWidgets('关键字前缀过滤 + 大小写不敏感', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -80,6 +84,9 @@ void main() {
   testWidgets('输入完整词时不再提示', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -96,6 +103,9 @@ void main() {
   testWidgets('字符串字面量内不提示', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -112,6 +122,9 @@ void main() {
   testWidgets('schema 感知:表/视图补全', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -140,6 +153,9 @@ void main() {
   testWidgets('「表名.」列补全:懒加载后生效', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -181,6 +197,9 @@ void main() {
       (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -218,6 +237,9 @@ void main() {
   testWidgets('裸列名补全:FROM 无别名也能列出该表的列', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -259,6 +281,9 @@ void main() {
   testWidgets('表 / 视图 / 函数补全携带中文注释', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -301,6 +326,9 @@ void main() {
   testWidgets('未识别的「表名.」不提示', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -359,6 +387,9 @@ void main() {
   testWidgets('别名「b.」列补全:别名声明在其他行也能解析', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -400,6 +431,9 @@ void main() {
   testWidgets('别名列结构预热:键入「b.」即刻出提示', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -430,6 +464,9 @@ void main() {
   testWidgets('未设置整篇 SQL 时,退化为当前行内的别名', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -453,6 +490,9 @@ void main() {
   testWidgets('别名指向不存在的表时不提示', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -470,6 +510,9 @@ void main() {
   testWidgets('运行上下文切换后列缓存清空', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();
@@ -503,6 +546,9 @@ void main() {
   testWidgets('表结构版本变化(ALTER)后列缓存失效', (tester) async {
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(builder: (context) {
         ctx = context;
         return const SizedBox();

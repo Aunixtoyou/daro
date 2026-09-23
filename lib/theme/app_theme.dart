@@ -3,14 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../app/app_state.dart';
-
-/// 中文字体回退列表(桌面端):Windows 用微软雅黑,macOS 用苹方。
-/// 取代此前依赖 chinese_font_library 提供的 SystemChineseFont.fontFamilyFallback,
-/// 仅保留本项目实际运行平台所需的回退项。
-const List<String> chineseFontFamilyFallback = [
-  '微软雅黑', // Windows
-  'PingFang SC', // macOS / iOS
-];
+import '../l10n/locale_config.dart';
 
 /// 通用 UI 色板:与 base-ui-flutter 的 [DesktopTokens] 命名对齐,
 /// 各 widget 不硬编码颜色,统一通过 [Tokens.of] 取色。
@@ -585,8 +578,12 @@ Color bodyTextColor(BuildContext context) {
 }
 
 /// 应用 [ThemeData]:主窗口与「连接密码」等独立子窗口共用,
-/// 保证两处的中文回退字体、滚动条与弹层底色一致。
-ThemeData buildAppTheme(Brightness brightness, AppPalette palette) {
+/// 保证两处的中日文回退字体、滚动条与弹层底色一致。
+///
+/// [languageCode] 决定字体回退(日语界面要日式字形);省略时按中文回退,
+/// 与多语言接入前的行为一致。
+ThemeData buildAppTheme(Brightness brightness, AppPalette palette,
+    {String? languageCode}) {
   return ThemeData(
     brightness: brightness,
     scaffoldBackgroundColor: palette.background,
@@ -607,6 +604,6 @@ ThemeData buildAppTheme(Brightness brightness, AppPalette palette) {
     textTheme: (brightness == Brightness.dark
             ? Typography.material2021().white
             : Typography.material2021().black)
-        .apply(fontFamilyFallback: chineseFontFamilyFallback),
+        .apply(fontFamilyFallback: fontFamilyFallbackFor(languageCode)),
   );
 }

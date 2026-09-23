@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 /// Windows 图标位图惯例档位(含 125% / 150% / 200% 缩放用到的非 2 次幂档)
 const _icoSizes = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256];
@@ -20,6 +21,9 @@ void main() {
       final key = GlobalKey();
       await tester.binding.setSurfaceSize(Size.square(size + 8));
       await tester.pumpWidget(MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         home: Scaffold(
           backgroundColor: Colors.transparent,
           body: Align(

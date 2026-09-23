@@ -11,6 +11,11 @@ dependencies:
     path: base-ui-flutter
   flutter:
     sdk: flutter
+  # 多语言:提供 Material/Cupertino/Widgets 的本地化 delegate
+  flutter_localizations:
+    sdk: flutter
+  # gen-l10n 运行期依赖。用 any 跟随 flutter_localizations 内部固定版本,避免冲突
+  intl: any
   file_selector: ^1.0.3
   flutter_svg: ^2.0.10
   mysql_client: ^0.0.27
@@ -44,6 +49,8 @@ dev_dependencies:
   url_launcher_platform_interface: ^2.3.2
 
 flutter:
+  # gen-l10n:生成 lib/l10n/app_localizations*.dart(见 l10n.yaml)
+  generate: true
   uses-material-design: true
   assets:
     - assets/icons/

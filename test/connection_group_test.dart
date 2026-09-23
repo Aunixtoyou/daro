@@ -12,6 +12,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:daro/l10n/locale_config.dart';
+import 'pin_system_locale.dart';
 
 // 连接分组(单层)的行为测试:模型/状态层的建、改、删、移动,落盘与老配置兼容,
 // 以及「从 Navicat 导入连接」时按文件里的 Group 重建分组。
@@ -233,6 +235,7 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
       final app = AppState();
+      pinSystemChineseLocale(tester);
       await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
         value: app,
         child: const DbApp(),
@@ -388,6 +391,9 @@ Widget _harness(AppState app, Widget home) =>
     ChangeNotifierProvider<AppState>.value(
       value: app,
       child: MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         theme: ThemeData(brightness: Brightness.dark),
         home: home,
       ),

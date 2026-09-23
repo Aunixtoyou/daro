@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../app/app_state.dart';
 import '../data/db_data.dart';
 import '../data/drivers/db_driver.dart';
+import '../l10n/locale_config.dart';
 import '../pages/connection_dialog_page.dart';
 import '../theme/app_theme.dart';
 import 'object_category_icon.dart';
@@ -19,7 +20,7 @@ class Ribbon extends StatelessWidget {
   const Ribbon({super.key});
 
   /// 分类按钮定义:ObjectCategory 枚举。
-  /// 文字取 category.label、能力匹配取 category.name、图标查
+  /// 文字取 category.labelOf、能力匹配取 category.name、图标查
   /// [ObjectCategoryIcon.assetOf](均与连接树分组同源,避免同一分类在不同入口显示不同名)。
   static const _categoryButtons = <({ObjectCategory category})>[
     (category: ObjectCategory.table),
@@ -34,6 +35,7 @@ class Ribbon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
+    final l = context.l10n;
     final app = context.watch<AppState>();
     final activeCategory = app.objectCategory;
 
@@ -68,10 +70,11 @@ class Ribbon extends StatelessWidget {
                 children: [
                   // 「连接」「新建查询」:自绘 SVG 图标 + 右下角绿色「+」徽章
                   _button(context,
-                      _badgedIcon('assets/icons/ui/connection.svg'), '连接',
+                      _badgedIcon('assets/icons/ui/connection.svg'),
+                      l.ribbonConnection,
                       onTap: () => _openConnectionWindow(context)),
                   _button(context, _badgedIcon('assets/icons/ui/query.svg'),
-                      '新建查询', onTap: () => app.newQuery()),
+                      l.ribbonNewQuery, onTap: () => app.newQuery()),
                   // 新建查询右侧分割线
                   SizedBox(
                     height: 40,
@@ -84,12 +87,12 @@ class Ribbon extends StatelessWidget {
                   // 分类按钮:按当前数据库类型动态显隐,
                   // active 状态与左侧连接树分组节点选中联动;
                   // 图标与连接树 / 对象面板同源(ObjectCategoryIcon),
-                  // 文字取 category.label(同样同源,避免同名不同称)
+                  // 文字取 category.labelOf(同样同源,避免同名不同称)
                   for (final b in visibleButtons)
                     _button(
                         context,
                         ObjectCategoryIcon(category: b.category, size: 26),
-                        b.category.label,
+                        b.category.labelOf(context.l10n),
                         active: activeCategory == b.category,
                         onTap: () => app.showObjectCategory(b.category)),
                 ],
@@ -126,8 +129,10 @@ class Ribbon extends StatelessWidget {
         variant: ButtonVariant.ghost,
         tokens: dt.copyWith(controlPaddingX: 4),
         onPressed: onTap ?? () {},
-        child: SizedBox(
-          width: 66,
+        child: ConstrainedBox(
+          // 最小 66 保住原设计(中文标签下按钮等宽),最大 120 让英文长标签
+          // (Materialized View)有自己的宽度而不是溢出压到相邻按钮上。
+          constraints: const BoxConstraints(minWidth: 66, maxWidth: 120),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -136,7 +141,7 @@ class Ribbon extends StatelessWidget {
               Text(
                 text,
                 softWrap: false,
-                overflow: TextOverflow.visible,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: 12,
                   height: 1.2,
@@ -144,9 +149,9 @@ class Ribbon extends StatelessWidget {
                   color: bodyTextColor(context),
                   fontWeight: FontWeight.w500,
                   // 与全局字体机制一致:Button 内部 DefaultTextStyle 用的是 Segoe UI
-                  // 且无 fontVariations,中文会退化成最细的 regular;
-                  // 显式补上中文回退 + 可变字重轴,保证 ribbon 文字与其它区域同粗细
-                  fontFamilyFallback: chineseFontFamilyFallback,
+                  // 且无 fontVariations,中日文会退化成最细的 regular;
+                  // 显式补上按语言的字体回退 + 可变字重轴,保证 ribbon 文字与其它区域同粗细
+                  fontFamilyFallback: fontFamilyFallbackOf(context),
                   fontVariations: const [
                     FontVariation.weight(400),
                   ],

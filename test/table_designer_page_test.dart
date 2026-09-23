@@ -10,6 +10,7 @@ import 'package:re_editor/re_editor.dart';
 import 'package:daro/app/app_state.dart';
 import 'package:daro/data/table_design.dart';
 import 'package:daro/widgets/table_designer_page.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 void main() {
   // 与 main.dart 同构:AppState 在 MaterialApp 之上,根导航器弹出的
@@ -17,6 +18,9 @@ void main() {
   Widget harness() => ChangeNotifierProvider(
         create: (_) => AppState(),
         child: MaterialApp(
+          locale: const Locale('zh'),
+          localizationsDelegates: kAppLocalizationsDelegates,
+          supportedLocales: kSupportedLocales,
           theme: ThemeData(brightness: Brightness.dark),
           home: Material(
             type: MaterialType.transparency,
@@ -147,6 +151,9 @@ void main() {
       ChangeNotifierProvider(
         create: (_) => AppState(),
         child: MaterialApp(
+          locale: const Locale('zh'),
+          localizationsDelegates: kAppLocalizationsDelegates,
+          supportedLocales: kSupportedLocales,
           theme: ThemeData(brightness: Brightness.dark),
           home: Material(
             type: MaterialType.transparency,
@@ -512,6 +519,9 @@ void main() {
     await tester.pumpWidget(ChangeNotifierProvider(
       create: (_) => AppState(),
       child: MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         home: Material(
           type: MaterialType.transparency,
           child: TableDesignerPage(

@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 // 结构同步向导弹窗的「冒烟」widget 测试:只验证界面装配与浅层交互——打开即渲染
 // 设置页(源/目标 + 信息面板)、预填当前树选中的连接、未选库时比较禁用、连接下拉
@@ -23,6 +24,9 @@ import 'package:provider/provider.dart';
 Widget harness(AppState app, Widget home) => ChangeNotifierProvider<AppState>.value(
       value: app,
       child: MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         theme: ThemeData(brightness: Brightness.light),
         home: home,
       ),

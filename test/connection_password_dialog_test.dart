@@ -8,6 +8,7 @@ import 'package:daro/widgets/connection_password_dialog.dart';
 import 'package:daro/widgets/connection_password_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 // 「连接密码」形态冒烟:标题带连接名、回显主机与用户名、空密码不可提交、
 // 密码与「保存密码」勾选状态一起回传;并核对父子窗口的入口参数契约。
@@ -24,6 +25,9 @@ void main() {
   Future<void> pumpAndOpen(
       WidgetTester tester, void Function(ConnectionPasswordResult?) done) async {
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: Builder(
         builder: (context) => Material(
           child: Button(
@@ -80,6 +84,9 @@ void main() {
     // 写死窗口高度会随字体 / 文字缩放失准(实测差 19 像素就溢出)。
     final key = GlobalKey();
     await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      localizationsDelegates: kAppLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
       home: SizedBox(
         width: 800,
         height: 200, // 故意比表单矮

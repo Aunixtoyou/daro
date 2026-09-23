@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 // 导出向导渲染与勾选冒烟:默认全选可导出、不支持的类型置灰并标注原因、
 // 全选/取消全选按钮语义确定、路径默认值与「导出密码」开关。
@@ -19,6 +20,9 @@ import 'package:provider/provider.dart';
 Widget harness(AppState app) => ChangeNotifierProvider<AppState>.value(
       value: app,
       child: MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         theme: ThemeData(brightness: Brightness.dark),
         home: Builder(
           builder: (context) => Material(

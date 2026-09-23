@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 // MCP 设置弹窗「连接与模式」页的切换行为。
 //
@@ -41,6 +42,9 @@ Widget _harness(AppState app, McpService mcp) {
         child: TokenScope(
           tokens: palette.toDesktopTokens(),
           child: MaterialApp(
+            locale: const Locale('zh'),
+            localizationsDelegates: kAppLocalizationsDelegates,
+            supportedLocales: kSupportedLocales,
             theme: buildAppTheme(Brightness.light, palette),
             home: const Center(child: McpSettingsDialog()),
           ),

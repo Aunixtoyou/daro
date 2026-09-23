@@ -8,6 +8,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher_platform_interface/link.dart';
 import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 /// 「关于」弹窗的项目主页入口:GitHub / Gitee 双平台 + 问题反馈。
 ///
@@ -48,6 +49,9 @@ Future<void> _open(WidgetTester tester) async {
     ChangeNotifierProvider<AppState>(
       create: (_) => AppState(),
       child: MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         theme: buildAppTheme(Brightness.light, AppTheme.light),
         home: TokenScope(
           tokens: AppTheme.light.toDesktopTokens(),

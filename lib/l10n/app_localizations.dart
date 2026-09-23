@@ -1,0 +1,2483 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:intl/intl.dart' as intl;
+
+import 'app_localizations_en.dart';
+import 'app_localizations_ja.dart';
+import 'app_localizations_zh.dart';
+
+// ignore_for_file: type=lint
+
+/// Callers can lookup localized strings with an instance of AppLocalizations
+/// returned by `AppLocalizations.of(context)`.
+///
+/// Applications need to include `AppLocalizations.delegate()` in their app's
+/// `localizationDelegates` list, and the locales they support in the app's
+/// `supportedLocales` list. For example:
+///
+/// ```dart
+/// import 'l10n/app_localizations.dart';
+///
+/// return MaterialApp(
+///   localizationsDelegates: AppLocalizations.localizationsDelegates,
+///   supportedLocales: AppLocalizations.supportedLocales,
+///   home: MyApplicationHome(),
+/// );
+/// ```
+///
+/// ## Update pubspec.yaml
+///
+/// Please make sure to update your pubspec.yaml to include the following
+/// packages:
+///
+/// ```yaml
+/// dependencies:
+///   # Internationalization support.
+///   flutter_localizations:
+///     sdk: flutter
+///   intl: any # Use the pinned version from flutter_localizations
+///
+///   # Rest of dependencies
+/// ```
+///
+/// ## iOS Applications
+///
+/// iOS applications define key application metadata, including supported
+/// locales, in an Info.plist file that is built into the application bundle.
+/// To configure the locales supported by your app, you’ll need to edit this
+/// file.
+///
+/// First, open your project’s ios/Runner.xcworkspace Xcode workspace file.
+/// Then, in the Project Navigator, open the Info.plist file under the Runner
+/// project’s Runner folder.
+///
+/// Next, select the Information Property List item, select Add Item from the
+/// Editor menu, then select Localizations from the pop-up menu.
+///
+/// Select and expand the newly-created Localizations item then, for each
+/// locale your application supports, add a new item and select the locale
+/// you wish to add from the pop-up menu in the Value field. This list should
+/// be consistent with the languages listed in the AppLocalizations.supportedLocales
+/// property.
+abstract class AppLocalizations {
+  AppLocalizations(String locale)
+      : localeName = intl.Intl.canonicalizedLocale(locale.toString());
+
+  final String localeName;
+
+  static AppLocalizations of(BuildContext context) {
+    return Localizations.of<AppLocalizations>(context, AppLocalizations)!;
+  }
+
+  static const LocalizationsDelegate<AppLocalizations> delegate =
+      _AppLocalizationsDelegate();
+
+  /// A list of this localizations delegate along with the default localizations
+  /// delegates.
+  ///
+  /// Returns a list of localizations delegates containing this delegate along with
+  /// GlobalMaterialLocalizations.delegate, GlobalCupertinoLocalizations.delegate,
+  /// and GlobalWidgetsLocalizations.delegate.
+  ///
+  /// Additional delegates can be added by appending to this list in
+  /// MaterialApp. This list does not have to be used at all if a custom list
+  /// of delegates is preferred or required.
+  static const List<LocalizationsDelegate<dynamic>> localizationsDelegates =
+      <LocalizationsDelegate<dynamic>>[
+    delegate,
+    GlobalMaterialLocalizations.delegate,
+    GlobalCupertinoLocalizations.delegate,
+    GlobalWidgetsLocalizations.delegate,
+  ];
+
+  /// A list of this localizations delegate's supported locales.
+  static const List<Locale> supportedLocales = <Locale>[
+    Locale('en'),
+    Locale('ja'),
+    Locale('zh')
+  ];
+
+  /// 选项 → 常规:语言下拉的「跟随系统」项
+  ///
+  /// In zh, this message translates to:
+  /// **'跟随系统'**
+  String get langFollowSystem;
+
+  /// 「工具 → 选项...」对话框标题
+  ///
+  /// In zh, this message translates to:
+  /// **'选项'**
+  String get optionsTitle;
+
+  /// 选项对话框左侧分类:常规
+  ///
+  /// In zh, this message translates to:
+  /// **'常规'**
+  String get optionsGeneral;
+
+  /// 选项 → 常规:语言字段的标签
+  ///
+  /// In zh, this message translates to:
+  /// **'语言'**
+  String get optionsLanguage;
+
+  /// 选项 → 常规:语言字段下方的说明
+  ///
+  /// In zh, this message translates to:
+  /// **'切换后立即生效,已打开的界面文案一起切换。'**
+  String get optionsLanguageHint;
+
+  /// No description provided for @themeMenuTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'主题'**
+  String get themeMenuTitle;
+
+  /// No description provided for @themeFollowSystem.
+  ///
+  /// In zh, this message translates to:
+  /// **'跟随系统'**
+  String get themeFollowSystem;
+
+  /// No description provided for @themeLight.
+  ///
+  /// In zh, this message translates to:
+  /// **'明亮'**
+  String get themeLight;
+
+  /// No description provided for @themeDark.
+  ///
+  /// In zh, this message translates to:
+  /// **'暗黑'**
+  String get themeDark;
+
+  /// 标题栏主题按钮的悬停提示
+  ///
+  /// In zh, this message translates to:
+  /// **'主题:{mode}（点击切换）'**
+  String themeSwitchTooltip(String mode);
+
+  /// No description provided for @menuFile.
+  ///
+  /// In zh, this message translates to:
+  /// **'文件'**
+  String get menuFile;
+
+  /// No description provided for @menuNewConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建连接...'**
+  String get menuNewConnection;
+
+  /// No description provided for @menuNewQuery.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建查询'**
+  String get menuNewQuery;
+
+  /// No description provided for @menuImportConnections.
+  ///
+  /// In zh, this message translates to:
+  /// **'导入连接'**
+  String get menuImportConnections;
+
+  /// No description provided for @menuExportConnections.
+  ///
+  /// In zh, this message translates to:
+  /// **'导出连接'**
+  String get menuExportConnections;
+
+  /// No description provided for @menuExit.
+  ///
+  /// In zh, this message translates to:
+  /// **'退出'**
+  String get menuExit;
+
+  /// No description provided for @menuView.
+  ///
+  /// In zh, this message translates to:
+  /// **'视图'**
+  String get menuView;
+
+  /// No description provided for @menuRefresh.
+  ///
+  /// In zh, this message translates to:
+  /// **'刷新'**
+  String get menuRefresh;
+
+  /// No description provided for @menuThemeCustomize.
+  ///
+  /// In zh, this message translates to:
+  /// **'主题定制...'**
+  String get menuThemeCustomize;
+
+  /// No description provided for @menuLargeIcons.
+  ///
+  /// In zh, this message translates to:
+  /// **'大型图标'**
+  String get menuLargeIcons;
+
+  /// No description provided for @menuSmallIcons.
+  ///
+  /// In zh, this message translates to:
+  /// **'小图标'**
+  String get menuSmallIcons;
+
+  /// No description provided for @menuList.
+  ///
+  /// In zh, this message translates to:
+  /// **'列表'**
+  String get menuList;
+
+  /// No description provided for @menuDetails.
+  ///
+  /// In zh, this message translates to:
+  /// **'详细信息'**
+  String get menuDetails;
+
+  /// No description provided for @menuTools.
+  ///
+  /// In zh, this message translates to:
+  /// **'工具'**
+  String get menuTools;
+
+  /// No description provided for @menuCommandLine.
+  ///
+  /// In zh, this message translates to:
+  /// **'命令列界面...'**
+  String get menuCommandLine;
+
+  /// No description provided for @menuDataTransfer.
+  ///
+  /// In zh, this message translates to:
+  /// **'数据传输...'**
+  String get menuDataTransfer;
+
+  /// No description provided for @menuDataSync.
+  ///
+  /// In zh, this message translates to:
+  /// **'数据同步...'**
+  String get menuDataSync;
+
+  /// No description provided for @menuSchemaSync.
+  ///
+  /// In zh, this message translates to:
+  /// **'结构同步...'**
+  String get menuSchemaSync;
+
+  /// No description provided for @menuBackup.
+  ///
+  /// In zh, this message translates to:
+  /// **'备份...'**
+  String get menuBackup;
+
+  /// No description provided for @menuRestoreBackup.
+  ///
+  /// In zh, this message translates to:
+  /// **'还原备份...'**
+  String get menuRestoreBackup;
+
+  /// No description provided for @menuMcpService.
+  ///
+  /// In zh, this message translates to:
+  /// **'MCP 服务...'**
+  String get menuMcpService;
+
+  /// No description provided for @menuOptions.
+  ///
+  /// In zh, this message translates to:
+  /// **'选项...'**
+  String get menuOptions;
+
+  /// No description provided for @menuHelp.
+  ///
+  /// In zh, this message translates to:
+  /// **'帮助'**
+  String get menuHelp;
+
+  /// No description provided for @menuIssueTracker.
+  ///
+  /// In zh, this message translates to:
+  /// **'问题反馈'**
+  String get menuIssueTracker;
+
+  /// No description provided for @menuAbout.
+  ///
+  /// In zh, this message translates to:
+  /// **'关于...'**
+  String get menuAbout;
+
+  /// No description provided for @catTable.
+  ///
+  /// In zh, this message translates to:
+  /// **'表'**
+  String get catTable;
+
+  /// No description provided for @catView.
+  ///
+  /// In zh, this message translates to:
+  /// **'视图'**
+  String get catView;
+
+  /// No description provided for @catMaterializedView.
+  ///
+  /// In zh, this message translates to:
+  /// **'实体化视图'**
+  String get catMaterializedView;
+
+  /// No description provided for @catFunction.
+  ///
+  /// In zh, this message translates to:
+  /// **'函数'**
+  String get catFunction;
+
+  /// No description provided for @catProcedure.
+  ///
+  /// In zh, this message translates to:
+  /// **'过程'**
+  String get catProcedure;
+
+  /// No description provided for @catRole.
+  ///
+  /// In zh, this message translates to:
+  /// **'角色'**
+  String get catRole;
+
+  /// No description provided for @catQuery.
+  ///
+  /// In zh, this message translates to:
+  /// **'查询'**
+  String get catQuery;
+
+  /// No description provided for @catBackup.
+  ///
+  /// In zh, this message translates to:
+  /// **'备份'**
+  String get catBackup;
+
+  /// No description provided for @importDoneTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'导入完成'**
+  String get importDoneTitle;
+
+  /// No description provided for @importDoneMessage.
+  ///
+  /// In zh, this message translates to:
+  /// **'已导入 {count} 条连接,可在左侧连接树查看。'**
+  String importDoneMessage(String count);
+
+  /// No description provided for @importDoneManualPassword.
+  ///
+  /// In zh, this message translates to:
+  /// **'其中 {count} 条没能带过密码(Navicat 端未保存,或用了旧版加密方式),右键该连接 →「编辑连接」补填后即可正常连接。'**
+  String importDoneManualPassword(String count);
+
+  /// No description provided for @importDoneNewGroups.
+  ///
+  /// In zh, this message translates to:
+  /// **'文件里的分组本地不存在,已新建 {count} 个:{names}。'**
+  String importDoneNewGroups(String count, String names);
+
+  /// No description provided for @exportDoneTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'导出完成'**
+  String get exportDoneTitle;
+
+  /// No description provided for @exportDoneMessage.
+  ///
+  /// In zh, this message translates to:
+  /// **'已把 {count} 条连接导出到\n{path}\n在 Navicat 里用「文件 → 导入连接设置…」选择该文件即可。'**
+  String exportDoneMessage(String count, String path);
+
+  /// No description provided for @exportDoneSkipped.
+  ///
+  /// In zh, this message translates to:
+  /// **'Navicat 没有对应类型的连接未导出:{names}。'**
+  String exportDoneSkipped(String names);
+
+  /// 列表截断后的「等 N 条」尾巴,自带前导空格
+  ///
+  /// In zh, this message translates to:
+  /// **' 等 {count} 条'**
+  String listEllipsisMore(String count);
+
+  /// No description provided for @listEllipsis.
+  ///
+  /// In zh, this message translates to:
+  /// **' 等'**
+  String get listEllipsis;
+
+  /// 顿号 / 逗号等列表分隔符
+  ///
+  /// In zh, this message translates to:
+  /// **'、'**
+  String get listSeparator;
+
+  /// No description provided for @issueTrackerTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'问题反馈'**
+  String get issueTrackerTitle;
+
+  /// No description provided for @issueTrackerOpenFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'无法自动打开浏览器,请在浏览器中访问:\n{url}'**
+  String issueTrackerOpenFailed(String url);
+
+  /// No description provided for @ribbonConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'连接'**
+  String get ribbonConnection;
+
+  /// No description provided for @ribbonNewQuery.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建查询'**
+  String get ribbonNewQuery;
+
+  /// 固定的对象浏览页标签,同时是它的身份标识
+  ///
+  /// In zh, this message translates to:
+  /// **'对象'**
+  String get tabObjects;
+
+  /// 设计页标签标题后缀,自带前导空格
+  ///
+  /// In zh, this message translates to:
+  /// **' (设计)'**
+  String get tabDesignSuffix;
+
+  /// 新建对象标签标题后缀,自带前导空格
+  ///
+  /// In zh, this message translates to:
+  /// **' (新建)'**
+  String get tabNewSuffix;
+
+  /// 命令列界面标签的显示名(不含省略号,标签拼成「连接名 - 命令列界面」)
+  ///
+  /// In zh, this message translates to:
+  /// **'命令列界面'**
+  String get tabCommandLine;
+
+  /// No description provided for @tabCtxClose.
+  ///
+  /// In zh, this message translates to:
+  /// **'关闭'**
+  String get tabCtxClose;
+
+  /// No description provided for @tabCtxCloseOthers.
+  ///
+  /// In zh, this message translates to:
+  /// **'关闭其他选项卡'**
+  String get tabCtxCloseOthers;
+
+  /// No description provided for @tabCtxCloseRight.
+  ///
+  /// In zh, this message translates to:
+  /// **'关闭右侧的选项卡'**
+  String get tabCtxCloseRight;
+
+  /// No description provided for @tabCtxCloseAll.
+  ///
+  /// In zh, this message translates to:
+  /// **'全部关闭'**
+  String get tabCtxCloseAll;
+
+  /// No description provided for @statusNoDatabase.
+  ///
+  /// In zh, this message translates to:
+  /// **'未选择数据库'**
+  String get statusNoDatabase;
+
+  /// No description provided for @statusRecordPosition.
+  ///
+  /// In zh, this message translates to:
+  /// **'第 {current} 条记录（共 {total} 条）于第 {page} 页'**
+  String statusRecordPosition(String current, String total, String page);
+
+  /// No description provided for @statusSelectedRows.
+  ///
+  /// In zh, this message translates to:
+  /// **'已选 {count} 行（共 {total} 条）于第 {page} 页'**
+  String statusSelectedRows(String count, String total, String page);
+
+  /// No description provided for @statusObjectsSelected.
+  ///
+  /// In zh, this message translates to:
+  /// **'已选择 {count} 项'**
+  String statusObjectsSelected(String count);
+
+  /// No description provided for @tipDetailedLayout.
+  ///
+  /// In zh, this message translates to:
+  /// **'详细布局'**
+  String get tipDetailedLayout;
+
+  /// No description provided for @tipListLayout.
+  ///
+  /// In zh, this message translates to:
+  /// **'列表'**
+  String get tipListLayout;
+
+  /// No description provided for @tipLeftPanel.
+  ///
+  /// In zh, this message translates to:
+  /// **'左侧栏'**
+  String get tipLeftPanel;
+
+  /// No description provided for @tipRightPanel.
+  ///
+  /// In zh, this message translates to:
+  /// **'右侧栏'**
+  String get tipRightPanel;
+
+  /// No description provided for @sqlHistoryTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'SQL 执行历史 ({count})'**
+  String sqlHistoryTitle(String count);
+
+  /// No description provided for @sqlHistoryLatest.
+  ///
+  /// In zh, this message translates to:
+  /// **'最新'**
+  String get sqlHistoryLatest;
+
+  /// No description provided for @mcpTipDisabled.
+  ///
+  /// In zh, this message translates to:
+  /// **'MCP 服务已禁用(点击打开设置)'**
+  String get mcpTipDisabled;
+
+  /// No description provided for @mcpTipCorrupted.
+  ///
+  /// In zh, this message translates to:
+  /// **'MCP 策略加载失败(点击查看详情)'**
+  String get mcpTipCorrupted;
+
+  /// No description provided for @mcpTipIdle.
+  ///
+  /// In zh, this message translates to:
+  /// **'MCP 服务已启用但未监听(点击打开设置)'**
+  String get mcpTipIdle;
+
+  /// No description provided for @mcpTipRunning.
+  ///
+  /// In zh, this message translates to:
+  /// **'MCP 运行中(点击打开设置)'**
+  String get mcpTipRunning;
+
+  /// No description provided for @mcpTipRunningCalls.
+  ///
+  /// In zh, this message translates to:
+  /// **'MCP 运行中 ({count} 个调用)'**
+  String mcpTipRunningCalls(String count);
+
+  /// No description provided for @infoPickNode.
+  ///
+  /// In zh, this message translates to:
+  /// **'在左侧连接树中选择节点查看详情'**
+  String get infoPickNode;
+
+  /// No description provided for @infoSectionDatabase.
+  ///
+  /// In zh, this message translates to:
+  /// **'数据库'**
+  String get infoSectionDatabase;
+
+  /// No description provided for @infoSectionConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'连接'**
+  String get infoSectionConnection;
+
+  /// No description provided for @infoSectionSchema.
+  ///
+  /// In zh, this message translates to:
+  /// **'模式'**
+  String get infoSectionSchema;
+
+  /// No description provided for @infoSectionConnGroup.
+  ///
+  /// In zh, this message translates to:
+  /// **'连接分组'**
+  String get infoSectionConnGroup;
+
+  /// No description provided for @infoSectionTable.
+  ///
+  /// In zh, this message translates to:
+  /// **'表'**
+  String get infoSectionTable;
+
+  /// No description provided for @fieldConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'连接'**
+  String get fieldConnection;
+
+  /// No description provided for @fieldType.
+  ///
+  /// In zh, this message translates to:
+  /// **'类型'**
+  String get fieldType;
+
+  /// No description provided for @fieldHost.
+  ///
+  /// In zh, this message translates to:
+  /// **'主机'**
+  String get fieldHost;
+
+  /// No description provided for @fieldUser.
+  ///
+  /// In zh, this message translates to:
+  /// **'用户'**
+  String get fieldUser;
+
+  /// No description provided for @fieldDatabase.
+  ///
+  /// In zh, this message translates to:
+  /// **'数据库'**
+  String get fieldDatabase;
+
+  /// No description provided for @fieldSchema.
+  ///
+  /// In zh, this message translates to:
+  /// **'模式'**
+  String get fieldSchema;
+
+  /// No description provided for @fieldConnCount.
+  ///
+  /// In zh, this message translates to:
+  /// **'连接数'**
+  String get fieldConnCount;
+
+  /// No description provided for @infoGroupEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'分组为空:把连接右键 →「移动到分组」放进来,或删除该分组。'**
+  String get infoGroupEmpty;
+
+  /// No description provided for @infoTableDoubleClickHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'双击表可查看前 100 行数据'**
+  String get infoTableDoubleClickHint;
+
+  /// No description provided for @fieldCharset.
+  ///
+  /// In zh, this message translates to:
+  /// **'字符集'**
+  String get fieldCharset;
+
+  /// No description provided for @fieldCollation.
+  ///
+  /// In zh, this message translates to:
+  /// **'排序规则'**
+  String get fieldCollation;
+
+  /// No description provided for @fieldRows.
+  ///
+  /// In zh, this message translates to:
+  /// **'行'**
+  String get fieldRows;
+
+  /// No description provided for @fieldEngine.
+  ///
+  /// In zh, this message translates to:
+  /// **'引擎'**
+  String get fieldEngine;
+
+  /// No description provided for @fieldAutoIncrement.
+  ///
+  /// In zh, this message translates to:
+  /// **'自动递增'**
+  String get fieldAutoIncrement;
+
+  /// No description provided for @fieldRowFormat.
+  ///
+  /// In zh, this message translates to:
+  /// **'行格式'**
+  String get fieldRowFormat;
+
+  /// No description provided for @fieldCreateTime.
+  ///
+  /// In zh, this message translates to:
+  /// **'创建日期'**
+  String get fieldCreateTime;
+
+  /// No description provided for @fieldUpdateTime.
+  ///
+  /// In zh, this message translates to:
+  /// **'修改日期'**
+  String get fieldUpdateTime;
+
+  /// No description provided for @fieldCheckTime.
+  ///
+  /// In zh, this message translates to:
+  /// **'检查时间'**
+  String get fieldCheckTime;
+
+  /// No description provided for @fieldDataLength.
+  ///
+  /// In zh, this message translates to:
+  /// **'数据长度'**
+  String get fieldDataLength;
+
+  /// No description provided for @fieldIndexLength.
+  ///
+  /// In zh, this message translates to:
+  /// **'索引长度'**
+  String get fieldIndexLength;
+
+  /// No description provided for @fieldMaxDataLength.
+  ///
+  /// In zh, this message translates to:
+  /// **'最大数据长度'**
+  String get fieldMaxDataLength;
+
+  /// No description provided for @fieldDataFree.
+  ///
+  /// In zh, this message translates to:
+  /// **'数据可用空间'**
+  String get fieldDataFree;
+
+  /// No description provided for @fieldCreateOptions.
+  ///
+  /// In zh, this message translates to:
+  /// **'创建选项'**
+  String get fieldCreateOptions;
+
+  /// No description provided for @fieldComment.
+  ///
+  /// In zh, this message translates to:
+  /// **'注释'**
+  String get fieldComment;
+
+  /// 详情面板「行」的估算值展示;精确值需点「获取行数」
+  ///
+  /// In zh, this message translates to:
+  /// **'{count} (估算)'**
+  String infoRowCountEstimate(String count);
+
+  /// No description provided for @infoFetchRowCount.
+  ///
+  /// In zh, this message translates to:
+  /// **'获取行数'**
+  String get infoFetchRowCount;
+
+  /// No description provided for @infoFetchingRowCount.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在统计…'**
+  String get infoFetchingRowCount;
+
+  /// No description provided for @infoRowCountFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'统计失败:{error}'**
+  String infoRowCountFailed(String error);
+
+  /// No description provided for @infoShare.
+  ///
+  /// In zh, this message translates to:
+  /// **'共享'**
+  String get infoShare;
+
+  /// No description provided for @infoShareTooltip.
+  ///
+  /// In zh, this message translates to:
+  /// **'复制该对象的引用文本到剪贴板'**
+  String get infoShareTooltip;
+
+  /// No description provided for @infoShareCopied.
+  ///
+  /// In zh, this message translates to:
+  /// **'已复制'**
+  String get infoShareCopied;
+
+  /// No description provided for @infoPageInfo.
+  ///
+  /// In zh, this message translates to:
+  /// **'信息'**
+  String get infoPageInfo;
+
+  /// No description provided for @infoPageDdl.
+  ///
+  /// In zh, this message translates to:
+  /// **'DDL'**
+  String get infoPageDdl;
+
+  /// No description provided for @fieldOid.
+  ///
+  /// In zh, this message translates to:
+  /// **'OID'**
+  String get fieldOid;
+
+  /// No description provided for @fieldOwner.
+  ///
+  /// In zh, this message translates to:
+  /// **'所有者'**
+  String get fieldOwner;
+
+  /// No description provided for @fieldTablespace.
+  ///
+  /// In zh, this message translates to:
+  /// **'表空间'**
+  String get fieldTablespace;
+
+  /// No description provided for @fieldEncoding.
+  ///
+  /// In zh, this message translates to:
+  /// **'编码'**
+  String get fieldEncoding;
+
+  /// No description provided for @fieldLcCollate.
+  ///
+  /// In zh, this message translates to:
+  /// **'排序规则排序'**
+  String get fieldLcCollate;
+
+  /// No description provided for @fieldConnectionLimit.
+  ///
+  /// In zh, this message translates to:
+  /// **'连接限制'**
+  String get fieldConnectionLimit;
+
+  /// No description provided for @infoValueNoLimit.
+  ///
+  /// In zh, this message translates to:
+  /// **'无'**
+  String get infoValueNoLimit;
+
+  /// No description provided for @fieldTableType.
+  ///
+  /// In zh, this message translates to:
+  /// **'Table Type'**
+  String get fieldTableType;
+
+  /// No description provided for @tableTypeRegular.
+  ///
+  /// In zh, this message translates to:
+  /// **'常规'**
+  String get tableTypeRegular;
+
+  /// No description provided for @tableTypePartitioned.
+  ///
+  /// In zh, this message translates to:
+  /// **'分区表'**
+  String get tableTypePartitioned;
+
+  /// No description provided for @tableTypeView.
+  ///
+  /// In zh, this message translates to:
+  /// **'视图'**
+  String get tableTypeView;
+
+  /// No description provided for @tableTypeMatView.
+  ///
+  /// In zh, this message translates to:
+  /// **'物化视图'**
+  String get tableTypeMatView;
+
+  /// No description provided for @tableTypeForeign.
+  ///
+  /// In zh, this message translates to:
+  /// **'外部表'**
+  String get tableTypeForeign;
+
+  /// No description provided for @fieldPartitionOf.
+  ///
+  /// In zh, this message translates to:
+  /// **'分区属于'**
+  String get fieldPartitionOf;
+
+  /// No description provided for @fieldInheritsFrom.
+  ///
+  /// In zh, this message translates to:
+  /// **'Inherits From'**
+  String get fieldInheritsFrom;
+
+  /// No description provided for @fieldHasOids.
+  ///
+  /// In zh, this message translates to:
+  /// **'Has OIDs'**
+  String get fieldHasOids;
+
+  /// No description provided for @fieldFillFactor.
+  ///
+  /// In zh, this message translates to:
+  /// **'填充因子'**
+  String get fieldFillFactor;
+
+  /// No description provided for @fieldAcl.
+  ///
+  /// In zh, this message translates to:
+  /// **'ACL'**
+  String get fieldAcl;
+
+  /// No description provided for @infoValueYes.
+  ///
+  /// In zh, this message translates to:
+  /// **'是'**
+  String get infoValueYes;
+
+  /// No description provided for @infoValueNo.
+  ///
+  /// In zh, this message translates to:
+  /// **'否'**
+  String get infoValueNo;
+
+  /// No description provided for @infoPageUses.
+  ///
+  /// In zh, this message translates to:
+  /// **'使用'**
+  String get infoPageUses;
+
+  /// No description provided for @infoPageUsedBy.
+  ///
+  /// In zh, this message translates to:
+  /// **'被使用'**
+  String get infoPageUsedBy;
+
+  /// No description provided for @infoPageUsesTooltip.
+  ///
+  /// In zh, this message translates to:
+  /// **'本表所引用的对象'**
+  String get infoPageUsesTooltip;
+
+  /// No description provided for @infoPageUsedByTooltip.
+  ///
+  /// In zh, this message translates to:
+  /// **'引用本表的对象'**
+  String get infoPageUsedByTooltip;
+
+  /// No description provided for @infoDepsLoading.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在读取依赖关系…'**
+  String get infoDepsLoading;
+
+  /// No description provided for @infoDepsEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'没有依赖对象'**
+  String get infoDepsEmpty;
+
+  /// No description provided for @infoDepsFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'依赖读取失败:{error}'**
+  String infoDepsFailed(String error);
+
+  /// No description provided for @infoMaximizePanel.
+  ///
+  /// In zh, this message translates to:
+  /// **'加宽详情面板'**
+  String get infoMaximizePanel;
+
+  /// No description provided for @infoRestorePanel.
+  ///
+  /// In zh, this message translates to:
+  /// **'恢复面板宽度'**
+  String get infoRestorePanel;
+
+  /// No description provided for @infoDetailFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'详情读取失败:{error}'**
+  String infoDetailFailed(String error);
+
+  /// No description provided for @infoDdlLoading.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在读取定义…'**
+  String get infoDdlLoading;
+
+  /// No description provided for @infoDdlUnsupported.
+  ///
+  /// In zh, this message translates to:
+  /// **'该数据库类型暂不支持显示建表语句。'**
+  String get infoDdlUnsupported;
+
+  /// No description provided for @infoDdlFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'DDL 读取失败:{error}'**
+  String infoDdlFailed(String error);
+
+  /// No description provided for @infoCopyDdl.
+  ///
+  /// In zh, this message translates to:
+  /// **'复制建表语句'**
+  String get infoCopyDdl;
+
+  /// No description provided for @actionOpen.
+  ///
+  /// In zh, this message translates to:
+  /// **'打开{label}'**
+  String actionOpen(String label);
+
+  /// No description provided for @actionDesign.
+  ///
+  /// In zh, this message translates to:
+  /// **'设计{label}'**
+  String actionDesign(String label);
+
+  /// No description provided for @actionNew.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建{label}'**
+  String actionNew(String label);
+
+  /// No description provided for @actionDelete.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除{label}'**
+  String actionDelete(String label);
+
+  /// No description provided for @tableKindRegular.
+  ///
+  /// In zh, this message translates to:
+  /// **'常规'**
+  String get tableKindRegular;
+
+  /// No description provided for @tableKindExternal.
+  ///
+  /// In zh, this message translates to:
+  /// **'外部'**
+  String get tableKindExternal;
+
+  /// No description provided for @tableKindPartition.
+  ///
+  /// In zh, this message translates to:
+  /// **'分区'**
+  String get tableKindPartition;
+
+  /// No description provided for @importWizard.
+  ///
+  /// In zh, this message translates to:
+  /// **'导入向导'**
+  String get importWizard;
+
+  /// No description provided for @exportWizard.
+  ///
+  /// In zh, this message translates to:
+  /// **'导出向导'**
+  String get exportWizard;
+
+  /// No description provided for @actionClear.
+  ///
+  /// In zh, this message translates to:
+  /// **'清空{label}'**
+  String actionClear(String label);
+
+  /// No description provided for @clearConfirmOne.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定要清空{label}「{name}」吗?\n此操作会删除其中全部数据(保留结构),且不可恢复。'**
+  String clearConfirmOne(String label, String name);
+
+  /// No description provided for @clearFailedDetail.
+  ///
+  /// In zh, this message translates to:
+  /// **'清空失败:\n{error}'**
+  String clearFailedDetail(String error);
+
+  /// No description provided for @btnClear.
+  ///
+  /// In zh, this message translates to:
+  /// **'清空'**
+  String get btnClear;
+
+  /// No description provided for @ctxCopyRename.
+  ///
+  /// In zh, this message translates to:
+  /// **'复制重命名'**
+  String get ctxCopyRename;
+
+  /// No description provided for @btnGotIt.
+  ///
+  /// In zh, this message translates to:
+  /// **'知道了'**
+  String get btnGotIt;
+
+  /// No description provided for @btnDelete.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除'**
+  String get btnDelete;
+
+  /// No description provided for @btnPaste.
+  ///
+  /// In zh, this message translates to:
+  /// **'粘贴'**
+  String get btnPaste;
+
+  /// No description provided for @btnRetry.
+  ///
+  /// In zh, this message translates to:
+  /// **'重试'**
+  String get btnRetry;
+
+  /// No description provided for @stubWip.
+  ///
+  /// In zh, this message translates to:
+  /// **'{action} 功能开发中,敬请期待'**
+  String stubWip(String action);
+
+  /// No description provided for @deleteQueryTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除查询'**
+  String get deleteQueryTitle;
+
+  /// No description provided for @deleteQueryConfirmOne.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定要删除查询「{name}」吗?\n删除后可重新保存,打开着的查询页不受影响。'**
+  String deleteQueryConfirmOne(String name);
+
+  /// No description provided for @deleteQueryConfirmMany.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定要删除选中的 {count} 个查询吗?'**
+  String deleteQueryConfirmMany(String count);
+
+  /// No description provided for @deleteObjectConfirmOne.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定要删除{label}「{name}」吗?\n此操作会永久删除该对象,且不可恢复。'**
+  String deleteObjectConfirmOne(String label, String name);
+
+  /// No description provided for @deleteObjectConfirmMany.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定要删除选中的 {count} 个{label}吗?\n此操作会永久删除这些对象,且不可恢复。'**
+  String deleteObjectConfirmMany(String count, String label);
+
+  /// No description provided for @deleteFailedDetail.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除失败:\n{error}'**
+  String deleteFailedDetail(String error);
+
+  /// No description provided for @loadingObjectsTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在加载 {database} 的对象列表 ...'**
+  String loadingObjectsTitle(String database);
+
+  /// No description provided for @openDatabaseFailedTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'打开 {database} 失败'**
+  String openDatabaseFailedTitle(String database);
+
+  /// No description provided for @categoryListFailedTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'{label}列表读取失败'**
+  String categoryListFailedTitle(String label);
+
+  /// No description provided for @colName.
+  ///
+  /// In zh, this message translates to:
+  /// **'名称'**
+  String get colName;
+
+  /// No description provided for @colRowsEstimated.
+  ///
+  /// In zh, this message translates to:
+  /// **'行(估算)'**
+  String get colRowsEstimated;
+
+  /// No description provided for @colComment.
+  ///
+  /// In zh, this message translates to:
+  /// **'注释'**
+  String get colComment;
+
+  /// No description provided for @rowsApprox.
+  ///
+  /// In zh, this message translates to:
+  /// **'约{value}{unit}'**
+  String rowsApprox(String value, String unit);
+
+  /// No description provided for @rowsUnitSmall.
+  ///
+  /// In zh, this message translates to:
+  /// **'万'**
+  String get rowsUnitSmall;
+
+  /// No description provided for @rowsUnitLarge.
+  ///
+  /// In zh, this message translates to:
+  /// **'亿'**
+  String get rowsUnitLarge;
+
+  /// No description provided for @renameTableTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'重命名表'**
+  String get renameTableTitle;
+
+  /// No description provided for @renameFailedDetail.
+  ///
+  /// In zh, this message translates to:
+  /// **'重命名失败:\n{error}'**
+  String renameFailedDetail(String error);
+
+  /// No description provided for @copiedTables.
+  ///
+  /// In zh, this message translates to:
+  /// **'已复制 {count} 张表,Ctrl+V 粘贴为副本'**
+  String copiedTables(String count);
+
+  /// No description provided for @pasteNeedOpenConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'请先打开连接「{connection}」再粘贴。'**
+  String pasteNeedOpenConnection(String connection);
+
+  /// No description provided for @pasteWrongContext.
+  ///
+  /// In zh, this message translates to:
+  /// **'粘贴只能回到复制时的连接 / 数据库 / 模式:\n{context}'**
+  String pasteWrongContext(String context);
+
+  /// No description provided for @pasteTableTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'粘贴表'**
+  String get pasteTableTitle;
+
+  /// No description provided for @pasteConfirmDetail.
+  ///
+  /// In zh, this message translates to:
+  /// **'将粘贴创建 {count} 张表(结构 + 数据):\n{plan}'**
+  String pasteConfirmDetail(String count, String plan);
+
+  /// No description provided for @pastedTables.
+  ///
+  /// In zh, this message translates to:
+  /// **'已粘贴创建 {count} 张表'**
+  String pastedTables(String count);
+
+  /// No description provided for @pasteFailedDetail.
+  ///
+  /// In zh, this message translates to:
+  /// **'粘贴失败:\n{detail}'**
+  String pasteFailedDetail(String detail);
+
+  /// No description provided for @catTablePlural.
+  ///
+  /// In zh, this message translates to:
+  /// **'表'**
+  String get catTablePlural;
+
+  /// No description provided for @catViewPlural.
+  ///
+  /// In zh, this message translates to:
+  /// **'视图'**
+  String get catViewPlural;
+
+  /// No description provided for @catMaterializedViewPlural.
+  ///
+  /// In zh, this message translates to:
+  /// **'实体化视图'**
+  String get catMaterializedViewPlural;
+
+  /// No description provided for @catFunctionPlural.
+  ///
+  /// In zh, this message translates to:
+  /// **'函数'**
+  String get catFunctionPlural;
+
+  /// No description provided for @catProcedurePlural.
+  ///
+  /// In zh, this message translates to:
+  /// **'过程'**
+  String get catProcedurePlural;
+
+  /// No description provided for @newExternalTable.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建外部表'**
+  String get newExternalTable;
+
+  /// No description provided for @newPartitionTable.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建分区表'**
+  String get newPartitionTable;
+
+  /// No description provided for @openedConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'已打开连接「{name}」'**
+  String openedConnection(String name);
+
+  /// No description provided for @openedDatabase.
+  ///
+  /// In zh, this message translates to:
+  /// **'已打开数据库「{name}」'**
+  String openedDatabase(String name);
+
+  /// No description provided for @openedSchema.
+  ///
+  /// In zh, this message translates to:
+  /// **'已打开模式「{name}」'**
+  String openedSchema(String name);
+
+  /// No description provided for @openedBare.
+  ///
+  /// In zh, this message translates to:
+  /// **'已打开'**
+  String get openedBare;
+
+  /// No description provided for @closedBare.
+  ///
+  /// In zh, this message translates to:
+  /// **'已关闭'**
+  String get closedBare;
+
+  /// No description provided for @closedConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'已关闭连接「{name}」'**
+  String closedConnection(String name);
+
+  /// No description provided for @closedSchema.
+  ///
+  /// In zh, this message translates to:
+  /// **'已关闭模式「{name}」'**
+  String closedSchema(String name);
+
+  /// No description provided for @closedDatabase.
+  ///
+  /// In zh, this message translates to:
+  /// **'已关闭数据库「{name}」'**
+  String closedDatabase(String name);
+
+  /// No description provided for @openedNamed.
+  ///
+  /// In zh, this message translates to:
+  /// **'已打开「{name}」'**
+  String openedNamed(String name);
+
+  /// No description provided for @closedNamed.
+  ///
+  /// In zh, this message translates to:
+  /// **'已关闭「{name}」'**
+  String closedNamed(String name);
+
+  /// No description provided for @renamedConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'已重命名连接「{oldName}」为「{newName}」'**
+  String renamedConnection(String newName, String oldName);
+
+  /// No description provided for @renamedTable.
+  ///
+  /// In zh, this message translates to:
+  /// **'已重命名表「{oldName}」为「{newName}」'**
+  String renamedTable(String newName, String oldName);
+
+  /// No description provided for @movedConnectionToUngrouped.
+  ///
+  /// In zh, this message translates to:
+  /// **'已把连接「{name}」移到未分组'**
+  String movedConnectionToUngrouped(String name);
+
+  /// No description provided for @movedConnectionToGroup.
+  ///
+  /// In zh, this message translates to:
+  /// **'已把连接「{name}」移入分组「{group}」'**
+  String movedConnectionToGroup(String group, String name);
+
+  /// No description provided for @unnamedGroup.
+  ///
+  /// In zh, this message translates to:
+  /// **'未命名分组'**
+  String get unnamedGroup;
+
+  /// No description provided for @unnamedGroupNumbered.
+  ///
+  /// In zh, this message translates to:
+  /// **'未命名分组 {index}'**
+  String unnamedGroupNumbered(String index);
+
+  /// No description provided for @renameGroupTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'重命名分组'**
+  String get renameGroupTitle;
+
+  /// No description provided for @groupAlreadyExists.
+  ///
+  /// In zh, this message translates to:
+  /// **'已存在同名分组「{name}」(不区分大小写)。'**
+  String groupAlreadyExists(String name);
+
+  /// No description provided for @ctxOpenConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'打开连接'**
+  String get ctxOpenConnection;
+
+  /// No description provided for @ctxCloseConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'关闭连接'**
+  String get ctxCloseConnection;
+
+  /// No description provided for @ctxOpen.
+  ///
+  /// In zh, this message translates to:
+  /// **'打开'**
+  String get ctxOpen;
+
+  /// No description provided for @ctxClose.
+  ///
+  /// In zh, this message translates to:
+  /// **'关闭'**
+  String get ctxClose;
+
+  /// No description provided for @ctxRefresh.
+  ///
+  /// In zh, this message translates to:
+  /// **'刷新'**
+  String get ctxRefresh;
+
+  /// No description provided for @ctxNewDatabase.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建数据库'**
+  String get ctxNewDatabase;
+
+  /// No description provided for @ctxEditConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'编辑连接'**
+  String get ctxEditConnection;
+
+  /// No description provided for @ctxCopyConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'复制连接'**
+  String get ctxCopyConnection;
+
+  /// No description provided for @ctxMoveToGroup.
+  ///
+  /// In zh, this message translates to:
+  /// **'移动到分组'**
+  String get ctxMoveToGroup;
+
+  /// No description provided for @ctxUngrouped.
+  ///
+  /// In zh, this message translates to:
+  /// **'未分组'**
+  String get ctxUngrouped;
+
+  /// No description provided for @ctxNewGroup.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建分组'**
+  String get ctxNewGroup;
+
+  /// No description provided for @ctxDeleteConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除连接'**
+  String get ctxDeleteConnection;
+
+  /// No description provided for @ctxNewConnectionEllipsis.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建连接…'**
+  String get ctxNewConnectionEllipsis;
+
+  /// No description provided for @ctxRenameGroup.
+  ///
+  /// In zh, this message translates to:
+  /// **'重命名分组'**
+  String get ctxRenameGroup;
+
+  /// No description provided for @ctxDeleteGroup.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除分组'**
+  String get ctxDeleteGroup;
+
+  /// No description provided for @ctxDeleteGroupWith.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除分组(含 {count} 条连接)'**
+  String ctxDeleteGroupWith(String count);
+
+  /// No description provided for @deleteGroupConfirm.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除分组「{group}」不会删除其中的 {count} 条连接,它们会回落到未分组。继续?'**
+  String deleteGroupConfirm(String count, String group);
+
+  /// No description provided for @btnCancel.
+  ///
+  /// In zh, this message translates to:
+  /// **'取消'**
+  String get btnCancel;
+
+  /// No description provided for @btnSave.
+  ///
+  /// In zh, this message translates to:
+  /// **'保存'**
+  String get btnSave;
+
+  /// No description provided for @ctxNewSchema.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建模式'**
+  String get ctxNewSchema;
+
+  /// No description provided for @ctxDelete.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除'**
+  String get ctxDelete;
+
+  /// No description provided for @ctxEditDatabase.
+  ///
+  /// In zh, this message translates to:
+  /// **'编辑数据库'**
+  String get ctxEditDatabase;
+
+  /// No description provided for @ctxNewQuery.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建查询'**
+  String get ctxNewQuery;
+
+  /// No description provided for @ctxDumpSql.
+  ///
+  /// In zh, this message translates to:
+  /// **'转储SQL文件'**
+  String get ctxDumpSql;
+
+  /// No description provided for @ctxStructureOnly.
+  ///
+  /// In zh, this message translates to:
+  /// **'仅结构'**
+  String get ctxStructureOnly;
+
+  /// No description provided for @ctxRunSql.
+  ///
+  /// In zh, this message translates to:
+  /// **'运行SQL文件'**
+  String get ctxRunSql;
+
+  /// No description provided for @ctxCloseSchema.
+  ///
+  /// In zh, this message translates to:
+  /// **'关闭模式'**
+  String get ctxCloseSchema;
+
+  /// No description provided for @ctxOpenSchema.
+  ///
+  /// In zh, this message translates to:
+  /// **'打开模式'**
+  String get ctxOpenSchema;
+
+  /// No description provided for @ctxEditSchema.
+  ///
+  /// In zh, this message translates to:
+  /// **'编辑模式'**
+  String get ctxEditSchema;
+
+  /// No description provided for @ctxDeleteSchema.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除模式'**
+  String get ctxDeleteSchema;
+
+  /// No description provided for @deleteSchemaConfirm.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定要删除模式「{name}」吗?\n此操作会永久删除该模式及其全部对象,且不可恢复。'**
+  String deleteSchemaConfirm(String name);
+
+  /// No description provided for @ctxNewTable.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建表'**
+  String get ctxNewTable;
+
+  /// No description provided for @ctxNewFunction.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建函数'**
+  String get ctxNewFunction;
+
+  /// No description provided for @ctxNewProcedure.
+  ///
+  /// In zh, this message translates to:
+  /// **'新建过程'**
+  String get ctxNewProcedure;
+
+  /// No description provided for @deleteDatabaseTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除数据库'**
+  String get deleteDatabaseTitle;
+
+  /// No description provided for @deleteDatabaseConfirm.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定要删除数据库「{name}」吗?\n此操作会永久删除该数据库及其所有数据,且不可恢复。'**
+  String deleteDatabaseConfirm(String name);
+
+  /// No description provided for @sqlFileTypeLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'SQL 文件'**
+  String get sqlFileTypeLabel;
+
+  /// No description provided for @dumpStructureReadFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'结构读取失败:\n数据库不可用或连接已断开,请先打开连接重试。'**
+  String get dumpStructureReadFailed;
+
+  /// No description provided for @dumpWriteFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'文件写入失败:\n{error}'**
+  String dumpWriteFailed(String error);
+
+  /// No description provided for @dumpDatabaseDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'已导出「{name}」结构(仅结构,不含数据)到:\n{path}'**
+  String dumpDatabaseDone(String name, String path);
+
+  /// No description provided for @dumpSchemaDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'已导出「{name}」模式结构(仅结构,不含数据)到:\n{path}'**
+  String dumpSchemaDone(String name, String path);
+
+  /// No description provided for @openConnectionUnsupported.
+  ///
+  /// In zh, this message translates to:
+  /// **'连接「{name}」的数据库类型({type})暂不支持,无法打开。'**
+  String openConnectionUnsupported(String name, String type);
+
+  /// No description provided for @openConnectionFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'连接「{name}」失败:\n{error}'**
+  String openConnectionFailed(String error, String name);
+
+  /// No description provided for @deleteConnectionConfirm.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定要删除连接「{name}」吗?\n已打开的该连接标签页仍会保留,但将无法继续访问。'**
+  String deleteConnectionConfirm(String name);
+
+  /// No description provided for @noMatchingConnections.
+  ///
+  /// In zh, this message translates to:
+  /// **'没有匹配的连接'**
+  String get noMatchingConnections;
+
+  /// No description provided for @noConnectionsYet.
+  ///
+  /// In zh, this message translates to:
+  /// **'暂无连接'**
+  String get noConnectionsYet;
+
+  /// No description provided for @clickToolbarNewConnection.
+  ///
+  /// In zh, this message translates to:
+  /// **'点击工具栏「连接」按钮新建连接'**
+  String get clickToolbarNewConnection;
+
+  /// No description provided for @dropToUngroup.
+  ///
+  /// In zh, this message translates to:
+  /// **'释放以移到「未分组」'**
+  String get dropToUngroup;
+
+  /// No description provided for @driverNotImplemented.
+  ///
+  /// In zh, this message translates to:
+  /// **'暂不支持该类型,待实现驱动'**
+  String get driverNotImplemented;
+
+  /// No description provided for @loadFailedDetail.
+  ///
+  /// In zh, this message translates to:
+  /// **'加载失败: {error}'**
+  String loadFailedDetail(String error);
+
+  /// No description provided for @readFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'读取失败'**
+  String get readFailed;
+
+  /// No description provided for @clickToRetry.
+  ///
+  /// In zh, this message translates to:
+  /// **'点击重试'**
+  String get clickToRetry;
+
+  /// No description provided for @searchConnectionsHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'搜索连接...'**
+  String get searchConnectionsHint;
+
+  /// No description provided for @dbTypeFilter.
+  ///
+  /// In zh, this message translates to:
+  /// **'数据库类型筛选'**
+  String get dbTypeFilter;
+
+  /// No description provided for @notImplemented.
+  ///
+  /// In zh, this message translates to:
+  /// **'未实现'**
+  String get notImplemented;
+
+  /// No description provided for @clearAllFilters.
+  ///
+  /// In zh, this message translates to:
+  /// **'全部清除'**
+  String get clearAllFilters;
+
+  /// No description provided for @collapseAll.
+  ///
+  /// In zh, this message translates to:
+  /// **'折叠全部'**
+  String get collapseAll;
+
+  /// 表数据页:单元格编辑器 / 值面板未选中任何格时的占位提示
+  ///
+  /// In zh, this message translates to:
+  /// **'请先选中一个单元格'**
+  String get cellEditorPickCell;
+
+  /// 表数据页:把本地暂存的增删改写回数据库的按钮
+  ///
+  /// In zh, this message translates to:
+  /// **'确认修改'**
+  String get btnCommitChanges;
+
+  /// No description provided for @rowsCopiedToClipboard.
+  ///
+  /// In zh, this message translates to:
+  /// **'已复制 {count} 行到剪贴板'**
+  String rowsCopiedToClipboard(String count);
+
+  /// No description provided for @cellMenuSetNull.
+  ///
+  /// In zh, this message translates to:
+  /// **'将 {count} 个单元格置为 NULL'**
+  String cellMenuSetNull(String count);
+
+  /// No description provided for @cellMenuCopy.
+  ///
+  /// In zh, this message translates to:
+  /// **'复制 {count} 个单元格'**
+  String cellMenuCopy(String count);
+
+  /// No description provided for @cellsCopiedToClipboard.
+  ///
+  /// In zh, this message translates to:
+  /// **'已复制 {count} 个单元格到剪贴板'**
+  String cellsCopiedToClipboard(String count);
+
+  /// No description provided for @cellsClearedToNull.
+  ///
+  /// In zh, this message translates to:
+  /// **'已将 {count} 个单元格置为 NULL（点「{action}」或 Ctrl+S 落库）'**
+  String cellsClearedToNull(String count, String action);
+
+  /// No description provided for @filterSourceBuilder.
+  ///
+  /// In zh, this message translates to:
+  /// **'创建工具'**
+  String get filterSourceBuilder;
+
+  /// No description provided for @filterSourceText.
+  ///
+  /// In zh, this message translates to:
+  /// **'文本'**
+  String get filterSourceText;
+
+  /// No description provided for @toolPanelFilter.
+  ///
+  /// In zh, this message translates to:
+  /// **'筛选 & 排序'**
+  String get toolPanelFilter;
+
+  /// No description provided for @toolPanelColumns.
+  ///
+  /// In zh, this message translates to:
+  /// **'列'**
+  String get toolPanelColumns;
+
+  /// No description provided for @toolPanelCellEditor.
+  ///
+  /// In zh, this message translates to:
+  /// **'单元格编辑器'**
+  String get toolPanelCellEditor;
+
+  /// No description provided for @btnOk.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定'**
+  String get btnOk;
+
+  /// No description provided for @dtpTime.
+  ///
+  /// In zh, this message translates to:
+  /// **'时间'**
+  String get dtpTime;
+
+  /// No description provided for @dtpSelectTime.
+  ///
+  /// In zh, this message translates to:
+  /// **'选择时间'**
+  String get dtpSelectTime;
+
+  /// No description provided for @dtpHour.
+  ///
+  /// In zh, this message translates to:
+  /// **'时'**
+  String get dtpHour;
+
+  /// No description provided for @dtpMinute.
+  ///
+  /// In zh, this message translates to:
+  /// **'分'**
+  String get dtpMinute;
+
+  /// No description provided for @dtpSecond.
+  ///
+  /// In zh, this message translates to:
+  /// **'秒'**
+  String get dtpSecond;
+
+  /// No description provided for @dtpWeekdayMon.
+  ///
+  /// In zh, this message translates to:
+  /// **'周一'**
+  String get dtpWeekdayMon;
+
+  /// No description provided for @dtpWeekdayTue.
+  ///
+  /// In zh, this message translates to:
+  /// **'周二'**
+  String get dtpWeekdayTue;
+
+  /// No description provided for @dtpWeekdayWed.
+  ///
+  /// In zh, this message translates to:
+  /// **'周三'**
+  String get dtpWeekdayWed;
+
+  /// No description provided for @dtpWeekdayThu.
+  ///
+  /// In zh, this message translates to:
+  /// **'周四'**
+  String get dtpWeekdayThu;
+
+  /// No description provided for @dtpWeekdayFri.
+  ///
+  /// In zh, this message translates to:
+  /// **'周五'**
+  String get dtpWeekdayFri;
+
+  /// No description provided for @dtpWeekdaySat.
+  ///
+  /// In zh, this message translates to:
+  /// **'周六'**
+  String get dtpWeekdaySat;
+
+  /// No description provided for @dtpWeekdaySun.
+  ///
+  /// In zh, this message translates to:
+  /// **'周日'**
+  String get dtpWeekdaySun;
+
+  /// No description provided for @catRecord.
+  ///
+  /// In zh, this message translates to:
+  /// **'记录'**
+  String get catRecord;
+
+  /// No description provided for @gridPagingFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'分页加载失败: {error}'**
+  String gridPagingFailed(String error);
+
+  /// No description provided for @gridAlreadyLastPage.
+  ///
+  /// In zh, this message translates to:
+  /// **'已是最后一页'**
+  String get gridAlreadyLastPage;
+
+  /// No description provided for @gridPageMissing.
+  ///
+  /// In zh, this message translates to:
+  /// **'第 {page} 页不存在'**
+  String gridPageMissing(String page);
+
+  /// No description provided for @gridDiscardTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'放弃未保存的修改'**
+  String get gridDiscardTitle;
+
+  /// No description provided for @gridDiscardConfirm.
+  ///
+  /// In zh, this message translates to:
+  /// **'当前有未保存的修改，继续将丢弃这些修改。\n是否继续？'**
+  String get gridDiscardConfirm;
+
+  /// No description provided for @gridDeleteRowConfirm.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定要删除第 {row} 行记录吗?\n'**
+  String gridDeleteRowConfirm(String row);
+
+  /// No description provided for @gridDeleteRowsConfirm.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定要删除选中的 {count} 行记录吗?({preview})\n'**
+  String gridDeleteRowsConfirm(String count, String preview);
+
+  /// No description provided for @gridDeletePendingHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除后点击「确认修改」或 Ctrl+S 才会写入数据库。'**
+  String get gridDeletePendingHint;
+
+  /// No description provided for @gridNothingToSave.
+  ///
+  /// In zh, this message translates to:
+  /// **'没有需要保存的修改'**
+  String get gridNothingToSave;
+
+  /// No description provided for @gridConnectionMissing.
+  ///
+  /// In zh, this message translates to:
+  /// **'连接 \"{connection}\" 不存在'**
+  String gridConnectionMissing(String connection);
+
+  /// No description provided for @gridDeleteRowError.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除第 {row} 行: {error}'**
+  String gridDeleteRowError(String row, String error);
+
+  /// No description provided for @gridInsertRowError.
+  ///
+  /// In zh, this message translates to:
+  /// **'新增行: {error}'**
+  String gridInsertRowError(String error);
+
+  /// No description provided for @gridUpdateRowError.
+  ///
+  /// In zh, this message translates to:
+  /// **'更新第 {row} 行: {error}'**
+  String gridUpdateRowError(String row, String error);
+
+  /// No description provided for @gridSavedRows.
+  ///
+  /// In zh, this message translates to:
+  /// **'已保存 {count} 行修改'**
+  String gridSavedRows(String count);
+
+  /// No description provided for @gridSaveFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'保存失败: {errors}'**
+  String gridSaveFailed(String errors);
+
+  /// No description provided for @gridSaveFailedTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'保存失败'**
+  String get gridSaveFailedTitle;
+
+  /// No description provided for @gridSortMethod.
+  ///
+  /// In zh, this message translates to:
+  /// **'排序方式'**
+  String get gridSortMethod;
+
+  /// No description provided for @gridAddSortCriterion.
+  ///
+  /// In zh, this message translates to:
+  /// **'添加排序准则'**
+  String get gridAddSortCriterion;
+
+  /// No description provided for @gridSortEmptyHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'点击 + 以添加排序准则'**
+  String get gridSortEmptyHint;
+
+  /// No description provided for @gridReadingColumns.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在读取列信息 …'**
+  String get gridReadingColumns;
+
+  /// No description provided for @gridFilterEmptyHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'点击 + 添加筛选条件；选中一行后可在其行尾追加同级条件（+）或括号分组（O+）'**
+  String get gridFilterEmptyHint;
+
+  /// No description provided for @gridFilter.
+  ///
+  /// In zh, this message translates to:
+  /// **'筛选'**
+  String get gridFilter;
+
+  /// No description provided for @gridAddFilterCriterion.
+  ///
+  /// In zh, this message translates to:
+  /// **'添加筛选条件'**
+  String get gridAddFilterCriterion;
+
+  /// No description provided for @gridMoveCriterionUp.
+  ///
+  /// In zh, this message translates to:
+  /// **'上移选中条件'**
+  String get gridMoveCriterionUp;
+
+  /// No description provided for @gridMoveCriterionDown.
+  ///
+  /// In zh, this message translates to:
+  /// **'下移选中条件'**
+  String get gridMoveCriterionDown;
+
+  /// No description provided for @gridNoValueNeeded.
+  ///
+  /// In zh, this message translates to:
+  /// **'（无需值）'**
+  String get gridNoValueNeeded;
+
+  /// No description provided for @gridAddSibling.
+  ///
+  /// In zh, this message translates to:
+  /// **'在此条件后添加同级条件'**
+  String get gridAddSibling;
+
+  /// No description provided for @gridAddGroup.
+  ///
+  /// In zh, this message translates to:
+  /// **'在此条件后添加括号分组'**
+  String get gridAddGroup;
+
+  /// No description provided for @gridDeleteFilterGroup.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除分组'**
+  String get gridDeleteFilterGroup;
+
+  /// No description provided for @gridDeleteCriterion.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除条件'**
+  String get gridDeleteCriterion;
+
+  /// No description provided for @gridWhereHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'不含 WHERE 关键字，例如：id > 100 AND name LIKE \'集团%\''**
+  String get gridWhereHint;
+
+  /// No description provided for @gridApplyFilterSort.
+  ///
+  /// In zh, this message translates to:
+  /// **'应用筛选 & 排序'**
+  String get gridApplyFilterSort;
+
+  /// No description provided for @gridCriterionEdited.
+  ///
+  /// In zh, this message translates to:
+  /// **'已编辑准则'**
+  String get gridCriterionEdited;
+
+  /// No description provided for @gridAsc.
+  ///
+  /// In zh, this message translates to:
+  /// **'升序'**
+  String get gridAsc;
+
+  /// No description provided for @gridDesc.
+  ///
+  /// In zh, this message translates to:
+  /// **'降序'**
+  String get gridDesc;
+
+  /// No description provided for @gridDeleteSortCriterion.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除排序准则'**
+  String get gridDeleteSortCriterion;
+
+  /// No description provided for @gridColumnsCount.
+  ///
+  /// In zh, this message translates to:
+  /// **'列 ({visible}/{total})'**
+  String gridColumnsCount(String visible, String total);
+
+  /// No description provided for @gridShowAllColumns.
+  ///
+  /// In zh, this message translates to:
+  /// **'显示所有列'**
+  String get gridShowAllColumns;
+
+  /// No description provided for @gridKeepFirstColumnOnly.
+  ///
+  /// In zh, this message translates to:
+  /// **'只保留第一列'**
+  String get gridKeepFirstColumnOnly;
+
+  /// No description provided for @gridLoadingColumns.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在加载列信息 ...'**
+  String get gridLoadingColumns;
+
+  /// No description provided for @gridSearch.
+  ///
+  /// In zh, this message translates to:
+  /// **'搜索'**
+  String get gridSearch;
+
+  /// No description provided for @gridColumnName.
+  ///
+  /// In zh, this message translates to:
+  /// **'列名'**
+  String get gridColumnName;
+
+  /// No description provided for @cellNoneSelected.
+  ///
+  /// In zh, this message translates to:
+  /// **'未选中单元格'**
+  String get cellNoneSelected;
+
+  /// No description provided for @cellColumnIndex.
+  ///
+  /// In zh, this message translates to:
+  /// **'列 {col}'**
+  String cellColumnIndex(String col);
+
+  /// No description provided for @cellRowIndex.
+  ///
+  /// In zh, this message translates to:
+  /// **'  ·  第 {row} 行'**
+  String cellRowIndex(String row);
+
+  /// No description provided for @cellEditorTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'单元格编辑器 · {title}'**
+  String cellEditorTitle(String title);
+
+  /// No description provided for @btnApply.
+  ///
+  /// In zh, this message translates to:
+  /// **'应用'**
+  String get btnApply;
+
+  /// No description provided for @btnUndo.
+  ///
+  /// In zh, this message translates to:
+  /// **'撤销'**
+  String get btnUndo;
+
+  /// No description provided for @cellEmptyValue.
+  ///
+  /// In zh, this message translates to:
+  /// **'当前单元格为空'**
+  String get cellEmptyValue;
+
+  /// No description provided for @cellNotBase64Image.
+  ///
+  /// In zh, this message translates to:
+  /// **'当前单元格不是可识别的 base64 图片数据'**
+  String get cellNotBase64Image;
+
+  /// No description provided for @cellNotHtml.
+  ///
+  /// In zh, this message translates to:
+  /// **'当前单元格内容不是 HTML 网页源码'**
+  String get cellNotHtml;
+
+  /// No description provided for @cellWrittenBack.
+  ///
+  /// In zh, this message translates to:
+  /// **'已写回单元格（点「{action}」或 Ctrl+S 落库）'**
+  String cellWrittenBack(String action);
+
+  /// No description provided for @cellMenuSetBlank.
+  ///
+  /// In zh, this message translates to:
+  /// **'设置为空白字符串'**
+  String get cellMenuSetBlank;
+
+  /// No description provided for @cellMenuSetNullCell.
+  ///
+  /// In zh, this message translates to:
+  /// **'设置为 NULL'**
+  String get cellMenuSetNullCell;
+
+  /// No description provided for @gridSort.
+  ///
+  /// In zh, this message translates to:
+  /// **'排序'**
+  String get gridSort;
+
+  /// No description provided for @gridSortAscBy.
+  ///
+  /// In zh, this message translates to:
+  /// **'升序（{column}）'**
+  String gridSortAscBy(String column);
+
+  /// No description provided for @gridSortDescBy.
+  ///
+  /// In zh, this message translates to:
+  /// **'降序（{column}）'**
+  String gridSortDescBy(String column);
+
+  /// No description provided for @gridClearSort.
+  ///
+  /// In zh, this message translates to:
+  /// **'取消排序'**
+  String get gridClearSort;
+
+  /// No description provided for @gridMoreSorting.
+  ///
+  /// In zh, this message translates to:
+  /// **'更多排序...'**
+  String get gridMoreSorting;
+
+  /// No description provided for @gridHideColumn.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐藏「{column}」'**
+  String gridHideColumn(String column);
+
+  /// No description provided for @gridColumnsPanel.
+  ///
+  /// In zh, this message translates to:
+  /// **'列面板...'**
+  String get gridColumnsPanel;
+
+  /// No description provided for @gridMoreFilters.
+  ///
+  /// In zh, this message translates to:
+  /// **'更多筛选...'**
+  String get gridMoreFilters;
+
+  /// No description provided for @gridClearFilter.
+  ///
+  /// In zh, this message translates to:
+  /// **'清除筛选'**
+  String get gridClearFilter;
+
+  /// No description provided for @gridRemoveAllSortFilter.
+  ///
+  /// In zh, this message translates to:
+  /// **'移除所有排序及筛选'**
+  String get gridRemoveAllSortFilter;
+
+  /// No description provided for @gridShow.
+  ///
+  /// In zh, this message translates to:
+  /// **'显示'**
+  String get gridShow;
+
+  /// No description provided for @gridShowAll.
+  ///
+  /// In zh, this message translates to:
+  /// **'全部记录'**
+  String get gridShowAll;
+
+  /// No description provided for @gridShowNullOnly.
+  ///
+  /// In zh, this message translates to:
+  /// **'仅含 NULL 值的记录'**
+  String get gridShowNullOnly;
+
+  /// No description provided for @gridShowNotNullOnly.
+  ///
+  /// In zh, this message translates to:
+  /// **'仅不含 NULL 值的记录'**
+  String get gridShowNotNullOnly;
+
+  /// No description provided for @gridClipboardEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'剪贴板为空'**
+  String get gridClipboardEmpty;
+
+  /// No description provided for @gridClipboardNoRecords.
+  ///
+  /// In zh, this message translates to:
+  /// **'剪贴板里没有可粘贴的记录'**
+  String get gridClipboardNoRecords;
+
+  /// No description provided for @gridPastedRows.
+  ///
+  /// In zh, this message translates to:
+  /// **'已粘贴 {count} 行为新增记录(未保存)'**
+  String gridPastedRows(String count);
+
+  /// No description provided for @gridRowCountUnknown.
+  ///
+  /// In zh, this message translates to:
+  /// **'  ·  行数未知'**
+  String get gridRowCountUnknown;
+
+  /// No description provided for @gridRowCount.
+  ///
+  /// In zh, this message translates to:
+  /// **'  ·  {total} 行'**
+  String gridRowCount(String total);
+
+  /// No description provided for @gridLoadingTable.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在加载 {table} ...'**
+  String gridLoadingTable(String table);
+
+  /// No description provided for @gridReadTableFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'读取 {table} 失败'**
+  String gridReadTableFailed(String table);
+
+  /// No description provided for @gridFilterDirty.
+  ///
+  /// In zh, this message translates to:
+  /// **'筛选 / 排序有未应用的更改'**
+  String get gridFilterDirty;
+
+  /// No description provided for @gridFilterApplied.
+  ///
+  /// In zh, this message translates to:
+  /// **'已应用筛选 / 排序'**
+  String get gridFilterApplied;
+
+  /// No description provided for @gridAddRecord.
+  ///
+  /// In zh, this message translates to:
+  /// **'添加记录'**
+  String get gridAddRecord;
+
+  /// No description provided for @gridDeleteSelectedRecords.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除选中记录'**
+  String get gridDeleteSelectedRecords;
+
+  /// No description provided for @gridSaving.
+  ///
+  /// In zh, this message translates to:
+  /// **'保存中...'**
+  String get gridSaving;
+
+  /// No description provided for @gridRevertChanges.
+  ///
+  /// In zh, this message translates to:
+  /// **'取消修改'**
+  String get gridRevertChanges;
+
+  /// No description provided for @gridStop.
+  ///
+  /// In zh, this message translates to:
+  /// **'停止'**
+  String get gridStop;
+
+  /// No description provided for @gridPagerRange.
+  ///
+  /// In zh, this message translates to:
+  /// **'第 {from}-{to} 条 / 共 {total} 条'**
+  String gridPagerRange(String from, String to, String total);
+
+  /// No description provided for @gridPageSize.
+  ///
+  /// In zh, this message translates to:
+  /// **'页大小设置'**
+  String get gridPageSize;
+
+  /// No description provided for @gridRowsPerPage.
+  ///
+  /// In zh, this message translates to:
+  /// **'{size} 条/页'**
+  String gridRowsPerPage(String size);
+
+  /// 命令列界面:输出区为空时的用法说明
+  ///
+  /// In zh, this message translates to:
+  /// **'输入 SQL 语句后按回车执行。语句以分号结尾;未写完可继续输入下一行,↑ / ↓ 翻历史。'**
+  String get cliEmptyHint;
+
+  /// 命令列界面:输入行占位文案
+  ///
+  /// In zh, this message translates to:
+  /// **'输入 SQL 语句'**
+  String get cliInputHint;
+}
+
+class _AppLocalizationsDelegate
+    extends LocalizationsDelegate<AppLocalizations> {
+  const _AppLocalizationsDelegate();
+
+  @override
+  Future<AppLocalizations> load(Locale locale) {
+    return SynchronousFuture<AppLocalizations>(lookupAppLocalizations(locale));
+  }
+
+  @override
+  bool isSupported(Locale locale) =>
+      <String>['en', 'ja', 'zh'].contains(locale.languageCode);
+
+  @override
+  bool shouldReload(_AppLocalizationsDelegate old) => false;
+}
+
+AppLocalizations lookupAppLocalizations(Locale locale) {
+  // Lookup logic when only language code is specified.
+  switch (locale.languageCode) {
+    case 'en':
+      return AppLocalizationsEn();
+    case 'ja':
+      return AppLocalizationsJa();
+    case 'zh':
+      return AppLocalizationsZh();
+  }
+
+  throw FlutterError(
+      'AppLocalizations.delegate failed to load unsupported locale "$locale". This is likely '
+      'an issue with the localizations generation tool. Please file an issue '
+      'on GitHub with a reproducible sample app and the gen-l10n configuration '
+      'that was used.');
+}

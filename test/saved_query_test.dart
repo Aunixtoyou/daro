@@ -125,7 +125,7 @@ void main() {
 
       app.closeTab('报表');
       expect(app.tabs, isEmpty);
-      expect(app.activeTab, '对象');
+      expect(app.activeTab, AppState.objectsTabKey);
       expect(app.queryTextFor(key), '');
       expect(app.sqlHistoryFor(key), isEmpty);
     });

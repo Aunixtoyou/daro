@@ -1,0 +1,15 @@
+# 多语言代码生成配置:flutter gen-l10n / flutter run / flutter test 自动读取
+#
+# 模板取 app_zh.arb —— 界面文案的原始事实源是中文,以它为模板可让
+# "缺哪个 locale 的哪条翻译"暴露成 gen-l10n 警告,而不是漏成运行时英文兜底。
+arb-dir: lib/l10n
+template-arb-file: app_zh.arb
+output-dir: lib/l10n
+output-localization-file: app_localizations.dart
+output-class: AppLocalizations
+
+# of(context) 返回非空:找不到 delegate 时抛异常而不是静默 null
+nullable-getter: false
+
+# 三语齐备性由 test/l10n_test.dart 断言;此文件仅列出未翻译项便于排查
+untranslated-messages-file: l10n_untranslated.json

@@ -8,6 +8,7 @@ import '../app/connection_manager.dart';
 import '../data/db_data.dart';
 import '../data/drivers/db_driver.dart';
 import '../data/routine_sql.dart';
+import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
 import 'data_export_wizard.dart';
 import 'data_import_wizard.dart';
@@ -207,7 +208,8 @@ class _ObjectPanelState extends State<ObjectPanel> {
   ) {
     final app = context.read<AppState>();
     final c = AppColors.of(context);
-    final label = category.label;
+    final l = context.l10n;
+    final label = category.labelOf(l);
     // 只有表 / 视图 / 函数 / 过程有"设计"语义
     final canDesign = switch (category) {
       ObjectCategory.table ||
@@ -246,7 +248,7 @@ class _ObjectPanelState extends State<ObjectPanel> {
         ToolStripButton(
           icon: Icons.folder_open_outlined,
           iconColor: c.iconWarning,
-          text: '打开$label',
+          text: l.actionOpen(label),
           enabled: hasSelection,
           onPressed: hasSelection
               ? () {
@@ -283,7 +285,7 @@ class _ObjectPanelState extends State<ObjectPanel> {
                       if (q != null) app.openSavedQuery(q);
                     }
                   } else {
-                    _showStub('打开$label');
+                    _showStub(l.actionOpen(label));
                   }
                 }
               : null,
@@ -292,7 +294,7 @@ class _ObjectPanelState extends State<ObjectPanel> {
           ToolStripButton(
             icon: Icons.edit_outlined,
             iconColor: c.iconPrimary,
-            text: '设计$label',
+            text: l.actionDesign(label),
             enabled: canDesignEnabled,
             onPressed: canDesignEnabled
                 ? () {
@@ -330,29 +332,29 @@ class _ObjectPanelState extends State<ObjectPanel> {
               ? ToolStripDropDownButton(
                   icon: Icons.add_circle_outline,
                   iconColor: c.iconSuccess,
-                  text: '新建$label',
+                  text: l.actionNew(label),
                   onPressed: () =>
                       app.newTableDesigner(connection: connection, database: database, schema: schema),
                   items: [
                     ToolStripDropDownEntry(
-                      text: '常规',
+                      text: l.tableKindRegular,
                       onPressed: () => app.newTableDesigner(
                           connection: connection, database: database, schema: schema),
                     ),
                     ToolStripDropDownEntry(
-                      text: '外部',
-                      onPressed: () => _showStub('新建外部表'),
+                      text: l.tableKindExternal,
+                      onPressed: () => _showStub(l.newExternalTable),
                     ),
                     ToolStripDropDownEntry(
-                      text: '分区',
-                      onPressed: () => _showStub('新建分区表'),
+                      text: l.tableKindPartition,
+                      onPressed: () => _showStub(l.newPartitionTable),
                     ),
                   ],
                 )
               : ToolStripButton(
                   icon: Icons.add_circle_outline,
                   iconColor: c.iconSuccess,
-                  text: '新建$label',
+                  text: l.actionNew(label),
                   onPressed: () =>
                       app.newTableDesigner(connection: connection, database: database, schema: schema),
                 )
@@ -361,7 +363,7 @@ class _ObjectPanelState extends State<ObjectPanel> {
           ToolStripButton(
             icon: Icons.add_circle_outline,
             iconColor: c.iconSuccess,
-            text: '新建查询',
+            text: l.actionNew(l.catQuery),
             onPressed: () => app.newQuery(),
           )
         else if (isRoutine)
@@ -371,7 +373,9 @@ class _ObjectPanelState extends State<ObjectPanel> {
               ? ToolStripDropDownButton(
                   icon: Icons.add_circle_outline,
                   iconColor: c.iconSuccess,
-                  text: category == ObjectCategory.procedure ? '新建过程' : '新建函数',
+                  text: l.actionNew(category == ObjectCategory.procedure
+                          ? l.catProcedure
+                          : l.catFunction),
                   onPressed: () => showFunctionWizard(
                     context,
                     app: app,
@@ -382,7 +386,7 @@ class _ObjectPanelState extends State<ObjectPanel> {
                   ),
                   items: [
                     ToolStripDropDownEntry(
-                      text: '新建函数',
+                      text: l.actionNew(l.catFunction),
                       onPressed: () => showFunctionWizard(
                         context,
                         app: app,
@@ -393,7 +397,7 @@ class _ObjectPanelState extends State<ObjectPanel> {
                       ),
                     ),
                     ToolStripDropDownEntry(
-                      text: '新建过程',
+                      text: l.actionNew(l.catProcedure),
                       onPressed: () => showFunctionWizard(
                         context,
                         app: app,
@@ -408,7 +412,7 @@ class _ObjectPanelState extends State<ObjectPanel> {
               : ToolStripButton(
                   icon: Icons.add_circle_outline,
                   iconColor: c.iconSuccess,
-                  text: '新建$label',
+                  text: l.actionNew(label),
                   onPressed: () => showFunctionWizard(
                     context,
                     app: app,
@@ -422,15 +426,15 @@ class _ObjectPanelState extends State<ObjectPanel> {
           ToolStripButton(
             icon: Icons.add_circle_outline,
             iconColor: c.iconSuccess,
-            text: '新建$label',
-            onPressed: () => _showStub('新建$label'),
+            text: l.actionNew(label),
+            onPressed: () => _showStub(l.actionNew(label)),
           ),
         // 删除:查询分类删除本地已保存的查询(确认后执行);
         // 其余对象分类走真实 DDL(DROP)删除
         ToolStripButton(
           icon: Icons.remove_circle_outline,
           iconColor: const Color(0xFFDC2626),
-          text: '删除$label',
+          text: l.actionDelete(label),
           enabled: hasSelection,
           onPressed: hasSelection
               ? () => _deleteSelected(category, selected,
@@ -441,7 +445,7 @@ class _ObjectPanelState extends State<ObjectPanel> {
           ToolStripButton(
             icon: Icons.file_download_outlined,
             iconColor: c.iconSuccess,
-            text: '导入向导',
+            text: l.importWizard,
             enabled: canImportExport,
             onPressed: canImportExport
                 ? () => _openImportWizard(transferTable!, connection, database, schema)
@@ -450,7 +454,7 @@ class _ObjectPanelState extends State<ObjectPanel> {
           ToolStripButton(
             icon: Icons.file_upload_outlined,
             iconColor: const Color(0xFFE9A23B),
-            text: '导出向导',
+            text: l.exportWizard,
             enabled: canImportExport,
             onPressed: canImportExport
                 ? () => _openExportWizard(transferTable!, connection, database, schema)
@@ -466,7 +470,8 @@ class _ObjectPanelState extends State<ObjectPanel> {
   /// 分类按钮的文案 / 布局与正常工具栏保持一致(查询分类的新建按钮为「新建查询」)。
   Widget _buildDisabledToolbar(AppPalette t, ObjectCategory category) {
     final c = AppColors.of(context);
-    final label = category.label;
+    final l = context.l10n;
+    final label = category.labelOf(l);
     // 与正常工具栏一致:仅表 / 视图 / 函数 / 过程有「设计」语义;导入 / 导出仅对表有意义
     final canDesign = switch (category) {
       ObjectCategory.table ||
@@ -476,21 +481,22 @@ class _ObjectPanelState extends State<ObjectPanel> {
       _ => false,
     };
     final canImportExport = category == ObjectCategory.table;
-    final newText = category == ObjectCategory.query ? '新建查询' : '新建$label';
+    final newText =
+        category == ObjectCategory.query ? l.actionNew(l.catQuery) : l.actionNew(label);
     return ToolStrip(
       tokens: _toolbarTokens(t),
       items: [
         ToolStripButton(
           icon: Icons.folder_open_outlined,
           iconColor: c.iconWarning,
-          text: '打开$label',
+          text: l.actionOpen(label),
           enabled: false,
         ),
         if (canDesign)
           ToolStripButton(
             icon: Icons.edit_outlined,
             iconColor: c.iconPrimary,
-            text: '设计$label',
+            text: l.actionDesign(label),
             enabled: false,
           ),
         ToolStripButton(
@@ -502,20 +508,20 @@ class _ObjectPanelState extends State<ObjectPanel> {
         ToolStripButton(
           icon: Icons.remove_circle_outline,
           iconColor: const Color(0xFFDC2626),
-          text: '删除$label',
+          text: l.actionDelete(label),
           enabled: false,
         ),
         if (canImportExport) ...[
           ToolStripButton(
             icon: Icons.file_download_outlined,
             iconColor: c.iconSuccess,
-            text: '导入向导',
+            text: l.importWizard,
             enabled: false,
           ),
           ToolStripButton(
             icon: Icons.file_upload_outlined,
             iconColor: const Color(0xFFE9A23B),
-            text: '导出向导',
+            text: l.exportWizard,
             enabled: false,
           ),
         ],
@@ -592,8 +598,8 @@ class _ObjectPanelState extends State<ObjectPanel> {
     MessageBox.show(
       context,
       title: action,
-      message: '$action 功能开发中,敬请期待',
-      okText: '知道了',
+      message: context.l10n.stubWip(action),
+      okText: context.l10n.btnGotIt,
     );
   }
 
@@ -612,7 +618,9 @@ class _ObjectPanelState extends State<ObjectPanel> {
     if (category == ObjectCategory.query) {
       _deleteQueries(names, connection, database);
     } else if (category == ObjectCategory.backup) {
-      _showStub('删除${category.label}');
+      _showStub(
+          context.l10n.actionDelete(category.labelOf(context.l10n)),
+        );
     } else {
       _deleteObjects(category, names.toList(),
           connection: connection, database: database, schema: schema);
@@ -625,16 +633,17 @@ class _ObjectPanelState extends State<ObjectPanel> {
     String connection,
     String database,
   ) async {
+    final l = context.l10n;
     final message = selected.length == 1
-        ? '确定要删除查询「${selected.single}」吗?\n删除后可重新保存,打开着的查询页不受影响。'
-        : '确定要删除选中的 ${selected.length} 个查询吗?';
+        ? l.deleteQueryConfirmOne(selected.single)
+        : l.deleteQueryConfirmMany('${selected.length}');
     final result = await MessageBox.show(
       context,
-      title: '删除查询',
+      title: l.deleteQueryTitle,
       message: message,
       type: MessageBoxType.warning,
       buttons: MessageBoxButtons.okCancel,
-      okText: '删除',
+      okText: l.btnDelete,
     );
     if (result != MessageBoxResult.ok || !mounted) return;
     final app = context.read<AppState>();
@@ -653,17 +662,18 @@ class _ObjectPanelState extends State<ObjectPanel> {
     required String database,
     String? schema,
   }) async {
-    final label = category.label;
+    final l = context.l10n;
+    final label = category.labelOf(l);
     final message = names.length == 1
-        ? '确定要删除$label「${names.single}」吗?\n此操作会永久删除该对象,且不可恢复。'
-        : '确定要删除选中的 ${names.length} 个$label吗?\n此操作会永久删除这些对象,且不可恢复。';
+        ? l.deleteObjectConfirmOne(label, names.single)
+        : l.deleteObjectConfirmMany('${names.length}', category.pluralOf(l));
     final result = await MessageBox.show(
       context,
-      title: '删除$label',
+      title: l.actionDelete(label),
       message: message,
       type: MessageBoxType.warning,
       buttons: MessageBoxButtons.okCancel,
-      okText: '删除',
+      okText: l.btnDelete,
     );
     if (result != MessageBoxResult.ok || !mounted) return;
     final app = context.read<AppState>();
@@ -679,10 +689,10 @@ class _ObjectPanelState extends State<ObjectPanel> {
     if (failed.isNotEmpty) {
       MessageBox.show(
         context,
-        title: '删除$label',
-        message: '删除失败:${failed.join(', ')}\n请检查连接状态或对象是否存在。',
+        title: l.actionDelete(label),
+        message: l.deleteFailedDetail(failed.join(', ')),
         type: MessageBoxType.error,
-        okText: '知道了',
+        okText: l.btnGotIt,
       );
     }
   }
@@ -717,16 +727,16 @@ class _ObjectPanelState extends State<ObjectPanel> {
         return _stateView(
           t,
           icon: const Spinner(size: 20),
-          title: '正在加载 $database 的对象列表 ...',
+          title: context.l10n.loadingObjectsTitle(database),
         );
       case LoadStatus.error:
         return _stateView(
           t,
           icon: const Icon(Icons.error_outline),
-          title: '打开 $database 失败',
+          title: context.l10n.openDatabaseFailedTitle(database),
           description: state.error,
           action: Button(
-            text: '重试',
+            text: context.l10n.btnRetry,
             onPressed: () => _retryAll(app, connection, database, schema),
           ),
         );
@@ -742,10 +752,11 @@ class _ObjectPanelState extends State<ObjectPanel> {
       return _stateView(
         t,
         icon: const Icon(Icons.error_outline),
-        title: '${category.label}列表读取失败',
+        title: context.l10n
+            .categoryListFailedTitle(category.pluralOf(context.l10n)),
         description: categoryError,
         action: Button(
-          text: '重试',
+          text: context.l10n.btnRetry,
           onPressed: () => _retryAll(app, connection, database, schema),
         ),
       );
@@ -939,9 +950,9 @@ class _ObjectPanelState extends State<ObjectPanel> {
           border: Border(bottom: BorderSide(color: t.divider)),
         ),
         child: _listColumns(
-          name: _listHeaderCell(t, '名称'),
-          rows: _listHeaderCell(t, '行(估算)'),
-          comment: _listHeaderCell(t, '注释'),
+          name: _listHeaderCell(t, context.l10n.colName),
+          rows: _listHeaderCell(t, context.l10n.colRowsEstimated),
+          comment: _listHeaderCell(t, context.l10n.colComment),
         ),
       ),
     );
@@ -1209,10 +1220,10 @@ class _ObjectPanelState extends State<ObjectPanel> {
     if (!mounted) return;
     MessageBox.show(
       context,
-      title: '重命名表',
-      message: '重命名失败:\n${outcome.error}',
+      title: context.l10n.renameTableTitle,
+      message: context.l10n.renameFailedDetail('${outcome.error}'),
       type: MessageBoxType.error,
-      okText: '知道了',
+      okText: context.l10n.btnGotIt,
     );
   }
 
@@ -1234,7 +1245,7 @@ class _ObjectPanelState extends State<ObjectPanel> {
       database: database,
       schema: app.objectSchema,
     );
-    app.logTreeAction('已复制 ${names.length} 张表,Ctrl+V 粘贴为副本');
+    app.logTreeAction(context.l10n.copiedTables('${names.length}'));
   }
 
   /// Ctrl+V:确认后按 [AppState.tablePastePlan] 排定的新名逐表克隆;
@@ -1249,43 +1260,44 @@ class _ObjectPanelState extends State<ObjectPanel> {
     if (cb == null) return;
     final conn = app.connectionByName(connection);
     if (conn == null || !app.connectionManager.isConnected(connection)) {
-      _showPasteNotice('请先打开连接「$connection」再粘贴。');
+      _showPasteNotice(context.l10n.pasteNeedOpenConnection(connection));
       return;
     }
     if (cb.connection != connection ||
         cb.database != database ||
         cb.schema != app.objectSchema) {
-      _showPasteNotice(
-        '粘贴只能回到复制时的连接 / 数据库 / 模式:\n'
-        '${cb.connection} · ${cb.database}${cb.schema == null ? '' : ' · ${cb.schema}'}',
-      );
+      final from = '${cb.connection} · ${cb.database}'
+          '${cb.schema == null ? '' : ' · ${cb.schema}'}';
+      _showPasteNotice(context.l10n.pasteWrongContext(from));
       return;
     }
     final plan = app.tablePastePlan(all.toSet());
     if (plan.isEmpty) return;
     final result = await MessageBox.show(
       context,
-      title: '粘贴表',
-      message: '将粘贴创建 ${plan.length} 张表(结构 + 数据):\n'
-          '${plan.map((e) => '${e.$1} → ${e.$2}').join('\n')}',
+      title: context.l10n.pasteTableTitle,
+      message: context.l10n.pasteConfirmDetail(
+        '${plan.length}',
+        plan.map((e) => '${e.$1} → ${e.$2}').join('\n'),
+      ),
       type: MessageBoxType.question,
       buttons: MessageBoxButtons.okCancel,
-      okText: '粘贴',
+      okText: context.l10n.btnPaste,
     );
     if (result != MessageBoxResult.ok || !mounted) return;
     final failed = await app.pasteTables(plan);
     if (!mounted) return;
     _listFocus.requestFocus();
     if (failed.isEmpty) {
-      app.logTreeAction('已粘贴创建 ${plan.length} 张表');
+      app.logTreeAction(context.l10n.pastedTables('${plan.length}'));
       return;
     }
     MessageBox.show(
       context,
-      title: '粘贴表',
-      message: '粘贴失败:\n${failed.join('\n')}',
+      title: context.l10n.pasteTableTitle,
+      message: context.l10n.pasteFailedDetail(failed.join('\n')),
       type: MessageBoxType.error,
-      okText: '知道了',
+      okText: context.l10n.btnGotIt,
     );
   }
 
@@ -1293,10 +1305,10 @@ class _ObjectPanelState extends State<ObjectPanel> {
     if (!mounted) return;
     MessageBox.show(
       context,
-      title: '粘贴表',
+      title: context.l10n.pasteTableTitle,
       message: message,
       type: MessageBoxType.info,
-      okText: '知道了',
+      okText: context.l10n.btnGotIt,
     );
   }
 
@@ -1358,18 +1370,25 @@ const double _scrollBarHitWidth = 12;
 const double _listHeaderHeight = 20;
 const double _rowsColWidth = 88;
 
-/// 估算行数的展示:无统计值 → 横杠;不足一万原样;过万 / 过亿折成
-/// 「约 1.2 万」「约 3.4 亿」——既守住「行」列宽度,也让人一眼看出是约数
-String _formatRowEstimate(int? rows) {
+/// 估算行数的展示:无统计值 -> 横杠;不足档位原样;过档位折成约数
+/// (「约 1.2 万」「约 3.4 亿」)。既守住「行」列宽度,也让人一眼看出是约数。
+String _formatRowEstimate(int? rows, AppLocalizations l) {
   if (rows == null) return '-';
-  if (rows < 10000) return '$rows';
-  final aboveHundredMillion = rows >= 100000000;
-  final scaled = (rows / (aboveHundredMillion ? 100000000 : 10000) * 10)
-      .round() /
-      10;
+  // 档位基数随语言分叉:中文与日语按万进位(10^4 / 10^8),英语按千进位
+  // (10^3 / 10^6)。万、亿在英语里没有对应词,K 与 M 也不合中文习惯。
+  final metric = l.localeName.startsWith('en');
+  final small = metric ? 1000 : 10000;
+  final large = metric ? 1000000 : 100000000;
+  final (divisor, unit) = rows >= large
+      ? (large, l.rowsUnitLarge)
+      : rows >= small
+          ? (small, l.rowsUnitSmall)
+          : (0, '');
+  if (divisor == 0) return '$rows';
+  final scaled = (rows / divisor * 10).round() / 10;
   final text =
       scaled % 1 == 0 ? '${scaled.round()}' : scaled.toStringAsFixed(1);
-  return '约$text${aboveHundredMillion ? '亿' : '万'}';
+  return l.rowsApprox(text, unit);
 }
 
 /// 列表模式一行的三列骨架(表头与数据行共用,故列起点必然对齐):
@@ -1567,7 +1586,7 @@ Widget _rowContent(
     name: nameCell,
     // 估算行数:无统计值显示横杠,过万折成「约 N 万」;有值用正文色突出
     rows: Text(
-      meta.hasRows ? _formatRowEstimate(meta.rows) : '',
+      meta.hasRows ? _formatRowEstimate(meta.rows, context.l10n) : '',
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: TextStyle(
