@@ -1,11 +1,13 @@
 import 'package:daro/app/app_state.dart';
 import 'package:daro/widgets/navicat_import_dialog.dart';
+import 'package:daro/widgets/options_dialog.dart';
 import 'package:daro/widgets/top_menu.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher_platform_interface/link.dart';
 import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
+import 'package:daro/l10n/locale_config.dart';
 
 /// 记录 launch 调用的假实现:测试进程里没有 url_launcher 的原生插件,
 /// 直接调用会 MissingPluginException,必须替换平台实例才能验证接线。
@@ -32,6 +34,9 @@ class _RecordingUrlLauncher extends UrlLauncherPlatform {
 Widget harness(AppState app) => ChangeNotifierProvider<AppState>.value(
       value: app,
       child: MaterialApp(
+        locale: const Locale('zh'),
+        localizationsDelegates: kAppLocalizationsDelegates,
+        supportedLocales: kSupportedLocales,
         theme: ThemeData(brightness: Brightness.dark),
         home: const TopMenu(),
       ),
@@ -56,6 +61,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(NavicatImportDialog), findsOneWidget);
     expect(find.text('请先选择 Navicat 导出的 .ncx 文件。'), findsOneWidget);
+  });
+
+  testWidgets('工具菜单里的「选项…」打开选项对话框', (tester) async {
+    await tester.pumpWidget(harness(AppState()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('工具'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('选项...'));
+    await tester.pumpAndSettle();
+    expect(find.byType(OptionsDialog), findsOneWidget);
+    // 语言入口已从顶部菜单的「语言」子菜单搬进「常规」页
+    expect(find.text('语言'), findsOneWidget);
   });
 
   testWidgets('帮助菜单里的「问题反馈」打开 GitHub Issues',

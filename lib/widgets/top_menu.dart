@@ -8,11 +8,13 @@ import 'package:window_manager/window_manager.dart';
 import '../app/app_state.dart';
 import '../data/db_data.dart';
 import '../pages/connection_dialog_page.dart';
+import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
 import 'about_dialog.dart';
 import 'mcp_settings_dialog.dart';
 import 'navicat_export_dialog.dart';
 import 'navicat_import_dialog.dart';
+import 'options_dialog.dart';
 import 'schema_sync_dialog.dart';
 import 'theme_customize_dialog.dart';
 
@@ -242,11 +244,18 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
   /// 主题切换按钮:在 跟随系统 -> 明亮 -> 暗黑 之间循环
   Widget _themeToggle(BuildContext context, AppState app, DesktopTokens dt) {
     final t = Tokens.of(context);
-    final (IconData icon, String tooltip) = switch (app.themeMode) {
-      ThemeMode.system => (Icons.brightness_auto, '主题:跟随系统(点击切换)'),
-      ThemeMode.light => (Icons.light_mode, '主题:明亮(点击切换)'),
-      ThemeMode.dark => (Icons.dark_mode, '主题:暗黑(点击切换)'),
+    final l = context.l10n;
+    final modeLabel = switch (app.themeMode) {
+      ThemeMode.system => l.themeFollowSystem,
+      ThemeMode.light => l.themeLight,
+      ThemeMode.dark => l.themeDark,
     };
+    final IconData icon = switch (app.themeMode) {
+      ThemeMode.system => Icons.brightness_auto,
+      ThemeMode.light => Icons.light_mode,
+      ThemeMode.dark => Icons.dark_mode,
+    };
+    final String tooltip = l.themeSwitchTooltip(modeLabel);
     return IconBtn(
       icon: icon,
       iconSize: 15,
@@ -258,19 +267,23 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
 
   /// 组装菜单栏数据:已实现的功能接上回调,未实现的置灰禁用。
   List<MenuItem> _buildMenuItems(BuildContext context, AppState app) {
+    final l = context.l10n;
     return [
-      MenuItem(text: '文件', children: [
+      MenuItem(text: l.menuFile, children: [
         MenuItem(
-            text: '新建连接...', onPressed: () => _openConnectionWindow(context)),
-        MenuItem(text: '新建查询', onPressed: app.newQuery),
+            text: l.menuNewConnection,
+            onPressed: () => _openConnectionWindow(context)),
+        MenuItem(text: l.menuNewQuery, onPressed: app.newQuery),
         const MenuSeparator(),
         MenuItem(
-            text: '导入连接', onPressed: () => _importFromNavicat(context)),
+            text: l.menuImportConnections,
+            onPressed: () => _importFromNavicat(context)),
         MenuItem(
-            text: '导出连接', onPressed: () => _exportToNavicat(context)),
+            text: l.menuExportConnections,
+            onPressed: () => _exportToNavicat(context)),
         // const MenuItem(text: '打开文件...', enabled: false),
         const MenuSeparator(),
-        MenuItem(text: '退出', onPressed: windowManager.close),
+        MenuItem(text: l.menuExit, onPressed: windowManager.close),
       ]),
       // TODO(菜单): 以下菜单待功能实现后再启用,暂时注释
       // const MenuItem(text: '编辑', children: [
@@ -282,38 +295,46 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
       //   MenuItem(text: '粘贴', enabled: false),
       //   MenuItem(text: '删除', enabled: false),
       // ]),
-      MenuItem(text: '视图', children: [
-        MenuItem(text: '刷新', onPressed: () => app.reloadConnections()),
+      MenuItem(text: l.menuView, children: [
+        MenuItem(text: l.menuRefresh, onPressed: () => app.reloadConnections()),
         const MenuSeparator(),
         MenuItem(
-            text: '主题定制...', onPressed: () => _openThemeCustomize(context)),
+            text: l.menuThemeCustomize,
+            onPressed: () => _openThemeCustomize(context)),
         const MenuSeparator(),
         // 大型图标 = 多列网格布局,列表 = 单列列表布局(objectGridLayout)
-        MenuItem(text: '大型图标', onPressed: () => app.setObjectLayout(true)),
-        const MenuItem(text: '小图标', enabled: false),
-        MenuItem(text: '列表', onPressed: () => app.setObjectLayout(false)),
-        const MenuItem(text: '详细信息', enabled: false),
+        MenuItem(
+            text: l.menuLargeIcons, onPressed: () => app.setObjectLayout(true)),
+        MenuItem(text: l.menuSmallIcons, enabled: false),
+        MenuItem(text: l.menuList, onPressed: () => app.setObjectLayout(false)),
+        MenuItem(text: l.menuDetails, enabled: false),
       ]),
       // const MenuItem(text: '收藏夹', children: [
       //   MenuItem(text: '添加到收藏夹', enabled: false),
       //   MenuItem(text: '整理收藏夹...', enabled: false),
       // ]),
-      MenuItem(text: '工具', children: [
-        MenuItem(text: '命令列界面...', enabled: false),
-        MenuItem(text: '数据传输...', enabled: false),
-        MenuItem(text: '数据同步...', enabled: false),
+      MenuItem(text: l.menuTools, children: [
         MenuItem(
-            text: '结构同步...',
-            onPressed: () => _openSchemaSync(context)),
+            text: l.menuCommandLine,
+            // 命令列会话必须绑定一个库:未选中数据库时不可用
+            enabled: app.objectConnection != null && app.objectDatabase != null,
+            onPressed: () => app.openCommandLine(
+              connection: app.objectConnection!,
+              database: app.objectDatabase!,
+            )),
+        MenuItem(text: l.menuDataTransfer, enabled: false),
+        MenuItem(text: l.menuDataSync, enabled: false),
+        MenuItem(
+            text: l.menuSchemaSync, onPressed: () => _openSchemaSync(context)),
         const MenuSeparator(),
-        MenuItem(text: '备份...', enabled: false),
-        MenuItem(text: '还原备份...', enabled: false),
+        MenuItem(text: l.menuBackup, enabled: false),
+        MenuItem(text: l.menuRestoreBackup, enabled: false),
         MenuSeparator(),
         // MCP 设置改动即时落盘生效,所以只有关闭按钮,不需要「选项...」那种确定/取消。
         MenuItem(
-            text: 'MCP 服务...',
-            onPressed: () => _openMcpSettings(context)),
-        MenuItem(text: '选项...', enabled: false),
+            text: l.menuMcpService, onPressed: () => _openMcpSettings(context)),
+        MenuItem(
+            text: l.menuOptions, onPressed: () => _openOptions(context)),
       ]),
       // const MenuItem(text: '窗口', children: [
       //   MenuItem(text: '新建窗口', enabled: false),
@@ -322,11 +343,12 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
       //   MenuItem(text: '下一个窗口', enabled: false),
       //   MenuItem(text: '上一个窗口', enabled: false),
       // ]),
-      MenuItem(text: '帮助', children: [
+      MenuItem(text: l.menuHelp, children: [
         MenuItem(
-            text: '问题反馈', onPressed: () => _openIssueTracker(context)),
+            text: l.menuIssueTracker,
+            onPressed: () => _openIssueTracker(context)),
         const MenuSeparator(),
-        MenuItem(text: '关于...', onPressed: () => _showAbout(context)),
+        MenuItem(text: l.menuAbout, onPressed: () => _showAbout(context)),
       ]),
     ];
   }
@@ -354,24 +376,26 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
     final result = await showNavicatImportDialog(
         context, app: context.read<AppState>());
     if (result == null || !context.mounted) return;
+    final l = context.l10n;
     final manual = result.needsManualPassword;
     final groups = result.newGroups;
-    final extra = manual == 0
-        ? ''
-        : '\n其中 $manual 条没能带过密码(Navicat 端未保存,或用了旧版加密方式),'
-            '右键该连接 →「编辑连接」补填后即可正常连接。';
-    final groupNote = groups.isEmpty
-        ? ''
-        : '\n文件里的分组本地不存在,已新建 ${groups.length} 个:'
-            '${groups.take(5).join('、')}${groups.length > 5 ? ' 等' : ''}。';
+    final imported = l.importDoneMessage('${result.imported.length}');
+    final extra = manual == 0 ? '' : '\n${l.importDoneManualPassword('$manual')}';
+    final groupNote = groups.isEmpty ? '' : '\n${_groupNamesNote(l, groups)}';
     MessageBox.show(
       context,
-      title: '导入完成',
-      message: '已导入 ${result.imported.length} 条连接,可在左侧连接树查看。'
-          '$extra$groupNote',
+      title: l.importDoneTitle,
+      message: '$imported$extra$groupNote',
       buttons: MessageBoxButtons.ok,
       tokens: Tokens.read(context).desktopTokensFor(context),
     );
+  }
+
+  /// 新建分组提示:名称最多列 5 个,超出追加省略号
+  String _groupNamesNote(AppLocalizations l, List<String> groups) {
+    final shown = groups.take(5).join(l.listSeparator);
+    final names = groups.length > 5 ? '$shown${l.listEllipsis}' : shown;
+    return l.importDoneNewGroups('${groups.length}', names);
   }
 
   /// 点击「导出连接」:勾选连接、选目标文件、写出 Navicat 可直接导入的
@@ -380,22 +404,23 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
     final result = await showNavicatExportDialog(
         context, app: context.read<AppState>());
     if (result == null || !context.mounted) return;
+    final l = context.l10n;
     var extra = '';
     if (result.skipped.isNotEmpty) {
       final names = result.skipped
           .take(3)
           .map((s) => '${s.$1}(${s.$2})')
-          .join('、');
+          .join(l.listSeparator);
       final more = result.skipped.length > 3
-          ? ' 等 ${result.skipped.length} 条'
+          ? l.listEllipsisMore('${result.skipped.length}')
           : '';
-      extra = '\nNavicat 没有对应类型的连接未导出:$names$more。';
+      extra = '\n${l.exportDoneSkipped('$names$more')}';
     }
+    final done = l.exportDoneMessage('${result.exported}', result.path.path);
     MessageBox.show(
       context,
-      title: '导出完成',
-      message: '已把 ${result.exported} 条连接导出到\n${result.path.path}$extra\n'
-          '在 Navicat 里用「文件 → 导入连接设置…」选择该文件即可。',
+      title: l.exportDoneTitle,
+      message: '$done$extra',
       buttons: MessageBoxButtons.ok,
       tokens: Tokens.read(context).desktopTokensFor(context),
     );
@@ -418,6 +443,11 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
     );
   }
 
+  /// 点击"工具 → 选项…":弹出选项对话框(左侧分类 + 右侧设置页,当前是「常规」)。
+  Future<void> _openOptions(BuildContext context) async {
+    await showOptionsDialog(context);
+  }
+
   /// 点击"问题反馈":用系统默认浏览器打开 daro 的 GitHub Issues 页面。
   /// 启动失败时(无默认浏览器 / http 协议未注册)退化为弹窗展示链接,
   /// 让用户至少能手动复制,而不是点击后毫无反馈。
@@ -432,10 +462,11 @@ class _TopMenuState extends State<TopMenu> with WindowListener {
       opened = false;
     }
     if (opened || !context.mounted) return;
+    final l = context.l10n;
     MessageBox.show(
       context,
-      title: '问题反馈',
-      message: '无法自动打开浏览器,请在浏览器中访问:\n$url',
+      title: l.issueTrackerTitle,
+      message: l.issueTrackerOpenFailed(url),
       buttons: MessageBoxButtons.ok,
       tokens: Tokens.read(context).desktopTokensFor(context),
     );
