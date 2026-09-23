@@ -17,6 +17,7 @@ import '../widgets/query_page.dart';
 import '../widgets/command_line_page.dart';
 import '../widgets/table_designer_page.dart';
 import '../widgets/routine_design_page.dart';
+import '../widgets/user_design_page.dart';
 import '../widgets/view_design_page.dart';
 
 class MainPage extends StatefulWidget {
@@ -91,6 +92,17 @@ class _MainPageState extends State<MainPage> {
                                   final isNew = split.isNew;
                                   final category = tab.routineCategory;
                                   if (category != null) {
+                                    // 用户 / 角色设计页(七标签:常规 / 高级 /
+                                    // 成员属于 / 成员 / 服务器权限 / 权限 / SQL 预览)
+                                    if (category == ObjectCategory.user) {
+                                      return UserDesignPage(
+                                        name: name,
+                                        connection: tab.connection!,
+                                        database: tab.database!,
+                                        schema: tab.schema,
+                                        isNew: isNew,
+                                      );
+                                    }
                                     // 例程(过程 / 函数 / 视图)设计页
                                     if (category == ObjectCategory.view) {
                                       // 视图设计页(Navicat 风格:定义 / 规则 / 高级 / 注释 / SQL 预览)

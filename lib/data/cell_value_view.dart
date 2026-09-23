@@ -11,17 +11,25 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// 单元格编辑器的页签
-enum CellViewMode {
-  text('文本'),
-  hex('十六进制'),
-  image('图像'),
-  web('网页');
+import '../l10n/app_localizations.dart';
 
-  const CellViewMode(this.label);
+/// 单元格编辑器的页签
+///
+/// 页签文字随界面语言变化,而枚举拿不到 `BuildContext`,故由调用方把
+/// [AppLocalizations] 传进 [labelOf](同 `ObjectCategory.labelOf` 的范式)。
+enum CellViewMode {
+  text,
+  hex,
+  image,
+  web;
 
   /// 页签文字
-  final String label;
+  String labelOf(AppLocalizations l) => switch (this) {
+        CellViewMode.text => l.gridCellEditorTabText,
+        CellViewMode.hex => l.gridCellEditorTabHex,
+        CellViewMode.image => l.gridCellEditorTabImage,
+        CellViewMode.web => l.gridCellEditorTabWeb,
+      };
 }
 
 /// 十六进制转储:每行 [bytesPerLine] 字节,形如

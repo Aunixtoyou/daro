@@ -5,6 +5,7 @@ import 'package:dart_odbc/dart_odbc.dart';
 import '../db_data.dart';
 import '../db_metadata.dart';
 import '../table_design.dart';
+import '../user_sql.dart';
 import 'db_driver.dart';
 import 'odbc_query.dart';
 
@@ -310,6 +311,95 @@ class SqlServerDriver implements DatabaseDriver {
       'SELECT name FROM ${_quoted(database)}.sys.database_principals '
       "WHERE type IN ('S', 'U', 'G') AND principal_id > 0 "
       'ORDER BY name',
+    );
+    return [
+      for (final row in r.rows)
+        if (row['name'] != null) row['name'].toString(),
+    ];
+  }
+
+  // ── 主体详情 / 成员关系(「用户 / 角色」设计页) ────────────
+  // SQL Server 的"用户"是**库级**主体,与服务器级登录名(login)分离;
+  // 设计页编辑的是库级主体,故这里的查询都限定在 [database] 内。
+
+  @override
+  Future<UserSpec?> readUser(String database, String account) async {
+    final name = account.trim();
+    if (name.isEmpty) return null;
+    final r = await _runSql(
+      'SELECT type, default_schema_name FROM ${_quoted(database)}.sys.database_principals '
+      "WHERE name = N'${_literal(name)}' AND principal_id > 0",
+    );
+    if (r.rows.isEmpty) return null;
+    final row = r.rows.first;
+    final type = (row['type'] ?? '').toString();
+    return UserSpec(
+      originalName: name,
+      username: name,
+      password: '',
+      isRole: type == 'R',
+      sqlPrincipalType:
+          SqlPrincipalType.fromCode(type) ?? SqlPrincipalType.sqlUser,
+      // 默认模式存在 default_schema_name;借「注释」字段以外的槽位不合适,
+      // 这里暂不映射(高级页对 SQL Server 只暴露主体类型)
+      comment: '',
+    );
+  }
+
+  /// 可授予的数据库角色候选(`type = 'R'`,排除固定成员角色)
+  @override
+  Future<List<String>> listGrantableRoles(String database) async {
+    final r = await _runSql(
+      'SELECT name FROM ${_quoted(database)}.sys.database_principals '
+      "WHERE type = 'R' AND principal_id > 0 ORDER BY name",
+    );
+    return [
+      for (final row in r.rows)
+        if (row['name'] != null) row['name'].toString(),
+    ];
+  }
+
+  /// SQL Server 的权限模型是 `database_permissions` / `sys.fn_my_permissions`,
+  /// 与 MySQL 的 `*_priv` 布尔列矩阵不同,本页暂不呈现 → 空列表。
+  @override
+  Future<List<List<String>>> readUserPrivileges(
+    String database,
+    String account, {
+    bool serverLevel = false,
+  }) async =>
+      const [];
+
+  /// 该主体所属的数据库角色
+  @override
+  Future<List<String>> readUserRoles(String database, String account) async {
+    final name = account.trim();
+    if (name.isEmpty) return const [];
+    final r = await _runSql(
+      'SELECT r.name FROM ${_quoted(database)}.sys.database_role_members m '
+      'JOIN ${_quoted(database)}.sys.database_principals r '
+      '  ON r.principal_id = m.role_principal_id '
+      'JOIN ${_quoted(database)}.sys.database_principals p '
+      '  ON p.principal_id = m.member_principal_id '
+      "WHERE p.name = N'${_literal(name)}' ORDER BY r.name",
+    );
+    return [
+      for (final row in r.rows)
+        if (row['name'] != null) row['name'].toString(),
+    ];
+  }
+
+  /// 属于该角色的成员(反向)
+  @override
+  Future<List<String>> readRoleMembers(String database, String account) async {
+    final name = account.trim();
+    if (name.isEmpty) return const [];
+    final r = await _runSql(
+      'SELECT p.name FROM ${_quoted(database)}.sys.database_role_members m '
+      'JOIN ${_quoted(database)}.sys.database_principals r '
+      '  ON r.principal_id = m.role_principal_id '
+      'JOIN ${_quoted(database)}.sys.database_principals p '
+      '  ON p.principal_id = m.member_principal_id '
+      "WHERE r.name = N'${_literal(name)}' ORDER BY p.name",
     );
     return [
       for (final row in r.rows)

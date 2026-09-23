@@ -59,30 +59,35 @@ enum _NullFilter { all, onlyNull, nonNull }
 /// 也始终保留;点「应用」时只有当前选中的那份下推 SQL。
 enum _FilterSource {
   /// 创建工具:可视化条件树(含括号分组)
-  builder('创建工具'),
+  builder,
 
   /// 文本:手写 `WHERE` 片段,原文逐字下推(不做转义或重组)
-  text('文本');
+  text;
 
-  const _FilterSource(this.label);
-
-  final String label;
+  /// 显示名随界面语言变化,而枚举拿不到 `BuildContext`,故由调用方传入
+  /// [AppLocalizations](同 `ObjectCategory.labelOf` 的范式)。
+  String labelOf(AppLocalizations l) => switch (this) {
+        _FilterSource.builder => l.filterSourceBuilder,
+        _FilterSource.text => l.filterSourceText,
+      };
 }
 
 /// 页面顶部的三个工具面板(可同时开启,各自独立停靠)
 enum _ToolPanel {
   /// 筛选 & 排序:顶部横带,编辑筛选准则与排序准则
-  filter('筛选 & 排序'),
+  filter,
 
   /// 列:左侧竖栏,勾选要显示的列
-  columns('列'),
+  columns,
 
   /// 单元格编辑器:底部面板,多视图查看 / 编辑选中单元格
-  cellEditor('单元格编辑器');
+  cellEditor;
 
-  const _ToolPanel(this.label);
-
-  final String label;
+  String labelOf(AppLocalizations l) => switch (this) {
+        _ToolPanel.filter => l.toolPanelFilter,
+        _ToolPanel.columns => l.toolPanelColumns,
+        _ToolPanel.cellEditor => l.toolPanelCellEditor,
+      };
 }
 
 /// 列类型文本 → 表头副标题前的小字形:日期时间族是时钟图标,数值族 '#',
@@ -142,18 +147,41 @@ final _dateTimeCompoundRe = RegExp(r'datetime|timestamp|date\s*/\s*time');
 final _dateOnlyTypeRe = RegExp(r'^\s*date\b');
 final _timeOnlyTypeRe = RegExp(r'^\s*(time|timetz)\b');
 
-/// 日期时间选择弹窗的中文文案（base-ui 默认英文，宿主自带一份）。
-/// 本文件其余文案同样还是中文字面量，待 l10n 迁移时一并收进 ARB。
-const _dateTimePickerLabels = DateTimePickerLabels(
-  ok: '确定',
-  cancel: '取消',
-  time: '时间',
-  selectTime: '选择时间',
-  hour: '时',
-  minute: '分',
-  second: '秒',
-  weekdayLabels: ['周一', '周二', '周三', '周四', '周五', '周六', '周日'],
-);
+/// 日期时间选择弹窗的文案（base-ui 默认英文，宿主按当前界面语言自带一份）。
+/// 文案随语言变化，故由调用方在 build 里现取。
+///
+/// 三个标题是**模板**：`{year}` / `{month}` / `{monthName}` / `{from}` / `{to}`
+/// 到渲染时才替换，语序归翻译管（英文 `{monthName} {year}`、中日 `{year}年{month}月`），
+/// 代码里不拼字符串。ARB 正文只能把标记写成方括号（gen-l10n 把裸 `{` 当 ICU 语法），
+/// 交给 base-ui 前换回花括号。
+String _pickerTemplate(String s) =>
+    s.replaceAll('[', '{').replaceAll(']', '}');
+
+DateTimePickerLabels _dateTimePickerLabels(AppLocalizations l) =>
+    DateTimePickerLabels(
+      ok: l.dtpOk,
+      cancel: l.dtpCancel,
+      selectTime: l.dtpSelectTime,
+      today: l.dtpToday,
+      weekdayLabels: [
+        l.dtpWeekdayMon,
+        l.dtpWeekdayTue,
+        l.dtpWeekdayWed,
+        l.dtpWeekdayThu,
+        l.dtpWeekdayFri,
+        l.dtpWeekdaySat,
+        l.dtpWeekdaySun,
+      ],
+      monthNames: [
+        l.dtpMonth1, l.dtpMonth2, l.dtpMonth3, //
+        l.dtpMonth4, l.dtpMonth5, l.dtpMonth6, //
+        l.dtpMonth7, l.dtpMonth8, l.dtpMonth9, //
+        l.dtpMonth10, l.dtpMonth11, l.dtpMonth12,
+      ],
+      monthTitle: _pickerTemplate(l.dtpMonthTitle),
+      yearTitle: _pickerTemplate(l.dtpYearTitle),
+      yearRangeTitle: _pickerTemplate(l.dtpYearRangeTitle),
+    );
 
 /// 一页的表数据:拉取时的原始行(组装 UPDATE/DELETE 的 WHERE 依据)+
 /// 可编辑副本(承载本地增删改)+ 行标识(>=0 为全局行号,<0 为本地新增行)
@@ -316,6 +344,13 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 列显示开关(与 [_columns] 等长;null = 全部显示)
   List<bool>? _columnVisible;
 
+  /// 列可见性变更通知:勾选列只重建「列面板 + 数据网格」两处订阅者,
+  /// 不再 setState 整页(标题栏 / 工具页签 / 底部栏 / 右键菜单源数据免重建),
+  /// 消除宽表 + 大页下每次勾选逼整窗重绘的卡顿。
+  /// 值即 [_columnVisible] 的当前快照(每次切换换新 List 引用以触发通知)。
+  final ValueNotifier<List<bool>?> _columnVisibleNotifier =
+      ValueNotifier<List<bool>?>(null);
+
   /// 列面板的搜索文本(只过滤面板里的列清单,不影响网格)
   String _columnSearch = '';
 
@@ -346,6 +381,18 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 状态栏消息(保存成功 / 失败提示)
   String? _statusMessage;
 
+  /// 状态栏消息是否为错误态(红色)。
+  /// 判错**不靠文案前缀** —— 文案随界面语言变化,「保存失败」在英 / 日界面下
+  /// 判不出来;由各赋值处显式标记。
+  bool _statusIsError = false;
+
+  /// 写状态栏消息;[error] 为真时以红色呈现。
+  /// 供 setState 块内调用(只改字段,不自行 setState)。
+  void _setStatus(String? message, {bool error = false}) {
+    _statusMessage = message;
+    _statusIsError = error;
+  }
+
   /// 页面焦点锚点:点击单元格/行时把焦点移到这里,
   /// 供 Del 键判断焦点是否在表数据页内(避免在左侧搜索框按 Del 误删)
   final FocusNode _pageFocusNode = FocusNode();
@@ -374,6 +421,7 @@ class _TableDataPageState extends State<TableDataPage> {
     _cellController.dispose();
     _whereTextController.dispose();
     _draftRevision.dispose();
+    _columnVisibleNotifier.dispose();
     super.dispose();
   }
 
@@ -485,6 +533,7 @@ class _TableDataPageState extends State<TableDataPage> {
         _nullFilter = _NullFilter.all;
         // 列集与当前表强相关:可见列开关、列搜索、单元格编辑器绑定一并重置
         _columnVisible = null;
+        _columnVisibleNotifier.value = null;
         _columnSearch = '';
         _cellEditorCell = null;
         _cellController.clear();
@@ -603,7 +652,7 @@ class _TableDataPageState extends State<TableDataPage> {
         .where((c) => c.name == connName)
         .firstOrNull;
     if (conn == null) {
-      setState(() => _error = '连接 "$connName" 不存在');
+      setState(() => _error = context.l10n.gridConnectionMissing(connName));
       return;
     }
     setState(() {
@@ -739,7 +788,7 @@ class _TableDataPageState extends State<TableDataPage> {
       if (!mounted || generation != _loadGeneration) return -1;
       setState(() {
         _loading = false;
-        _statusMessage = '分页加载失败: $e';
+        _setStatus(context.l10n.gridPagingFailed('$e'), error: true);
       });
       return -1;
     }
@@ -800,6 +849,7 @@ class _TableDataPageState extends State<TableDataPage> {
     // 总数已知时按总页数钳制(未知时由拉取结果判断越界)
     final total = _totalRows;
     if (total != null && page >= _pageCount) return;
+    final l = context.l10n;
     final oldPage = _page;
     final pageData = _pageData;
     if (pageData != null) _pageCache[oldPage] = pageData;
@@ -809,7 +859,7 @@ class _TableDataPageState extends State<TableDataPage> {
         _page = page;
         _pageData = cached;
         _resetSelection();
-        _statusMessage = null;
+        _setStatus(null);
       });
       _syncCellEditor();
       _reportStatus();
@@ -823,7 +873,7 @@ class _TableDataPageState extends State<TableDataPage> {
     final fetched = await _fetchPage(page);
     if (!mounted) return;
     if (fetched > 0) {
-      setState(() => _statusMessage = null);
+      setState(() => _setStatus(null));
       return;
     }
     if (fetched <= 0) {
@@ -836,9 +886,9 @@ class _TableDataPageState extends State<TableDataPage> {
             page == oldPage + 1 &&
             _pageData?.rows.length == _pageSize) {
           _totalRows = page * _pageSize;
-          _statusMessage = '已是最后一页';
+          _setStatus(l.gridAlreadyLastPage);
         } else if (fetched == 0) {
-          _statusMessage = '第 ${page + 1} 页不存在';
+          _setStatus(l.gridPageMissing('${page + 1}'));
         }
       });
       _reportStatus();
@@ -888,10 +938,11 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 执行会丢弃未保存修改的操作前确认(dirty 时弹窗,取消则中止)
   Future<bool> _confirmDiscardDirty() async {
     if (!_dirty) return true;
+    final l = context.l10n;
     final result = await MessageBox.show(
       context,
-      title: '放弃未保存的修改',
-      message: '当前有未保存的修改，继续将丢弃这些修改。\n是否继续？',
+      title: l.gridDiscardTitle,
+      message: l.gridDiscardConfirm,
       type: MessageBoxType.question,
       buttons: MessageBoxButtons.okCancel,
     );
@@ -960,11 +1011,14 @@ class _TableDataPageState extends State<TableDataPage> {
   Future<void> _deleteRowAt(int row) async {
     final pageData = _pageData;
     if (pageData == null || row >= pageData.rows.length) return;
+    final l = context.l10n;
     final result = await MessageBox.show(
       context,
-      title: '删除记录',
-      message: '确定要删除第 ${_page * _pageSize + row + 1} 行记录吗?\n'
-          '删除后点击「确认修改」或 Ctrl+S 才会写入数据库。',
+      title: l.gridDeleteRecordTitle,
+      message: l.gridDeleteRowDetail(
+        '${_page * _pageSize + row + 1}',
+        l.gridDeleteRecordPending(l.btnCommitChanges),
+      ),
       type: MessageBoxType.question,
       buttons: MessageBoxButtons.okCancel,
     );
@@ -997,15 +1051,19 @@ class _TableDataPageState extends State<TableDataPage> {
         .toList()
       ..sort();
     if (valid.isEmpty) return;
+    final l = context.l10n;
     final base = _page * _pageSize;
     final preview = valid.length <= 5
         ? valid.map((r) => '${base + r + 1}').join(', ')
         : '${base + valid.first + 1} … ${base + valid.last + 1}';
     final result = await MessageBox.show(
       context,
-      title: '删除记录',
-      message: '确定要删除选中的 ${valid.length} 行记录吗?($preview)\n'
-          '删除后点击「确认修改」或 Ctrl+S 才会写入数据库。',
+      title: l.gridDeleteRecordTitle,
+      message: l.gridDeleteRowsDetail(
+        '${valid.length}',
+        preview,
+        l.gridDeleteRecordPending(l.btnCommitChanges),
+      ),
       type: MessageBoxType.question,
       buttons: MessageBoxButtons.okCancel,
     );
@@ -1087,22 +1145,24 @@ class _TableDataPageState extends State<TableDataPage> {
     final pageData = _pageData;
     final columns = _columns;
     final hasChanges = _dirty;
+    final l = context.l10n;
     if (pageData == null || columns == null || !hasChanges) {
       setState(() {
         _dirty = false;
-        _statusMessage = '没有需要保存的修改';
+        _setStatus(l.gridNothingToSave);
       });
       return;
     }
     final app = context.read<AppState>();
     final conn = app.connectionByName(widget.connection);
     if (conn == null) {
-      setState(() => _statusMessage = '连接 "${widget.connection}" 不存在');
+      setState(() => _setStatus(l.gridConnectionMissing(widget.connection),
+          error: true));
       return;
     }
     setState(() {
       _saving = true;
-      _statusMessage = null;
+      _setStatus(null);
       // 结束就地编辑(值已通过 onChanged 实时写入 _rows),
       // 避免保存后刷新时编辑器悬在旧数据上
       _editing = null;
@@ -1140,7 +1200,7 @@ class _TableDataPageState extends State<TableDataPage> {
       try {
         await run(sql);
       } catch (e) {
-        errors.add('删除第 ${entry.key + 1} 行: $e');
+        errors.add(l.gridDeleteRowErrorAt('${entry.key + 1}', '$e'));
       }
     }
 
@@ -1164,7 +1224,7 @@ class _TableDataPageState extends State<TableDataPage> {
           try {
             await run(sql);
           } catch (e) {
-            errors.add('新增行: $e');
+            errors.add(l.gridInsertRowError('$e'));
           }
         } else if (_deletedOriginals.containsKey(id)) {
           continue; // 行已删除
@@ -1188,7 +1248,7 @@ class _TableDataPageState extends State<TableDataPage> {
           try {
             await run(sql);
           } catch (e) {
-            errors.add('更新第 ${id + 1} 行: $e');
+            errors.add(l.gridUpdateRowErrorAt('${id + 1}', '$e'));
           }
         }
       }
@@ -1198,9 +1258,9 @@ class _TableDataPageState extends State<TableDataPage> {
       _saving = false;
       if (errors.isEmpty) {
         _dirty = false;
-        _statusMessage = '已保存 $affectedCount 行修改';
+        _setStatus(l.gridSavedRows('$affectedCount'));
       } else {
-        _statusMessage = '保存失败: ${errors.join('; ')}';
+        _setStatus(l.gridSaveFailed(errors.join('; ')), error: true);
       }
     });
     // 成功后重新加载,让总数与当前页与数据库同步(新增行变为真实行,删除行消失)
@@ -1669,27 +1729,29 @@ class _TableDataPageState extends State<TableDataPage> {
   // ── 列面板(只影响显示,不重载数据) ─────────────────────
 
   /// 列可见性开关:不允许把最后一列也关掉(空网格无从恢复)
+  ///
+  /// 只更新 [_columnVisibleNotifier],由「列面板 + 数据网格」两处订阅者各自重建,
+  /// 不 setState 整页——避免每次勾选把标题栏 / 工具页签 / 底部栏 / 右键菜单源
+  /// 数据一并重建并触发整窗重绘(宽表 + 大页下即勾选卡顿的根因)。
   void _toggleColumnVisible(int index, bool visible) {
     final columns = _columns;
     if (columns == null || index < 0 || index >= columns.length) return;
     final flags = List<bool>.of(_columnVisible ?? List.filled(columns.length, true));
     if (flags.length != columns.length) return;
     if (!visible && flags.where((f) => f).length <= 1) return;
-    setState(() {
-      flags[index] = visible;
-      _columnVisible = flags;
-    });
+    flags[index] = visible;
+    _columnVisible = flags;
+    _columnVisibleNotifier.value = flags;
   }
 
   /// 全选 / 全不选(全不选时保留第一列,避免网格无列可渲染)
   void _setAllColumnsVisible(bool visible) {
     final columns = _columns;
     if (columns == null || columns.isEmpty) return;
-    setState(() {
-      final flags = List.filled(columns.length, visible);
-      if (!visible) flags[0] = true;
-      _columnVisible = flags;
-    });
+    final flags = List.filled(columns.length, visible);
+    if (!visible) flags[0] = true;
+    _columnVisible = flags;
+    _columnVisibleNotifier.value = flags;
   }
 
   // ── 筛选 & 排序面板(顶部横带) ────────────────────────────
@@ -1751,6 +1813,7 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 分组占 `(` / `)` 两行,组内缩进一层。
   Widget _filterPanel(AppPalette t) {
     final columns = _columns;
+    final l = context.l10n;
     return Container(
       decoration: BoxDecoration(
         color: t.surface,
@@ -1769,12 +1832,13 @@ class _TableDataPageState extends State<TableDataPage> {
               const SizedBox(height: 12),
               _panelSectionHeader(
                 t,
-                '排序方式',
+                l.gridSortTitle,
                 trailing: [
-                  _panelIconButton(Icons.add, '添加排序准则', _addSortCriterion),
+                  _panelIconButton(
+                      Icons.add, l.gridAddSortCriterionTitle, _addSortCriterion),
                   const SizedBox(width: 8),
                   if (_draftSorts.isEmpty)
-                    _panelHint(t, '点击 + 以添加排序准则'),
+                    _panelHint(t, l.gridAddSortHint),
                 ],
               ),
               for (final criterion in _draftSorts)
@@ -1791,12 +1855,11 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 条件区主体:列信息未就绪时给提示,「文本」模式给输入框,
   /// 「创建工具」模式把条件树从根层起逐行铺开
   List<Widget> _filterBody(AppPalette t, List<String>? columns) {
-    if (columns == null) return [_panelHint(t, '正在读取列信息 …')];
+    final l = context.l10n;
+    if (columns == null) return [_panelHint(t, l.gridReadingColumnsEllipsis)];
     if (_draftSource == _FilterSource.text) return [_whereTextBox(t)];
     if (_draftFilters.isEmpty) {
-      return [
-        _panelHint(t, '点击 + 添加筛选条件；选中一行后可在其行尾追加同级条件（+）或括号分组（O+）')
-      ];
+      return [_panelHint(t, l.gridFilterEmptyHint)];
     }
     return [
       for (var i = 0; i < _draftFilters.length; i++)
@@ -1821,17 +1884,18 @@ class _TableDataPageState extends State<TableDataPage> {
         : siblings.indexOf(selected);
     return _panelSectionHeader(
       t,
-      '筛选',
+      context.l10n.gridFilterTitle,
       trailing: [
-        _panelIconButton(Icons.add, '添加筛选条件', _addFilterCriterion),
+        _panelIconButton(
+            Icons.add, context.l10n.gridAddFilterCriterionTitle, _addFilterCriterion),
         _panelIconButton(
           Icons.arrow_upward,
-          '上移选中条件',
+          context.l10n.gridMoveCriterionUpTitle,
           position > 0 ? () => _moveSelectedFilter(true) : null,
         ),
         _panelIconButton(
           Icons.arrow_downward,
-          '下移选中条件',
+          context.l10n.gridMoveCriterionDownTitle,
           position >= 0 && position < (siblings?.length ?? 0) - 1
               ? () => _moveSelectedFilter(false)
               : null,
@@ -1843,7 +1907,7 @@ class _TableDataPageState extends State<TableDataPage> {
             child: RadioButton<_FilterSource>(
               value: source,
               groupValue: _draftSource,
-              label: source.label,
+              label: source.labelOf(context.l10n),
               onChanged: (_) => _setFilterSource(source),
             ),
           ),
@@ -1890,6 +1954,7 @@ class _TableDataPageState extends State<TableDataPage> {
     required bool isLast,
   }) {
     final unary = criterion.operator.isUnary;
+    final l = context.l10n;
     return _filterRowShell(
       t: t,
       id: criterion.id,
@@ -1927,7 +1992,7 @@ class _TableDataPageState extends State<TableDataPage> {
           child: ComboBox<FilterOperator>(
             items: FilterOperator.values,
             value: criterion.operator,
-            itemToString: (op) => op.label,
+            itemToString: (op) => op.labelOf(l),
             onChanged: (op) {
               if (op == null) return;
               setState(() {
@@ -1947,7 +2012,7 @@ class _TableDataPageState extends State<TableDataPage> {
             child: Input(
               controller: _valueControllers[criterion.id],
               // 空值在设计图里就是 <?> 占位,填了才生成条件
-              hint: unary ? '（无需值）' : '<?>',
+              hint: unary ? l.gridNoValueNeeded : l.gridFilterValuePlaceholder,
               enabled: criterion.enabled && !unary,
               // 只改草稿:不 setState,避免每敲一个字重建整个页面
               onChanged: (value) {
@@ -2048,6 +2113,7 @@ class _TableDataPageState extends State<TableDataPage> {
     required bool append,
     required bool showJoin,
   }) {
+    final l = context.l10n;
     return SizedBox(
       width: _filterTrailingWidth,
       child: Align(
@@ -2056,9 +2122,9 @@ class _TableDataPageState extends State<TableDataPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (append) ...[
-              _miniButton(t, Icons.add, '在此条件后添加同级条件',
+              _miniButton(t, Icons.add, l.gridAddSibling,
                   () => _addCriterionAfter(node)),
-              _miniButton(t, Icons.add_circle_outline, '在此条件后添加括号分组',
+              _miniButton(t, Icons.add_circle_outline, l.gridAddGroup,
                   () => _addGroupAfter(node)),
             ] else if (showJoin)
               SizedBox(
@@ -2066,7 +2132,7 @@ class _TableDataPageState extends State<TableDataPage> {
                 child: ComboBox<FilterJoin>(
                   items: FilterJoin.values,
                   value: node.join,
-                  itemToString: (join) => join.label,
+                  itemToString: (join) => join.labelOf(context.l10n),
                   onChanged: (join) {
                     if (join == null) return;
                     setState(() => node.join = join);
@@ -2078,7 +2144,7 @@ class _TableDataPageState extends State<TableDataPage> {
               _miniButton(
                 t,
                 Icons.close,
-                node is FilterGroup ? '删除分组' : '删除条件',
+                node is FilterGroup ? l.gridDeleteFilterGroup : l.gridDeleteCriterion,
                 () => _removeFilterNode(node),
               ),
           ],
@@ -2113,7 +2179,7 @@ class _TableDataPageState extends State<TableDataPage> {
       padding: const EdgeInsets.only(top: _filterGap),
       child: Textarea(
         controller: _whereTextController,
-        hint: "不含 WHERE 关键字，例如：id > 100 AND name LIKE '集团%'",
+        hint: context.l10n.gridWhereHint,
         minLines: 3,
         maxLines: 8,
         style: TextStyle(
@@ -2132,10 +2198,11 @@ class _TableDataPageState extends State<TableDataPage> {
 
   /// 底部动作行:主按钮 + 有未应用改动时的灰字(设计图的「已编辑准则」)
   Widget _applyRow(AppPalette t) {
+    final l = context.l10n;
     return Row(
       children: [
         Button(
-          text: '应用筛选 & 排序',
+          text: l.gridApplyFilterSort,
           variant: ButtonVariant.primary,
           // 草稿与已应用一致时无需重查数据
           onPressed: _draftDirty ? _applyDraft : null,
@@ -2145,7 +2212,7 @@ class _TableDataPageState extends State<TableDataPage> {
           valueListenable: _draftRevision,
           builder: (context, _, __) => _draftDirty
               ? Text(
-                  '已编辑准则',
+                  l.gridCriterionEdited,
                   style: TextStyle(
                     fontSize: 12,
                     decoration: TextDecoration.none,
@@ -2192,7 +2259,8 @@ class _TableDataPageState extends State<TableDataPage> {
             child: ComboBox<bool>(
               items: const [true, false],
               value: criterion.ascending,
-              itemToString: (asc) => asc ? '升序' : '降序',
+              itemToString: (asc) =>
+                  asc ? context.l10n.gridSortAsc : context.l10n.gridSortDesc,
               onChanged: (asc) {
                 if (asc == null) return;
                 setState(() => criterion.ascending = asc);
@@ -2205,7 +2273,8 @@ class _TableDataPageState extends State<TableDataPage> {
             width: _filterTrailingWidth,
             child: Align(
               alignment: Alignment.centerRight,
-              child: _miniButton(t, Icons.close, '删除排序准则',
+              child: _miniButton(t, Icons.close,
+                  context.l10n.gridDeleteSortCriterionTitle,
                   () => _removeSortCriterion(criterion)),
             ),
           ),
@@ -2220,7 +2289,7 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 只影响渲染(网格只铺可见列),不重查数据
   Widget _columnPanel(AppPalette t) {
     final columns = _columns;
-    final visible = _visibleCols;
+    final l = context.l10n;
     final keyword = _columnSearch.trim().toLowerCase();
     final matches = <int>[
       if (columns != null)
@@ -2238,108 +2307,105 @@ class _TableDataPageState extends State<TableDataPage> {
             padding: const EdgeInsets.symmetric(horizontal: 6),
             child: Row(
               children: [
-                Text(
-                  columns == null ? '列' : '列 (${visible.length}/${columns.length})',
-                  style: TextStyle(
-                    fontSize: 12,
-                    decoration: TextDecoration.none,
-                    color: t.mutedForeground,
-                    fontFamilyFallback: chineseFontFamilyFallback,
-                  ),
+                // 计数随列可见性变化(勾选只重建这里 + 下方列表,不整页 setState)
+                ValueListenableBuilder<List<bool>?>(
+                  valueListenable: _columnVisibleNotifier,
+                  builder: (context, _, __) {
+                    final vis = _visibleCols;
+                    return Text(
+                      columns == null
+                          ? l.gridColumnsNoInfo
+                          : l.gridColumnsCount(
+                              '${vis.length}', '${columns.length}'),
+                      style: TextStyle(
+                        fontSize: 12,
+                        decoration: TextDecoration.none,
+                        color: t.mutedForeground,
+                        fontFamilyFallback: chineseFontFamilyFallback,
+                      ),
+                    );
+                  },
                 ),
                 const Spacer(),
-                _panelIconButton(Icons.done_all, '显示所有列',
+                _panelIconButton(Icons.done_all, l.gridShowAllColumns,
                     () => _setAllColumnsVisible(true)),
-                _panelIconButton(Icons.remove_done, '只保留第一列',
+                _panelIconButton(Icons.remove_done, l.gridKeepFirstColumnOnly,
                     () => _setAllColumnsVisible(false)),
               ],
             ),
           ),
           Expanded(
-            child: columns == null
-                ? _panelHint(t, '正在加载列信息 ...')
-                // 搜索命中列的下标(不能靠 itemBuilder 返回空盒子过滤:
-                // 配了 itemExtent 的空盒子仍占一整行高度,列表会出现空档)
-                : ListView.builder(
-                    padding: EdgeInsets.zero,
-                    itemCount: matches.length,
-                    itemExtent: 22,
-                    itemBuilder: (context, position) {
-                      final index = matches[position];
-                      final name = columns[index];
-                      final checked = _columnVisible == null ||
-                          index >= _columnVisible!.length ||
-                          _columnVisible![index];
-                      return Listener(
-                        // 按下即切换(无需等 tap 判定,零延迟)
-                        onPointerDown: (_) =>
-                            _toggleColumnVisible(index, !checked),
-                        child: MouseRegion(
-                          cursor: SystemMouseCursors.click,
-                          child: Row(
-                            children: [
-                              SizedBox(
-                                width: 22,
-                                // 被动指示器:切换由行级 Listener 统一处理。
-                                // 若这里再挂 onChanged,点勾选框会按下/抬起各
-                                // 切换一次,互相抵消 → 看起来"取消不了"。
-                                child: CheckBox(
-                                  value: checked,
-                                  onChanged: null,
-                                ),
-                              ),
-                              Expanded(
-                                child: Text(
-                                  name,
-                                  softWrap: false,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    height: 1.1,
-                                    decoration: TextDecoration.none,
-                                    fontWeight: FontWeight.w400,
-                                    color: checked
-                                        ? t.foreground
-                                        : t.mutedForeground,
-                                    fontFamilyFallback:
-                                        chineseFontFamilyFallback,
+            child: ValueListenableBuilder<List<bool>?>(
+              valueListenable: _columnVisibleNotifier,
+              builder: (context, _, __) => columns == null
+                  ? _panelHint(t, l.gridLoadingColumnsEllipsis)
+                  // 搜索命中列的下标(不能靠 itemBuilder 返回空盒子过滤:
+                  // 配了 itemExtent 的空盒子仍占一整行高度,列表会出现空档)
+                  : ListView.builder(
+                      padding: EdgeInsets.zero,
+                      itemCount: matches.length,
+                      itemExtent: 22,
+                      itemBuilder: (context, position) {
+                        final index = matches[position];
+                        final name = columns[index];
+                        final checked = _columnVisible == null ||
+                            index >= _columnVisible!.length ||
+                            _columnVisible![index];
+                        return Listener(
+                          // 按下即切换(无需等 tap 判定,零延迟)
+                          onPointerDown: (_) =>
+                              _toggleColumnVisible(index, !checked),
+                          child: MouseRegion(
+                            cursor: SystemMouseCursors.click,
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 22,
+                                  // 被动指示器:切换由行级 Listener 统一处理。
+                                  // 若这里再挂 onChanged,点勾选框会按下/抬起各
+                                  // 切换一次,互相抵消 → 看起来"取消不了"。
+                                  child: CheckBox(
+                                    value: checked,
+                                    onChanged: null,
                                   ),
                                 ),
-                              ),
-                              const SizedBox(width: 4),
-                            ],
+                                Expanded(
+                                  child: Text(
+                                    name,
+                                    softWrap: false,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      height: 1.1,
+                                      decoration: TextDecoration.none,
+                                      fontWeight: FontWeight.w400,
+                                      color: checked
+                                          ? t.foreground
+                                          : t.mutedForeground,
+                                      fontFamilyFallback:
+                                          chineseFontFamilyFallback,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                              ],
+                            ),
                           ),
-                        ),
-                      );
-                    },
-                  ),
+                        );
+                      },
+                    ),
+            ),
           ),
-          // 搜索框在面板底部(与 Navicat 一致)
+          // 搜索框在面板底部(与 Navicat 一致):无边框内嵌,提示词即「搜索」
           Container(
             decoration: BoxDecoration(
               border: Border(top: BorderSide(color: t.border)),
             ),
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-            child: Row(
-              children: [
-                Text(
-                  '搜索',
-                  style: TextStyle(
-                    fontSize: 12,
-                    decoration: TextDecoration.none,
-                    color: t.mutedForeground,
-                    fontFamilyFallback: chineseFontFamilyFallback,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Input(
-                    hint: '列名',
-                    onChanged: (value) =>
-                        setState(() => _columnSearch = value),
-                  ),
-                ),
-              ],
+            child: Input(
+              hint: l.gridSearch,
+              showBorder: false,
+              onChanged: (value) => setState(() => _columnSearch = value),
             ),
           ),
         ],
@@ -2354,10 +2420,11 @@ class _TableDataPageState extends State<TableDataPage> {
   Widget _cellEditor(AppPalette t) {
     final cell = _cellEditorCell;
     final columns = _columns;
+    final l = context.l10n;
     final title = cell == null
-        ? '未选中单元格'
-        : '${columns != null && cell.$2 < columns.length ? columns[cell.$2] : '列 ${cell.$2 + 1}'}'
-            '  ·  第 ${_page * _pageSize + cell.$1 + 1} 行';
+        ? l.cellNoneSelected
+        : '${columns != null && cell.$2 < columns.length ? columns[cell.$2] : l.gridColumnNumber('${cell.$2 + 1}')}'
+            '${l.gridDisplayRow('${_page * _pageSize + cell.$1 + 1}')}';
     return Container(
       color: t.background,
       child: Column(
@@ -2370,7 +2437,7 @@ class _TableDataPageState extends State<TableDataPage> {
             child: Row(
               children: [
                 Text(
-                  '单元格编辑器 · $title',
+                  l.cellEditorTitle(title),
                   style: TextStyle(
                     fontSize: 12,
                     decoration: TextDecoration.none,
@@ -2380,14 +2447,14 @@ class _TableDataPageState extends State<TableDataPage> {
                 ),
                 const Spacer(),
                 Button(
-                  text: '应用',
+                  text: l.btnApplyTitle,
                   onPressed: cell == null || _cellView != CellViewMode.text
                       ? null
                       : _applyCellEditor,
                 ),
                 const SizedBox(width: 6),
                 Button(
-                  text: '撤销',
+                  text: l.btnUndoTitle,
                   onPressed: cell == null || _cellView != CellViewMode.text
                       ? null
                       : _revertCellEditor,
@@ -2405,11 +2472,11 @@ class _TableDataPageState extends State<TableDataPage> {
               hoverTabColor: t.secondary,
               contentPadding: EdgeInsets.zero,
               tabs: [
-                TabItem(label: CellViewMode.text.label, child: _cellBodyText(t)),
-                TabItem(label: CellViewMode.hex.label, child: _cellBodyHex(t)),
+                TabItem(label: l.gridCellEditorTabText, child: _cellBodyText(t)),
+                TabItem(label: l.gridCellEditorTabHex, child: _cellBodyHex(t)),
                 TabItem(
-                    label: CellViewMode.image.label, child: _cellBodyImage(t)),
-                TabItem(label: CellViewMode.web.label, child: _cellBodyWeb(t)),
+                    label: l.gridCellEditorTabImage, child: _cellBodyImage(t)),
+                TabItem(label: l.gridCellEditorTabWeb, child: _cellBodyWeb(t)),
               ],
             ),
           ),
@@ -2452,7 +2519,7 @@ class _TableDataPageState extends State<TableDataPage> {
     }
     final dump = hexDump(_cellEditorValue);
     if (dump.isEmpty) {
-      return Center(child: _panelHint(t, '当前单元格为空'));
+      return Center(child: _panelHint(t, context.l10n.cellEmptyValue));
     }
     return _monoView(t, dump);
   }
@@ -2465,7 +2532,7 @@ class _TableDataPageState extends State<TableDataPage> {
     final bytes = decodeBase64Image(_cellEditorValue);
     if (bytes == null) {
       return Center(
-        child: _panelHint(t, '当前单元格不是可识别的 base64 图片数据'),
+        child: _panelHint(t, context.l10n.cellNotBase64Image),
       );
     }
     return Padding(
@@ -2487,7 +2554,7 @@ class _TableDataPageState extends State<TableDataPage> {
     }
     final value = _cellEditorValue;
     if (!looksLikeHtml(value)) {
-      return Center(child: _panelHint(t, '当前单元格内容不是 HTML 网页源码'));
+      return Center(child: _panelHint(t, context.l10n.cellNotHtml));
     }
     return _monoView(t, value);
   }
@@ -2576,7 +2643,8 @@ class _TableDataPageState extends State<TableDataPage> {
   void _applyCellEditor() {
     final cell = _cellEditorCell;
     if (cell == null) return;
-    setState(() => _statusMessage = '已写回单元格（点「确认修改」或 Ctrl+S 落库）');
+    setState(() => _setStatus(
+        context.l10n.cellWrittenBack(context.l10n.btnCommitChanges)));
     _setCell(cell.$1, cell.$2, _cellController.text);
   }
 
@@ -2596,6 +2664,9 @@ class _TableDataPageState extends State<TableDataPage> {
     if (pageData == null || row >= pageData.rows.length) return;
     final dataCol = _dataColOf(col);
     if (dataCol < 0 || dataCol >= pageData.rows[row].length) return;
+    // 编辑态:右键交给单元格编辑器自己的文本菜单(撤销/剪切/粘贴/全选),
+    // 再弹单元格菜单会两层叠在一起
+    if (_editing == (row, dataCol)) return;
     showContextMenu(
       context,
       items: _buildCellMenu(row, dataCol),
@@ -2628,16 +2699,19 @@ class _TableDataPageState extends State<TableDataPage> {
         const MenuSeparator(),
       ],
       MenuItem(
-          text: '设置为空白字符串', onPressed: () => _setCell(row, col, '')),
+          text: l.cellMenuSetBlank, onPressed: () => _setCell(row, col, '')),
       MenuItem(
-          text: '设置为 NULL', onPressed: () => _setCell(row, col, 'NULL')),
+          text: l.cellMenuSetNullCell,
+          onPressed: () => _setCell(row, col, 'NULL')),
       MenuItem(
-          text: inMulti ? '删除 $nSel 行记录' : '删除 记录',
+          text: inMulti
+              ? l.gridRowsDelete('$nSel')
+              : l.gridRowsDeleteOne,
           onPressed: () =>
               inMulti ? _deleteRows(_selectedRows.toList()..sort()) : _deleteRowAt(row)),
       const MenuSeparator(),
       MenuItem(
-          text: inMulti ? '复制 $nSel 行' : '复制行',
+          text: inMulti ? l.gridRowsCopy('$nSel') : l.gridRowsCopyOne,
           shortcut: 'Ctrl+C',
           onPressed: () {
             // 右键命中行若不在多行选中集合内,先把它设为唯一选中,
@@ -2645,84 +2719,92 @@ class _TableDataPageState extends State<TableDataPage> {
             if (!inMulti) setState(() => _selectRowAt(row));
             _copySelectedRows();
           }),
-      MenuItem(text: '复制为', children: [
+      MenuItem(text: l.gridCellCopyAs, children: [
         MenuItem(
-            text: '记录（制表符分隔）',
+            text: l.gridCellCopyTsv,
             onPressed: () => _copyText(rows[row].join('\t'))),
         MenuItem(
-            text: '记录（CSV）', onPressed: () => _copyText(_toCsv(rows[row]))),
+            text: l.gridCellCopyCsv,
+            onPressed: () => _copyText(_toCsv(rows[row]))),
         MenuItem(
-            text: '记录 + 栏位名（CSV）',
+            text: l.gridCellCopyCsvWithHeader,
             onPressed: () => _copyText(
                 '${_toCsv(_columns!)}\n${_toCsv(rows[row])}')),
       ]),
       MenuItem(
-          text: '粘贴行(追加为新增)',
+          text: l.gridCellPasteAppend,
           shortcut: 'Ctrl+V',
           onPressed: _pasteRowsFromClipboard),
-      MenuItem(text: '粘贴到单元格', onPressed: () => _pasteToCell(row, col)),
-      MenuItem(text: '保存数据为...', onPressed: _openExportWizard),
+      MenuItem(
+          text: l.gridCellPasteToCell, onPressed: () => _pasteToCell(row, col)),
+      MenuItem(text: l.gridCellSaveAs, onPressed: _openExportWizard),
       const MenuSeparator(),
-      MenuItem(text: '排序', children: [
-        MenuItem(text: '升序（$column）', onPressed: () => _sortBy(col, true)),
-        MenuItem(text: '降序（$column）', onPressed: () => _sortBy(col, false)),
+      MenuItem(text: l.gridSort, children: [
+        MenuItem(
+            text: l.gridSortAscBy(column), onPressed: () => _sortBy(col, true)),
+        MenuItem(
+            text: l.gridSortDescBy(column),
+            onPressed: () => _sortBy(col, false)),
         if (_sortCol != null)
-          MenuItem(text: '取消排序', onPressed: () => _sortBy(null, true)),
+          MenuItem(text: l.gridClearSort, onPressed: () => _sortBy(null, true)),
         const MenuSeparator(),
         MenuItem(
-            text: '更多排序...',
+            text: l.gridMoreSorting,
             onPressed: () => setState(() {
                   _openPanels.add(_ToolPanel.filter);
                   _addSortCriterion();
                 })),
       ]),
       // 列显示:与左侧「列」面板同源(勾选状态是同一份 _columnVisible)
-      MenuItem(text: '列', children: [
+      MenuItem(text: l.gridColumnsTitle, children: [
         MenuItem(
-            text: '隐藏「$column」',
+            text: l.gridHideColumn(column),
             enabled: _visibleCols.length > 1,
             onPressed: () => _toggleColumnVisible(col, false)),
-        MenuItem(text: '显示所有列', onPressed: () => _setAllColumnsVisible(true)),
+        MenuItem(
+            text: l.gridShowAllColumns,
+            onPressed: () => _setAllColumnsVisible(true)),
         const MenuSeparator(),
         MenuItem(
-            text: '列面板...',
+            text: l.gridColumnsPanel,
             onPressed: () => setState(() => _openPanels.add(_ToolPanel.columns))),
       ]),
       MenuItem(
-          text: '单元格编辑器',
+          text: l.gridCellEditorPanelTitle,
           onPressed: () => _toggleToolPanel(_ToolPanel.cellEditor)),
       // 筛选子菜单:每个运算符一项,值取当前单元格(一元运算符不带值),
       // 命中后并入筛选面板的草稿并立即应用
-      MenuItem(text: '筛选', children: [
+      MenuItem(text: l.gridFilter, children: [
         for (final op in FilterOperator.values)
           MenuItem(
             text: op.isUnary
-                ? op.label
-                : '${op.label} "${_ellipsize(cell)}"',
+                ? op.labelOf(l)
+                : '${op.labelOf(l)} "${_ellipsize(cell)}"',
             onPressed: () => _filterByOperator(col, cell, op),
           ),
         const MenuSeparator(),
         MenuItem(
-            text: '更多筛选...', onPressed: () => _openFilterPanelFor(col)),
+            text: l.gridMoreFilters, onPressed: () => _openFilterPanelFor(col)),
         if (_filters.isNotEmpty)
-          MenuItem(text: '清除筛选', onPressed: _clearFilter),
+          MenuItem(text: l.gridClearFilter, onPressed: _clearFilter),
       ]),
       MenuItem(
-          text: '移除所有排序及筛选',
+          text: l.gridRemoveAllSortFilter,
           enabled: _hasView,
           onPressed: _clearAllView),
-      MenuItem(text: '显示', children: [
+      MenuItem(text: l.gridShow, children: [
         MenuItem(
-            text: '全部记录', onPressed: () => _setNullFilter(_NullFilter.all)),
+            text: l.gridShowAll,
+            onPressed: () => _setNullFilter(_NullFilter.all)),
         MenuItem(
-            text: '仅含 NULL 值的记录',
+            text: l.gridShowNullOnly,
             onPressed: () => _setNullFilter(_NullFilter.onlyNull)),
         MenuItem(
-            text: '仅不含 NULL 值的记录',
+            text: l.gridShowNotNullOnly,
             onPressed: () => _setNullFilter(_NullFilter.nonNull)),
       ]),
       const MenuSeparator(),
-      MenuItem(text: '刷新', onPressed: _refresh),
+      MenuItem(text: l.gridRefresh, onPressed: _refresh),
     ];
   }
 
@@ -2730,15 +2812,16 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 使导出内容与屏幕所见一致(服务端数据,不含未确认的本地修改)。
   Future<void> _openExportWizard() async {
     final app = context.read<AppState>();
+    final l = context.l10n;
     final conn = app.connectionByName(widget.connection);
     if (conn == null) {
       if (!mounted) return;
       await MessageBox.show(
         context,
-        title: '保存数据为',
-        message: '连接「${widget.connection}」已不存在,请先打开连接。',
+        title: l.gridCellSaveAs,
+        message: l.gridConnectionGone(widget.connection),
         type: MessageBoxType.error,
-        okText: '知道了',
+        okText: l.btnGotIt,
       );
       return;
     }
@@ -2835,8 +2918,7 @@ class _TableDataPageState extends State<TableDataPage> {
     ];
     await Clipboard.setData(ClipboardData(text: lines.join('\n')));
     if (!mounted) return;
-    setState(() =>
-        _statusMessage = l.rowsCopiedToClipboard('${idx.length}'));
+      setState(() => _setStatus(l.rowsCopiedToClipboard('${idx.length}')));
   }
 
   /// Ctrl+C 分派:选中多格(框选 / Ctrl 加选 / 全选)→ 复制该区域;
@@ -2872,8 +2954,8 @@ class _TableDataPageState extends State<TableDataPage> {
     ];
     await Clipboard.setData(ClipboardData(text: lines.join('\n')));
     if (!mounted) return;
-    setState(() => _statusMessage =
-        l.cellsCopiedToClipboard('${_selectedCells.length}'));
+    setState(() => _setStatus(
+        l.cellsCopiedToClipboard('${_selectedCells.length}')));
   }
 
   /// 把给定单元格一律置为 NULL(本地副本,仍需「确认修改」落库)。
@@ -2894,7 +2976,7 @@ class _TableDataPageState extends State<TableDataPage> {
       if (changed == 0) return;
       _dirty = true;
       _editing = null;
-      _statusMessage = l.cellsClearedToNull('$changed', l.btnCommitChanges);
+      _setStatus(l.cellsClearedToNull('$changed', l.btnCommitChanges));
     });
     _syncCellEditor();
   }
@@ -2906,11 +2988,12 @@ class _TableDataPageState extends State<TableDataPage> {
     final pageData = _pageData;
     final columns = _columns;
     if (pageData == null || columns == null) return;
+    final l = context.l10n;
     final data = await Clipboard.getData('text/plain');
     final text = data?.text;
     if (!mounted) return;
     if (text == null || text.trim().isEmpty) {
-      setState(() => _statusMessage = '剪贴板为空');
+      setState(() => _setStatus(l.gridClipboardEmpty));
       return;
     }
     final visible = _visibleCols;
@@ -2923,7 +3006,7 @@ class _TableDataPageState extends State<TableDataPage> {
       lines.removeLast();
     }
     if (lines.isEmpty) {
-      setState(() => _statusMessage = '剪贴板里没有可粘贴的记录');
+      setState(() => _setStatus(l.gridClipboardNoRecords));
       return;
     }
     final inserted = <int>[];
@@ -2950,7 +3033,7 @@ class _TableDataPageState extends State<TableDataPage> {
         ..addAll(inserted);
       _selected = inserted.last;
       _rowAnchor = inserted.first;
-      _statusMessage = '已粘贴 ${inserted.length} 行为新增记录(未保存)';
+      _setStatus(l.gridPastedRows('${inserted.length}'));
     });
     _syncCellEditor();
     _reportStatus();
@@ -2977,7 +3060,7 @@ class _TableDataPageState extends State<TableDataPage> {
           _titleBar(
             t,
             '${widget.table} @ ${widget.connection}.${widget.database}'
-            '${total == null ? '  ·  行数未知' : total > 0 ? '  ·  $total 行' : ''}',
+            '${total == null ? context.l10n.gridRowCountUnknown : total > 0 ? context.l10n.gridRowCount('$total') : ''}',
           ),
           _toolTabs(t),
           if (_openPanels.contains(_ToolPanel.filter)) _filterPanel(t),
@@ -2994,7 +3077,16 @@ class _TableDataPageState extends State<TableDataPage> {
                     onDrag: _resizeColumnPanel,
                   ),
                 ],
-                Expanded(child: _content(t)),
+                // 数据网格:订阅列可见性(勾选列只重建这里),外层 RepaintBoundary
+                // 把网格的重绘限制在自身区域,不随勾选外溢到面板 / 顶栏整窗重绘。
+                Expanded(
+                  child: ValueListenableBuilder<List<bool>?>(
+                    valueListenable: _columnVisibleNotifier,
+                    builder: (context, _, __) => RepaintBoundary(
+                      child: _content(t),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -3017,10 +3109,11 @@ class _TableDataPageState extends State<TableDataPage> {
 
   /// 内容区:加载中 / 出错 / 无数据 / 数据网格
   Widget _content(AppPalette t) {
+    final l = context.l10n;
     if (_loading) {
       return Empty(
         icon: const Spinner(size: 20),
-        title: '正在加载 ${widget.table} ...',
+        title: l.gridLoadingTable(widget.table),
         compact: true,
         maxWidth: 520,
       );
@@ -3028,10 +3121,10 @@ class _TableDataPageState extends State<TableDataPage> {
     if (_error != null) {
       return Empty(
         icon: const Icon(Icons.error_outline),
-        title: '读取 ${widget.table} 失败',
+        title: l.gridReadTableFailed(widget.table),
         description: _error,
         action: Button(
-          text: '重试',
+          text: l.btnRetry,
           onPressed: _load,
         ),
         compact: true,
@@ -3091,7 +3184,7 @@ class _TableDataPageState extends State<TableDataPage> {
                   ),
                   const SizedBox(width: 5),
                   Text(
-                    panel.label,
+                    panel.labelOf(context.l10n),
                     style: TextStyle(
                       fontSize: 12,
                       height: 1.1,
@@ -3129,7 +3222,9 @@ class _TableDataPageState extends State<TableDataPage> {
                 builder: (context, _, __) => !(_hasView || _draftDirty)
                     ? const SizedBox.shrink()
                     : Text(
-                        _draftDirty ? '筛选 / 排序有未应用的更改' : '已应用筛选 / 排序',
+                        _draftDirty
+                            ? context.l10n.gridFilterDirty
+                            : context.l10n.gridFilterApplied,
                         softWrap: false,
                         overflow: TextOverflow.ellipsis,
                         style:
@@ -3150,6 +3245,7 @@ class _TableDataPageState extends State<TableDataPage> {
     final ready = _pageData != null;
     final total = _totalRows;
     final (start, end) = _pageRange;
+    final l = context.l10n;
     // 已加载且有数据(总数未知 null 也算)才显示分页区;确认 0 条时不显示
     final showPager = ready && total != 0;
     return ToolStrip(
@@ -3158,38 +3254,38 @@ class _TableDataPageState extends State<TableDataPage> {
       items: [
         ToolStripButton(
           icon: Icons.add,
-          tooltip: '添加记录',
+          tooltip: l.gridAddRecord,
           enabled: ready,
           onPressed: _addRow,
         ),
         ToolStripButton(
           icon: Icons.remove,
-          tooltip: '删除选中记录',
+          tooltip: l.gridDeleteSelectedRecords,
           enabled: ready && _selected != null,
           onPressed: _deleteRow,
         ),
         ToolStripButton(
           icon: _saving ? Icons.hourglass_empty : Icons.check,
-          tooltip: _saving ? '保存中...' : '确认修改',
+          tooltip: _saving ? l.gridSaving : l.btnCommitChanges,
           enabled: ready && _dirty && !_saving,
           onPressed: _saving ? null : _applyEdits,
         ),
         ToolStripButton(
           icon: Icons.close,
-          tooltip: '取消修改',
+          tooltip: l.gridRevertChanges,
           enabled: ready && _dirty,
           onPressed: _discardEdits,
         ),
         const ToolStripSeparator(),
         ToolStripButton(
           icon: Icons.refresh,
-          tooltip: '刷新',
+          tooltip: l.gridRefresh,
           enabled: ready && !_loading,
           onPressed: _refresh,
         ),
         ToolStripButton(
           icon: Icons.pause_circle_outline,
-          tooltip: '停止',
+          tooltip: l.gridStop,
           enabled: _loading,
           onPressed: _stop,
         ),
@@ -3204,7 +3300,7 @@ class _TableDataPageState extends State<TableDataPage> {
                 _statusMessage!,
                 style: TextStyle(
                   fontSize: 12,
-                  color: _statusMessage!.startsWith('保存失败')
+                  color: _statusIsError
                       ? const Color(0xffd93025)
                       : t.mutedForeground,
                 ),
@@ -3214,7 +3310,8 @@ class _TableDataPageState extends State<TableDataPage> {
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: Text(
-                '第 ${start + 1}-$end 条 / 共 ${total ?? '?'} 条',
+                l.gridPagerRange(
+                    '${start + 1}', '$end', '${total ?? '?'}'),
                 style: TextStyle(fontSize: 12, color: t.mutedForeground),
               ),
             ),
@@ -3230,12 +3327,14 @@ class _TableDataPageState extends State<TableDataPage> {
       trailingItems: [
         ToolStripDropDownButton(
           icon: Icons.settings,
-          tooltip: '页大小设置',
+          tooltip: l.gridPageSize,
           enabled: ready,
           items: [
             for (final size in _pageSizeOptions)
               ToolStripDropDownEntry(
-                text: size == _pageSize ? '$size 条/页 ✓' : '$size 条/页',
+                text: size == _pageSize
+                    ? l.gridRowsPerPageCurrent('$size')
+                    : l.gridRowsPerPage('$size'),
                 onPressed: () => _setPageSize(size),
               ),
           ],
@@ -3346,6 +3445,14 @@ class _TableDataPageState extends State<TableDataPage> {
       ),
       tokens: t.desktopTokensFor(context),
       verticalScrollController: _vScrollController,
+      // 横向虚拟化:把外层横向滚动控制器 + 视口宽交给网格,数据行只渲染与
+      // 视口相交的列,把勾选列 / 选择 / 缩放的重建量从「可见行 × 全部列」降到
+      // 「可见行 × 视口内列」。首帧横向滚动尚未布局(viewportDimension 不可得)
+      // 时传 null → 整行渲染,之后每次重建都走虚拟化。
+      horizontalScrollController: _hScrollController,
+      horizontalViewportWidth: _hScrollController.hasClients
+          ? _hScrollController.position.viewportDimension
+          : null,
       // 网格行号即当前页内行号
       onRowSelected: _selectRow,
       // 传入 onCellsSelected 即开启框选模式:按下只选中(含框选 / Ctrl / Shift),
@@ -3382,7 +3489,7 @@ class _TableDataPageState extends State<TableDataPage> {
                 : TextAlign.start,
             // 日期时间族:字段右缘挂日历/时钟按钮,选值写回文本(仍可手打)
             datePickerMode: columnDateTimeMode(_columnTypes?[columns[col]]),
-            datePickerLabels: _dateTimePickerLabels,
+            datePickerLabels: _dateTimePickerLabels(context.l10n),
           );
         }
         return Text(
@@ -3411,6 +3518,9 @@ class _TableDataPageState extends State<TableDataPage> {
       child: ScrollBar(
         controller: _vScrollController,
         thumbVisibility: true,
+        // 纵向条在横向滚动区外面,内层 ListView 的通知到这儿 depth==1,
+        // Material 默认的 depth==0 过滤会把它整条拒掉(纵向条消失的根因),改按轴过滤。
+        notificationPredicate: (n) => n.metrics.axis == Axis.vertical,
         child: ScrollBar(
           controller: _hScrollController,
           orientation: ScrollBarOrientation.horizontal,

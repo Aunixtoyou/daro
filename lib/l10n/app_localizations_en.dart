@@ -141,6 +141,226 @@ class AppLocalizationsEn extends AppLocalizations {
   String get catBackup => 'Backup';
 
   @override
+  String get ctxNewRole => 'New Role';
+
+  @override
+  String get userTabGeneral => 'General';
+
+  @override
+  String get userTabAdvanced => 'Advanced';
+
+  @override
+  String get userTabMemberOf => 'Member Of';
+
+  @override
+  String get userTabMembers => 'Members';
+
+  @override
+  String get userTabServerPrivileges => 'Server Privileges';
+
+  @override
+  String get userTabPrivileges => 'Privileges';
+
+  @override
+  String get userTabSqlPreview => 'SQL Preview';
+
+  @override
+  String get userFieldUsername => 'User name:';
+
+  @override
+  String get userFieldHost => 'Host:';
+
+  @override
+  String get userFieldPlugin => 'Plugin:';
+
+  @override
+  String get userFieldPassword => 'Password:';
+
+  @override
+  String get userFieldPasswordConfirm => 'Confirm password:';
+
+  @override
+  String get userFieldExpirePolicy => 'Password expire policy:';
+
+  @override
+  String get userFieldExpireDays => 'Expire days:';
+
+  @override
+  String get userFieldComment => 'Comment:';
+
+  @override
+  String get userFieldPrincipalType => 'Principal type:';
+
+  @override
+  String get userFieldConnectionLimit => 'Connection limit:';
+
+  @override
+  String get userFieldValidUntil => 'Valid until:';
+
+  @override
+  String get userFieldNewPassword => 'New password:';
+
+  @override
+  String get userExpireDefault => 'DEFAULT';
+
+  @override
+  String get userExpireExpired => 'Expire now';
+
+  @override
+  String get userExpireNever => 'Never expire';
+
+  @override
+  String get userExpireInterval => 'Expire in days';
+
+  @override
+  String get userPgLogin => 'Can login (LOGIN)';
+
+  @override
+  String get userPgSuper => 'Superuser (SUPERUSER)';
+
+  @override
+  String get userPgCreateDb => 'Create databases (CREATEDB)';
+
+  @override
+  String get userPgCreateRole => 'Create roles (CREATEROLE)';
+
+  @override
+  String get userPgInherit => 'Inherit privileges (INHERIT)';
+
+  @override
+  String get userPgReplication => 'Replication (REPLICATION)';
+
+  @override
+  String get userPgBypassRls => 'Bypass row-level security (BYPASSRLS)';
+
+  @override
+  String get userPrincipalSql => 'SQL login';
+
+  @override
+  String get userPrincipalWindows => 'Windows user';
+
+  @override
+  String get userPrincipalWindowsGroup => 'Windows group';
+
+  @override
+  String get userPrincipalRole => 'Database role';
+
+  @override
+  String get userIsRole => 'This is a role, not a login-capable user';
+
+  @override
+  String get userColTarget => 'Object';
+
+  @override
+  String get userColPrivilege => 'Privilege';
+
+  @override
+  String get userColGrant => 'Grantable';
+
+  @override
+  String get userColRole => 'Role';
+
+  @override
+  String get userColMember => 'Member';
+
+  @override
+  String get userNoPrivileges => 'No privileges granted.';
+
+  @override
+  String get userNoMembers => 'No members.';
+
+  @override
+  String get userNoMemberOf => 'Not a member of any role.';
+
+  @override
+  String get userNoCandidates => 'No roles available.';
+
+  @override
+  String get userAddPrivilege => 'Add privilege';
+
+  @override
+  String get userRemovePrivilege => 'Remove';
+
+  @override
+  String get userPrivilegeTargetHint => 'database.table (empty = server level)';
+
+  @override
+  String userSaveOk(String name) {
+    return 'Saved role $name';
+  }
+
+  @override
+  String userSaveFailedAt(String index) {
+    return 'Statement #$index failed:';
+  }
+
+  @override
+  String userSavedButRefreshFailed(String error) {
+    return 'Saved, but refreshing the object list failed: $error';
+  }
+
+  @override
+  String get userNameRequired => 'Please enter a user name.';
+
+  @override
+  String get userPasswordMismatch => 'The two passwords do not match.';
+
+  @override
+  String get userPasswordRequired =>
+      'Please enter a password (a new account needs one).';
+
+  @override
+  String userLoadFailed(String name, String error) {
+    return 'Failed to load \"$name\": $error';
+  }
+
+  @override
+  String get userNotSupported =>
+      'This database type does not support account management.';
+
+  @override
+  String get userAdvancedHint =>
+      'Options on this page rewrite the account DDL; availability differs per database type.';
+
+  @override
+  String get userPrivilegeHint =>
+      'Checked privileges are granted on save; unchecking revokes all privileges on that object first.';
+
+  @override
+  String userDropConfirm(String name) {
+    return 'Delete role \"$name\"?\nThis cannot be undone.';
+  }
+
+  @override
+  String get userMembershipHint =>
+      '\"Member Of\" lists the roles this account belongs to; \"Members\" lists the accounts that belong to this role.';
+
+  @override
+  String get userRoleOnlyHint =>
+      'Role membership is available on MySQL 8 and later only.';
+
+  @override
+  String get userLoading => 'Reading account information ...';
+
+  @override
+  String get userRefresh => 'Refresh';
+
+  @override
+  String get userPrivilegeDatabase => 'Database';
+
+  @override
+  String get userPrivilegeTable => 'Table';
+
+  @override
+  String get userPrivilegeNames => 'Privileges (comma separated)';
+
+  @override
+  String get userSelectedRoles => 'Member of';
+
+  @override
+  String get userCandidateRoles => 'Available roles';
+
+  @override
   String get importDoneTitle => 'Import complete';
 
   @override
@@ -388,16 +608,6 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get infoShare => 'Share';
-
-  @override
-  String get infoShareTooltip =>
-      'Copy this object\'s reference text to the clipboard';
-
-  @override
-  String get infoShareCopied => 'Copied';
-
-  @override
   String get infoPageInfo => 'Information';
 
   @override
@@ -609,8 +819,8 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String deleteFailedDetail(String error) {
-    return 'Delete failed:\n$error';
+  String deleteFailedNames(String names) {
+    return 'Could not delete: $names\nCheck the connection, or whether the objects still exist.';
   }
 
   @override
@@ -892,7 +1102,15 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String deleteFailedDetail(String error) {
+    return 'Delete failed:\n$error';
+  }
+
+  @override
   String get ctxNewTable => 'New Table';
+
+  @override
+  String get ctxNewView => 'New View';
 
   @override
   String get ctxNewFunction => 'New Function';
@@ -1037,19 +1255,55 @@ class AppLocalizationsEn extends AppLocalizations {
   String get btnOk => 'OK';
 
   @override
-  String get dtpTime => 'Time';
-
-  @override
   String get dtpSelectTime => 'Select Time';
 
   @override
-  String get dtpHour => 'hr';
+  String get dtpToday => 'Today';
 
   @override
-  String get dtpMinute => 'min';
+  String get dtpMonth1 => 'Jan';
 
   @override
-  String get dtpSecond => 'sec';
+  String get dtpMonth2 => 'Feb';
+
+  @override
+  String get dtpMonth3 => 'Mar';
+
+  @override
+  String get dtpMonth4 => 'Apr';
+
+  @override
+  String get dtpMonth5 => 'May';
+
+  @override
+  String get dtpMonth6 => 'Jun';
+
+  @override
+  String get dtpMonth7 => 'Jul';
+
+  @override
+  String get dtpMonth8 => 'Aug';
+
+  @override
+  String get dtpMonth9 => 'Sep';
+
+  @override
+  String get dtpMonth10 => 'Oct';
+
+  @override
+  String get dtpMonth11 => 'Nov';
+
+  @override
+  String get dtpMonth12 => 'Dec';
+
+  @override
+  String get dtpMonthTitle => '[monthName] [year]';
+
+  @override
+  String get dtpYearTitle => '[year]';
+
+  @override
+  String get dtpYearRangeTitle => '[from] - [to]';
 
   @override
   String get dtpWeekdayMon => 'Mon';
@@ -1381,6 +1635,250 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String gridRowsPerPage(String size) {
     return '$size rows/page';
+  }
+
+  @override
+  String gridRowsPerPageCurrent(String size) {
+    return '$size rows/page ✓';
+  }
+
+  @override
+  String gridConnectionGone(String connection) {
+    return 'Connection \"$connection\" no longer exists; open it first.';
+  }
+
+  @override
+  String get gridDeleteRecordTitle => 'Delete Record';
+
+  @override
+  String gridDeleteRecordPending(String action) {
+    return 'Nothing is written until you click \"$action\" or press Ctrl+S.';
+  }
+
+  @override
+  String gridDeleteRowDetail(String row, String tail) {
+    return 'Delete row $row?\n$tail';
+  }
+
+  @override
+  String gridDeleteRowsDetail(String count, String preview, String tail) {
+    return 'Delete the $count selected rows? ($preview)\n$tail';
+  }
+
+  @override
+  String gridUpdateRowErrorAt(String row, String error) {
+    return 'Update row $row: $error';
+  }
+
+  @override
+  String get gridSortDirection => 'Sort Direction';
+
+  @override
+  String get gridSortAsc => 'Ascending';
+
+  @override
+  String get gridSortDesc => 'Descending';
+
+  @override
+  String get gridJoinAnd => 'And';
+
+  @override
+  String get gridJoinOr => 'Or';
+
+  @override
+  String get gridFilterValuePlaceholder => '<?>';
+
+  @override
+  String get gridSortTitle => 'Sorting';
+
+  @override
+  String get gridAddSortHint => 'Click + to add a sort criterion';
+
+  @override
+  String get gridAddSortCriterionTitle => 'Add Sort Criterion';
+
+  @override
+  String get gridDeleteSortCriterionTitle => 'Delete Sort Criterion';
+
+  @override
+  String get gridFilterTitle => 'Filter';
+
+  @override
+  String get gridAddFilterCriterionTitle => 'Add Filter Criterion';
+
+  @override
+  String get gridMoveCriterionUpTitle => 'Move Selected Criterion Up';
+
+  @override
+  String get gridMoveCriterionDownTitle => 'Move Selected Criterion Down';
+
+  @override
+  String get gridFilterTextHint =>
+      'Exclude the WHERE keyword, e.g. id > 100 AND name LIKE \'Acme%\'';
+
+  @override
+  String get gridApplyFilterSortTitle => 'Apply Filter & Sort';
+
+  @override
+  String get gridCriterionEditedTitle => 'Criterion Edited';
+
+  @override
+  String get gridColumnsTitle => 'Columns';
+
+  @override
+  String get gridColumnsNoInfo => 'Columns';
+
+  @override
+  String get gridSearchColumnsHint => 'Search';
+
+  @override
+  String get gridLoadingColumnsEllipsis => 'Loading column info ...';
+
+  @override
+  String get gridReadingColumnsEllipsis => 'Reading column info …';
+
+  @override
+  String get gridCellEditorTabText => 'Text';
+
+  @override
+  String get gridCellEditorTabHex => 'Hex';
+
+  @override
+  String get gridCellEditorTabImage => 'Image';
+
+  @override
+  String get gridCellEditorTabWeb => 'Web';
+
+  @override
+  String get gridSelectNone => 'No cell selected';
+
+  @override
+  String gridColumnNumber(String col) {
+    return 'Column $col';
+  }
+
+  @override
+  String gridDisplayRow(String row) {
+    return '  ·  Row $row';
+  }
+
+  @override
+  String gridCellEditorHeader(String title) {
+    return 'Cell Editor · $title';
+  }
+
+  @override
+  String get gridCellEditorPanelTitle => 'Cell Editor';
+
+  @override
+  String get gridCellCopyAs => 'Copy As';
+
+  @override
+  String get gridCellCopyTsv => 'Record (tab-delimited)';
+
+  @override
+  String get gridCellCopyCsv => 'Record (CSV)';
+
+  @override
+  String get gridCellCopyCsvWithHeader => 'Record + Column Names (CSV)';
+
+  @override
+  String get gridCellPasteAppend => 'Paste Rows (Append as New)';
+
+  @override
+  String get gridCellPasteToCell => 'Paste into Cell';
+
+  @override
+  String get gridCellSaveAs => 'Save Data As...';
+
+  @override
+  String get gridCellSetNullTitle => 'Set to NULL';
+
+  @override
+  String gridRowsCopy(String count) {
+    return 'Copy $count Rows';
+  }
+
+  @override
+  String get gridRowsCopyOne => 'Copy Row';
+
+  @override
+  String gridRowsDelete(String count) {
+    return 'Delete $count Records';
+  }
+
+  @override
+  String get gridRowsDeleteOne => 'Delete Record';
+
+  @override
+  String gridCellSortAscBy(String column) {
+    return 'Ascending ($column)';
+  }
+
+  @override
+  String gridCellSortDescBy(String column) {
+    return 'Descending ($column)';
+  }
+
+  @override
+  String gridCellHideColumn(String column) {
+    return 'Hide \"$column\"';
+  }
+
+  @override
+  String get dtpOk => 'OK';
+
+  @override
+  String get dtpCancel => 'Cancel';
+
+  @override
+  String get btnApplyTitle => 'Apply';
+
+  @override
+  String get btnUndoTitle => 'Undo';
+
+  @override
+  String get opEquals => 'Equals';
+
+  @override
+  String get opNotEquals => 'Not equals';
+
+  @override
+  String get opGreaterThan => 'Greater than';
+
+  @override
+  String get opGreaterOrEqual => 'Greater or equal';
+
+  @override
+  String get opLessThan => 'Less than';
+
+  @override
+  String get opLessOrEqual => 'Less or equal';
+
+  @override
+  String get opContains => 'Contains';
+
+  @override
+  String get opNotContains => 'Not contains';
+
+  @override
+  String get opStartsWith => 'Starts with';
+
+  @override
+  String get opEndsWith => 'Ends with';
+
+  @override
+  String get opIsNull => 'Is empty';
+
+  @override
+  String get opIsNotNull => 'Is not empty';
+
+  @override
+  String get gridRefresh => 'Refresh';
+
+  @override
+  String gridDeleteRowErrorAt(String row, String error) {
+    return 'Delete row $row: $error';
   }
 
   @override

@@ -3,6 +3,7 @@ import 'package:mysql_client/mysql_client.dart';
 import '../db_data.dart';
 import '../sql_row_cap.dart';
 import '../table_design.dart';
+import '../user_sql.dart';
 import 'db_driver.dart';
 import 'mysql_driver.dart'
     show
@@ -11,6 +12,7 @@ import 'mysql_driver.dart'
         mysqlReadTableDesign,
         mysqlReadTableDetail,
         openMysqlConnection;
+import 'mysql_user_metadata.dart';
 
 /// MariaDB 驱动(纯 Dart 实现,基于 mysql_client)。
 ///
@@ -238,6 +240,50 @@ class MariadbDriver implements DatabaseDriver {
         if (row.colAt(0) != null) row.colAt(0)!,
     ];
   }
+
+  // ── 账号详情 / 权限(与 MySQL 共用解析,差异仅"无角色"一处) ──
+
+  MysqlUserMetadata get _userMeta =>
+      MysqlUserMetadata(executor: _userRows, isMariaDb: true);
+
+  /// 执行 SQL 并折成 `列名(小写) → 值`(null → 空串)
+  Future<List<Map<String, String>>> _userRows(String sql) async {
+    final conn = await _get();
+    final rs = await conn.execute(sql);
+    return [
+      for (final row in rs.rows)
+        {
+          for (final col in rs.cols)
+            col.name.toLowerCase(): row.colByName(col.name) ?? '',
+        },
+    ];
+  }
+
+  @override
+  Future<UserSpec?> readUser(String database, String account) =>
+      _userMeta.read(database, account);
+
+  @override
+  Future<List<List<String>>> readUserPrivileges(
+    String database,
+    String account, {
+    bool serverLevel = false,
+  }) =>
+      serverLevel
+          ? _userMeta.readServerPrivileges(database, account)
+          : _userMeta.readDatabasePrivileges(database, account);
+
+  @override
+  Future<List<String>> listGrantableRoles(String database) =>
+      _userMeta.listRoles(database);
+
+  @override
+  Future<List<String>> readUserRoles(String database, String account) =>
+      _userMeta.readUserRoles(database, account);
+
+  @override
+  Future<List<String>> readRoleMembers(String database, String account) =>
+      _userMeta.readRoleMembers(database, account);
 
   @override
   Future<TablePreview> previewTable(

@@ -1533,6 +1533,9 @@ class _ResultGridState extends State<_ResultGrid> {
           child: ScrollBar(
             controller: _vScrollController,
             thumbVisibility: true,
+            // 纵向条在横向滚动区外面,内层 ListView 的通知到这儿 depth==1,
+            // Material 默认的 depth==0 过滤会把它整条拒掉(纵向条消失的根因),改按轴过滤。
+            notificationPredicate: (n) => n.metrics.axis == Axis.vertical,
             child: ScrollBar(
               controller: _hScrollController,
               orientation: ScrollBarOrientation.horizontal,

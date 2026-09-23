@@ -13,6 +13,7 @@ import '../data/db_data.dart';
 import '../data/db_types.dart';
 import '../data/drivers/db_driver.dart';
 import '../data/table_design.dart';
+import '../data/user_sql.dart';
 import '../pages/connection_dialog_page.dart';
 import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
@@ -1134,9 +1135,48 @@ class _DatabaseTreeState extends State<DatabaseTree> {
               initialCategory: ObjectCategory.procedure,
             ),
           ),
+        ] else if (category == ObjectCategory.user) ...[
+          MenuSeparator(),
+          MenuItem(
+            text: l.ctxNewRole,
+            enabled: isOpen && UserSql.supportsUsers(conn.typeId),
+            onPressed: () => _createRoleNode(app, conn, database, schema: schema),
+          ),
         ],
       ],
     );
+  }
+
+  /// 「新建角色」:在当前库 / 模式上下文打开一个空白的账号设计页。
+  /// 名称先在界面上给出自增默认名(账号名必须在打开页面前定下来 ——
+  /// 设计页靠它拼 CREATE USER,不能留到保存时再问),保存时才落 DDL。
+  void _createRoleNode(
+      AppState app, ConnectionInfo conn, String database,
+      {String? schema}) {
+    app.setObjectContext(conn.name, database, schema: schema);
+    app.designUser(
+      _defaultRoleName(app, conn.name, database, schema: schema),
+      connection: conn.name,
+      database: database,
+      schema: schema,
+      isNew: true,
+    );
+  }
+
+  /// 自增默认角色名:`role_N`(N 取到不与现有对象重号为止)
+  String _defaultRoleName(
+      AppState app, String connection, String database,
+      {String? schema}) {
+    final existing = schema == null
+        ? app.connectionManager.tableStateOf(connection, database)
+        : app.connectionManager
+            .tableStateOf(connection, database, schema: schema);
+    final names = existing.users ?? const <String>[];
+    for (var i = 1; i <= names.length + 1; i++) {
+      final candidate = 'role_$i';
+      if (!names.contains(candidate)) return candidate;
+    }
+    return 'role_${names.length + 1}';
   }
 
   /// 「新建表」:在当前库 / 模式上下文打开表设计器标签页
@@ -2132,6 +2172,7 @@ class _DatabaseTreeState extends State<DatabaseTree> {
               schema: schema,
               depth: groupDepth + 1,
               // 表实例右键:打开 / 删除 / 清空 / 设计 / 转储 / 复制重命名;
+              // 视图 / 实体化视图实例右键:打开 / 设计 / 删除 / 转储(按引擎能力裁剪);
               // 函数 / 过程实例右键:设计 / 删除
               onContextMenu: group.category == ObjectCategory.table
                   ? (position) => showTableContextMenu(
@@ -2143,9 +2184,9 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                         schema: schema,
                         position: position,
                       )
-                  : group.category == ObjectCategory.function ||
-                          group.category == ObjectCategory.procedure
-                      ? (position) => showRoutineContextMenu(
+                  : group.category == ObjectCategory.view ||
+                          group.category == ObjectCategory.materializedView
+                      ? (position) => showViewContextMenu(
                           context: context,
                           app: app,
                           category: group.category,
@@ -2155,7 +2196,29 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                           schema: schema,
                           position: position,
                         )
-                      : null,
+                      : group.category == ObjectCategory.function ||
+                              group.category == ObjectCategory.procedure
+                          ? (position) => showRoutineContextMenu(
+                              context: context,
+                              app: app,
+                              category: group.category,
+                              conn: conn,
+                              database: database,
+                              name: name,
+                              schema: schema,
+                              position: position,
+                            )
+                          : group.category == ObjectCategory.user
+                              ? (position) => showUserContextMenu(
+                                  context: context,
+                                  app: app,
+                                  conn: conn,
+                                  database: database,
+                                  name: name,
+                                  schema: schema,
+                                  position: position,
+                                )
+                              : null,
             ),
           );
         }
@@ -2292,6 +2355,12 @@ class _DatabaseTreeState extends State<DatabaseTree> {
                   connection: conn.name,
                   database: database,
                   category: category,
+                  schema: schema,
+                ),
+            ObjectCategory.user => () => app.designUser(
+                  name,
+                  connection: conn.name,
+                  database: database,
                   schema: schema,
                 ),
             _ => null,

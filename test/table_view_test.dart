@@ -388,11 +388,12 @@ void main() {
   });
 
   group('FilterJoin 枚举', () {
-    test('面板显示名与 SQL 关键字各自独立', () {
-      expect(FilterJoin.and.label, '且');
+    test('显示名取自 l10n,SQL 关键字与语言无关', () {
       expect(FilterJoin.and.sql, 'AND');
-      expect(FilterJoin.or.label, '或');
       expect(FilterJoin.or.sql, 'OR');
+      // 显示名已迁到 AppLocalizations,枚举只保留稳定标识
+      expect(FilterJoin.and.name, 'and');
+      expect(FilterJoin.or.name, 'or');
     });
   });
 

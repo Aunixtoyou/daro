@@ -3,6 +3,7 @@ import 'package:sqlite3/sqlite3.dart';
 import '../db_data.dart';
 import '../sql_row_cap.dart';
 import '../table_design.dart';
+import '../user_sql.dart';
 import 'db_driver.dart';
 
 /// SQLite 驱动(基于 sqlite3 FFI)。
@@ -156,6 +157,31 @@ class SqliteDriver implements DatabaseDriver {
     // SQLite 为文件型数据库,无用户/角色管理
     return const [];
   }
+
+  // SQLite 无账号体系:下列方法全部空实现(界面按"不支持"隐藏相关页,
+  // 见 UserSql.supportsUsers)。各驱动是 `implements DatabaseDriver`,
+  // 不继承抽象类的默认实现,故必须逐个显式声明。
+  @override
+  Future<UserSpec?> readUser(String database, String account) async => null;
+
+  @override
+  Future<List<List<String>>> readUserPrivileges(
+    String database,
+    String account, {
+    bool serverLevel = false,
+  }) async =>
+      const [];
+
+  @override
+  Future<List<String>> listGrantableRoles(String database) async => const [];
+
+  @override
+  Future<List<String>> readUserRoles(String database, String account) async =>
+      const [];
+
+  @override
+  Future<List<String>> readRoleMembers(String database, String account) async =>
+      const [];
 
   @override
   Future<TablePreview> previewTable(

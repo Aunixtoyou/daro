@@ -2,6 +2,7 @@ import 'package:dart_odbc/dart_odbc.dart';
 
 import '../db_data.dart';
 import '../table_design.dart';
+import '../user_sql.dart';
 import 'db_driver.dart';
 import 'odbc_query.dart';
 
@@ -164,6 +165,30 @@ class AccessDriver implements DatabaseDriver {
       return const [];
     }
   }
+
+  // Access 无服务端账号管理(MSysAccounts 是工作组的本地账户表,
+  // 不支持 CREATE USER / GRANT),故下列方法全部空实现。
+  @override
+  Future<UserSpec?> readUser(String database, String account) async => null;
+
+  @override
+  Future<List<List<String>>> readUserPrivileges(
+    String database,
+    String account, {
+    bool serverLevel = false,
+  }) async =>
+      const [];
+
+  @override
+  Future<List<String>> listGrantableRoles(String database) async => const [];
+
+  @override
+  Future<List<String>> readUserRoles(String database, String account) async =>
+      const [];
+
+  @override
+  Future<List<String>> readRoleMembers(String database, String account) async =>
+      const [];
 
   @override
   Future<TablePreview> previewTable(

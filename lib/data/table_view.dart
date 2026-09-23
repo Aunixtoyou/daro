@@ -8,25 +8,42 @@
 /// 字面量转义与数据库无关(单引号翻倍),在本文件内统一处理。
 library;
 
-/// 筛选运算符:标签直接用作面板下拉的选项文字
-enum FilterOperator {
-  eq('等于'),
-  ne('不等于'),
-  gt('大于'),
-  gte('大于等于'),
-  lt('小于'),
-  lte('小于等于'),
-  contains('包含'),
-  notContains('不包含'),
-  startsWith('开头是'),
-  endsWith('结尾是'),
-  isNull('为空'),
-  isNotNull('不为空');
+import '../l10n/app_localizations.dart';
 
-  const FilterOperator(this.label);
+/// 筛选运算符
+///
+/// 显示名随界面语言变化，而枚举拿不到 `BuildContext`，故由调用方把
+/// [AppLocalizations] 传进 [labelOf]（同 `ObjectCategory.labelOf` 的范式）；
+/// 枚举的 `.name` 仍是稳定标识，用于持久化，不受语言影响。
+enum FilterOperator {
+  eq,
+  ne,
+  gt,
+  gte,
+  lt,
+  lte,
+  contains,
+  notContains,
+  startsWith,
+  endsWith,
+  isNull,
+  isNotNull;
 
   /// 面板 / 右键菜单中的显示名
-  final String label;
+  String labelOf(AppLocalizations l) => switch (this) {
+        FilterOperator.eq => l.opEquals,
+        FilterOperator.ne => l.opNotEquals,
+        FilterOperator.gt => l.opGreaterThan,
+        FilterOperator.gte => l.opGreaterOrEqual,
+        FilterOperator.lt => l.opLessThan,
+        FilterOperator.lte => l.opLessOrEqual,
+        FilterOperator.contains => l.opContains,
+        FilterOperator.notContains => l.opNotContains,
+        FilterOperator.startsWith => l.opStartsWith,
+        FilterOperator.endsWith => l.opEndsWith,
+        FilterOperator.isNull => l.opIsNull,
+        FilterOperator.isNotNull => l.opIsNotNull,
+      };
 
   /// 一元运算符:不需要值输入框
   bool get isUnary => this == isNull || this == isNotNull;
@@ -41,13 +58,14 @@ enum FilterOperator {
 
 /// 相邻两条筛选准则之间的连接方式(面板上的「且 / 或」)
 enum FilterJoin {
-  and('且', 'AND'),
-  or('或', 'OR');
+  and('AND'),
+  or('OR');
 
-  const FilterJoin(this.label, this.sql);
+  const FilterJoin(this.sql);
 
-  /// 面板上的显示名
-  final String label;
+  /// 面板上的显示名(语言相关，见 [FilterOperator.labelOf] 的说明)
+  String labelOf(AppLocalizations l) =>
+      this == FilterJoin.and ? l.gridJoinAnd : l.gridJoinOr;
 
   /// 拼进 `WHERE` 的关键字
   final String sql;

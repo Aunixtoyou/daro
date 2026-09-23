@@ -16,6 +16,7 @@ import '../data/saved_query_store.dart';
 import '../data/sql_file_run.dart';
 import '../data/table_design.dart';
 import '../data/theme_store.dart';
+import '../data/user_sql.dart';
 import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
 import 'cli_console.dart';
@@ -2158,6 +2159,119 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// 保存用户 / 角色(`UserSql.buildScript` 生成的语句逐条执行)。
+  ///
+  /// 与其它设计页一致:语句由 [UserSql] 统一拼装,"SQL 预览"看到的
+  /// 就是这里执行的。任一条失败即中止并返回失败语句的下标(1 基),
+  /// 让界面能指出"第几条挂了"——账号类 DDL 常有多条且互相依赖
+  /// (先建号再授权),静默继续会留下半成品。
+  Future<DdlOutcome> saveUser(
+    UserSpec spec, {
+    required String connection,
+    required String database,
+    String? schema,
+  }) async {
+    final conn = connectionByName(connection);
+    if (conn == null) return DdlOutcome(false, '连接 "$connection" 不存在');
+    final stmts = UserSql.buildScript(conn.typeId, spec);
+    if (stmts.isEmpty) {
+      return DdlOutcome(false, '没有可执行的语句(请先填写用户名)');
+    }
+    for (var i = 0; i < stmts.length; i++) {
+      try {
+        await connectionManager.runQuery(
+          conn,
+          stmts[i],
+          database: database,
+          limit: 1,
+        );
+      } catch (e) {
+        return DdlOutcome(false, e.toString(), i + 1);
+      }
+    }
+    // 账号列表来自 mysql.user / pg_roles 等系统表,刷新对象列表即可
+    await connectionManager.refreshDatabase(conn, database, schema: schema);
+    return DdlOutcome(true);
+  }
+
+  /// 删除用户 / 角色
+  Future<DdlOutcome> dropUser(
+    UserAccount account, {
+    required String connection,
+    required String database,
+    String? schema,
+    bool isRole = false,
+  }) async {
+    final conn = connectionByName(connection);
+    if (conn == null) return DdlOutcome(false, '连接 "$connection" 不存在');
+    if (!account.isValid) return DdlOutcome(false, '账号名不能为空');
+    final stmts =
+        UserSql.buildDrop(conn.typeId, account, isRole: isRole);
+    if (stmts.isEmpty) {
+      return DdlOutcome(false, '当前数据库类型不支持账号管理');
+    }
+    try {
+      for (final sql in stmts) {
+        await connectionManager.runQuery(conn, sql,
+            database: database, limit: 1);
+      }
+      await connectionManager.refreshDatabase(conn, database, schema: schema);
+      return DdlOutcome(true);
+    } catch (e) {
+      return DdlOutcome(false, e.toString());
+    }
+  }
+
+  /// 读取账号详情 / 权限(供设计页初始化)。
+  /// 读不到时返回 null(界面退化为"按新建处理"或显示只读提示)。
+  Future<UserSpec?> readUser(
+    String account, {
+    required String connection,
+    required String database,
+  }) async {
+    final conn = connectionByName(connection);
+    if (conn == null) return null;
+    final driver = await connectionManager.driverForUser(conn);
+    if (driver == null) return null;
+    try {
+      final spec = await driver.readUser(database, account);
+      if (spec == null) return null;
+      // 权限 / 成员关系与常规字段分次拉取,单项失败不影响主体
+      spec.serverPrivileges.addAll(UserSql.aggregate(
+        await driver.readUserPrivileges(database, account, serverLevel: true),
+        serverLevel: true,
+      ));
+      spec.privileges.addAll(UserSql.aggregate(
+        await driver.readUserPrivileges(database, account),
+      ));
+      try {
+        spec.memberOf.addAll(await driver.readUserRoles(database, account));
+        spec.members.addAll(await driver.readRoleMembers(database, account));
+      } catch (_) {
+        // 角色关系读取失败(权限不足 / 版本无此表)不影响主体信息
+      }
+      return spec;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 角色候选(「成员属于」页的候选列表)
+  Future<List<String>> listGrantableRoles({
+    required String connection,
+    required String database,
+  }) async {
+    final conn = connectionByName(connection);
+    if (conn == null) return const [];
+    final driver = await connectionManager.driverForUser(conn);
+    if (driver == null) return const [];
+    try {
+      return await driver.listGrantableRoles(database);
+    } catch (_) {
+      return const [];
+    }
+  }
+
   /// 重写视图 / 函数:先 DROP(IF EXISTS)再执行新的 CREATE 语句。
   /// [schema] 非空时按模式限定对象名(PostgreSQL / SQL Server 等)
   Future<DdlOutcome> replaceRoutine(
@@ -2449,6 +2563,51 @@ class AppState extends ChangeNotifier {
       return null;
     }
   }
+
+  /// 转储视图 / 实体化视图的结构:返回其 CREATE 定义文本(失败返回 null)。
+  ///
+  /// 与表不同:视图没有列清单可读(读 information_schema.columns 得到的是
+  /// 展开后的输出列,重建不出视图),唯一可靠来源是驱动侧的 [getDefinition]。
+  /// 因此 Access 这类 getDefinition 恒为 null 的引擎会返回 null,
+  /// 由调用方给出「结构读取失败」而不是落一个空文件。
+  Future<String?> dumpViewSql(
+    ConnectionInfo conn,
+    String database,
+    String name, {
+    ObjectCategory category = ObjectCategory.view,
+    String? schema,
+  }) async {
+    final def = await getObjectDefinition(
+      category,
+      name,
+      connection: conn.name,
+      database: database,
+      schema: schema,
+    );
+    if (def == null || def.trim().isEmpty) return null;
+    final buf = StringBuffer();
+    buf.writeln('-- ============================================');
+    // 注释头的分类名跟随 [dumpTableSql] 的既有做法写死中文:落盘文件要能脱离
+    // 应用被读,不随界面语言变(AppState 也拿不到 BuildContext)
+    buf.writeln('-- daro ${_dumpCategoryName(category)}结构转储(仅结构,不含数据)');
+    buf.writeln('-- 连接: ${conn.name}');
+    buf.writeln('-- 数据库: $database');
+    if (schema != null && schema.isNotEmpty) buf.writeln('-- 模式: $schema');
+    buf.writeln('-- 对象: $name');
+    buf.writeln('-- 生成时间: ${DateTime.now().toIso8601String()}');
+    buf.writeln('-- ============================================');
+    buf.writeln();
+    // 定义文本末尾可能带分号(MySQL 的 SHOW CREATE VIEW 不带,
+    // SQL Server 的 OBJECT_DEFINITION 带),统一补一个且不重复
+    final body = def.trimRight();
+    buf.writeln(body.endsWith(';') ? body : '$body;');
+    buf.writeln();
+    return buf.toString();
+  }
+
+  /// 转储注释头里的对象分类名(写死,与 [dumpTableSql] 的「表」同源)
+  static String _dumpCategoryName(ObjectCategory category) =>
+      category == ObjectCategory.materializedView ? '实体化视图' : '视图';
 
   // ── 导入 / 导出向导 ────────────────────────────────────────
 
@@ -2758,6 +2917,35 @@ class AppState extends ChangeNotifier {
         sel.name == name) {
       detailSelection.value = null;
     }
+    notifyListeners();
+  }
+
+  /// 打开用户 / 角色的设计标签(新建或编辑)。
+  ///
+  /// [name] 为 [listUsers] 返回的对象标识(MySQL 系是 `user@host`)。
+  /// 与 [designRoutine] 同构,只是分类固定为 [ObjectCategory.user] ——
+  /// 路由时据此进 `UserDesignPage`(见 main_page 的 TabType.design 分支)。
+  void designUser(
+    String name, {
+    required String connection,
+    required String database,
+    String? schema,
+    bool isNew = false,
+  }) {
+    selectTable(name);
+    final tab = OpenTab(
+      TabType.design,
+      isNew ? '$name$kTabNewTitleSuffix' : '$name$kTabDesignTitleSuffix',
+      null,
+      connection,
+      database,
+      schema,
+      ObjectCategory.user,
+    );
+    final exists =
+        tabs.any((t) => t.type == TabType.design && t.key == tab.key);
+    activeTab = tab.title;
+    if (!exists) tabs.add(tab);
     notifyListeners();
   }
 

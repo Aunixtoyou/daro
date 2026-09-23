@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:base_ui_flutter/base_ui_flutter.dart';
@@ -21,7 +19,7 @@ import 'object_category_icon.dart';
 // - 未选中       -> 跟随对象页浏览上下文(objectContext)展示库信息,无则空态
 //
 // 库 / 表两页的排版对齐 Navicat 的详情面板:顶部 ⓘ / DDL 切换,头部
-// 「大图标 + 名称 + 类型 + 共享」,其下缩进对齐地列出所属连接与库,再是属性表。
+// 「大图标 + 名称 + 类型」,其下缩进对齐地列出所属连接与库,再是属性表。
 // 属性一律来自系统目录的真实取值,取不到显示占位符而不猜值。
 class DatabaseInfo extends StatelessWidget {
   const DatabaseInfo({super.key});
@@ -273,7 +271,6 @@ class _DatabaseDetailViewState extends State<_DatabaseDetailView> {
       icon: _navIcon(kDatabaseIcon, size: _headerIconSize),
       title: widget.database,
       kindLabel: l.infoSectionDatabase,
-      shareReference: c == null ? widget.database : '${c.name}.${widget.database}',
       showDdl: mysqlLike || pgLike,
       contextRows: [
         if (c != null)
@@ -565,20 +562,11 @@ class _TableDetailViewState extends State<_TableDetailView> {
     ];
     if (_error != null) rows.add(_errorLine(t, l.infoDetailFailed(_error!)));
 
-    // 共享引用文本:连接.库.表(带模式时插一层),粘贴到别处即可定位对象
-    final reference = [
-      if (c != null) c.name,
-      if (widget.database != null) widget.database!,
-      if (widget.schema != null && widget.schema!.isNotEmpty) widget.schema!,
-      widget.table,
-    ].join('.');
-
     return _DetailScaffold(
       app: widget.app,
       icon: ObjectCategoryIcon(category: ObjectCategory.table, size: _headerIconSize),
       title: widget.table,
       kindLabel: l.infoSectionTable,
-      shareReference: reference,
       showDdl: mysqlLike || pgLike,
       depPages: [
         if (pgLike) ...[
@@ -696,7 +684,7 @@ class _TableDetailViewState extends State<_TableDetailView> {
 
 // ───────────────────────────────────────────────────────────── 详情外壳
 
-/// 库 / 表详情共用的外壳:顶部页签条 + 头部(图标 / 名称 / 类型 / 共享)
+/// 库 / 表详情共用的外壳:顶部页签条 + 头部(图标 / 名称 / 类型)
 /// + 上下文行 + 正文。正文在「信息」与「DDL」两页间切换,头部保持不动。
 class _DetailScaffold extends StatefulWidget {
   const _DetailScaffold({
@@ -704,7 +692,6 @@ class _DetailScaffold extends StatefulWidget {
     required this.icon,
     required this.title,
     required this.kindLabel,
-    required this.shareReference,
     required this.infoBody,
     required this.ddl,
     required this.contextRows,
@@ -718,9 +705,6 @@ class _DetailScaffold extends StatefulWidget {
   final Widget icon;
   final String title;
   final String kindLabel;
-
-  /// 「共享」写入剪贴板的引用文本
-  final String shareReference;
   final Widget infoBody;
   final Widget ddl;
   final List<Widget> contextRows;
@@ -757,12 +741,9 @@ class _DepPage {
 class _DetailScaffoldState extends State<_DetailScaffold> {
   /// 0 = 信息页,1 = DDL 页(可见时),其后是「使用 / 被使用」
   int _page = 0;
-  Timer? _shareFeedback;
-  bool _copied = false;
 
   @override
   void dispose() {
-    _shareFeedback?.cancel();
     super.dispose();
   }
 
@@ -774,20 +755,9 @@ class _DetailScaffoldState extends State<_DetailScaffold> {
     if (dep >= 0 && dep < widget.depPages.length) widget.depPages[dep].onLoad();
   }
 
-  Future<void> _share() async {
-    await Clipboard.setData(ClipboardData(text: widget.shareReference));
-    if (!mounted) return;
-    setState(() => _copied = true);
-    _shareFeedback?.cancel();
-    _shareFeedback = Timer(const Duration(milliseconds: 1600), () {
-      if (mounted) setState(() => _copied = false);
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    final l = context.l10n;
 
     return Container(
       color: t.background,
@@ -829,24 +799,6 @@ class _DetailScaffoldState extends State<_DetailScaffold> {
                       Text(widget.kindLabel,
                           style: TextStyle(
                               fontSize: 12, color: t.mutedForeground)),
-                      const SizedBox(height: 5),
-                      WinToolTip(
-                        message: l.infoShareTooltip,
-                        child: Row(
-                          children: [
-                            Icon(Icons.open_in_new,
-                                size: 14, color: t.accent),
-                            const SizedBox(width: 4),
-                            LinkLabel(
-                              text: _copied
-                                  ? l.infoShareCopied
-                                  : l.infoShare,
-                              underline: false,
-                              onLinkTap: _share,
-                            ),
-                          ],
-                        ),
-                      ),
                     ],
                   ),
                 ),

@@ -8,6 +8,7 @@ import '../app/connection_manager.dart';
 import '../data/db_data.dart';
 import '../data/drivers/db_driver.dart';
 import '../data/routine_sql.dart';
+import '../data/user_sql.dart';
 import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
 import 'data_export_wizard.dart';
@@ -36,6 +37,13 @@ class ObjectPanel extends StatefulWidget {
 class _ObjectPanelState extends State<ObjectPanel> {
   /// 订阅 ConnectionManager:表列表加载完成后重建面板
   ConnectionManager? _listenedManager;
+
+  /// 新建视图的默认名自增序号(与 function_wizard 的 `_routineNameCounter` 同构,
+  /// 不持久化:重启后从 view_1 重新计,重名由引擎端 CREATE 报错兜住)
+  static int _viewNameCounter = 0;
+
+  /// 新建角色的默认名自增序号(与 _viewNameCounter 同构,各自独立计数)
+  static int _roleNameCounter = 0;
 
   /// 对象列表的键盘焦点(F2 改名 / Ctrl+C 复制 / Ctrl+V 粘贴)
   final FocusNode _listFocus = FocusNode();
@@ -210,12 +218,13 @@ class _ObjectPanelState extends State<ObjectPanel> {
     final c = AppColors.of(context);
     final l = context.l10n;
     final label = category.labelOf(l);
-    // 只有表 / 视图 / 函数 / 过程有"设计"语义
+    // 只有表 / 视图 / 函数 / 过程 / 角色有"设计"语义
     final canDesign = switch (category) {
       ObjectCategory.table ||
       ObjectCategory.view ||
       ObjectCategory.function ||
-      ObjectCategory.procedure => true,
+      ObjectCategory.procedure ||
+      ObjectCategory.user => true,
       _ => false,
     };
     // 选中态门控:打开表需要至少选中一项;设计需精确选中一个对象
@@ -301,6 +310,13 @@ class _ObjectPanelState extends State<ObjectPanel> {
                     final name = selected.single;
                     if (category == ObjectCategory.table) {
                       app.designTable(
+                        name,
+                        connection: connection,
+                        database: database,
+                        schema: schema,
+                      );
+                    } else if (category == ObjectCategory.user) {
+                      app.designUser(
                         name,
                         connection: connection,
                         database: database,
@@ -422,6 +438,45 @@ class _ObjectPanelState extends State<ObjectPanel> {
                     initialCategory: category,
                   ),
                 )
+        else if (category == ObjectCategory.view)
+          // 新建视图:直接开一张空的设计页,名称先取自增默认名 `view_N`
+          // (与函数 / 过程「跳过向导」路径同构 —— 设计页靠 widget.name 拼
+          // CREATE VIEW,所以名称必须在打开页面前定下来,不能留到保存时再问)。
+          // Access 的 getDefinition 恒为 null,但新建不需要读定义,故照常提供
+          ToolStripButton(
+            icon: Icons.add_circle_outline,
+            iconColor: c.iconSuccess,
+            text: l.actionNew(label),
+            onPressed: () => app.designRoutine(
+              _defaultViewName(),
+              connection: connection,
+              database: database,
+              category: ObjectCategory.view,
+              schema: schema,
+              isNew: true,
+            ),
+          )
+        else if (category == ObjectCategory.user)
+          // 新建角色:直接开一张空的账号设计页,名称先取自增默认名 `role_N`
+          // (与「新建视图」同构 —— 设计页靠 widget.name 拼 CREATE USER,
+          // 所以名称必须在打开页面前定下来,不能留到保存时再问)。
+          // 不支持账号管理的类型(SQLite / Access)连分组都不显示,
+          // 这里由 UserSql 再兜一层,避免类型表里漏配时给出死按钮
+          ToolStripButton(
+            icon: Icons.add_circle_outline,
+            iconColor: c.iconSuccess,
+            text: l.ctxNewRole,
+            enabled: UserSql.supportsUsers(typeId ?? ''),
+            onPressed: UserSql.supportsUsers(typeId ?? '')
+                ? () => app.designUser(
+                      _defaultRoleName(),
+                      connection: connection,
+                      database: database,
+                      schema: schema,
+                      isNew: true,
+                    )
+                : null,
+          )
         else
           ToolStripButton(
             icon: Icons.add_circle_outline,
@@ -603,6 +658,21 @@ class _ObjectPanelState extends State<ObjectPanel> {
     );
   }
 
+  /// 新建视图的默认名:view_N(与函数 / 过程的默认名同风格)。
+  /// 设计页靠 [ViewDesignPage.name] 拼 `CREATE VIEW <名>`,所以名称必须在
+  /// 打开页面前定下来 —— 用户可在设计页里改这个默认名(它就是最终对象名)。
+  static String _defaultViewName() {
+    _viewNameCounter++;
+    return 'view_$_viewNameCounter';
+  }
+
+  /// 新建角色的默认名:role_N(与视图的默认名同风格,各自独立计数)。
+  /// 设计页靠 `widget.name` 拼 `CREATE USER <名>`,名称同样要在打开页面前定下来。
+  static String _defaultRoleName() {
+    _roleNameCounter++;
+    return 'role_$_roleNameCounter';
+  }
+
   /// 「删除」的统一入口(工具栏按钮与 Del 快捷键共用同一口径):
   /// 查询分类删除本地已保存项,备份分类仍是占位,其余分类走真实 DDL(DROP)。
   void _deleteSelected(
@@ -690,7 +760,7 @@ class _ObjectPanelState extends State<ObjectPanel> {
       MessageBox.show(
         context,
         title: l.actionDelete(label),
-        message: l.deleteFailedDetail(failed.join(', ')),
+        message: l.deleteFailedNames(failed.join(', ')),
         type: MessageBoxType.error,
         okText: l.btnGotIt,
       );
@@ -1477,6 +1547,7 @@ Widget _buildObjectItem(
         onPointerDown: (event) {
           app.selectTable(name);
           // 右键表实例 → 表上下文菜单(打开 / 删除 / 清空 / 设计 / 转储SQL / 复制重命名);
+          // 右键视图 / 实体化视图 → 视图菜单(按引擎能力裁剪);
           // 右键函数 / 过程 → 例程菜单(设计 / 删除)。
           // 仅当面板已关联连接与库时弹出(正常浏览对象时必然满足)
           if (event.buttons == kSecondaryMouseButton &&
@@ -1500,12 +1571,34 @@ Widget _buildObjectItem(
                   schema: app.objectSchema,
                   position: event.position,
                 );
+              } else if (category == ObjectCategory.view ||
+                  category == ObjectCategory.materializedView) {
+                showViewContextMenu(
+                  context: context,
+                  app: app,
+                  category: category,
+                  conn: conn,
+                  database: app.objectDatabase!,
+                  name: name,
+                  schema: app.objectSchema,
+                  position: event.position,
+                );
               } else if (category == ObjectCategory.function ||
                   category == ObjectCategory.procedure) {
                 showRoutineContextMenu(
                   context: context,
                   app: app,
                   category: category,
+                  conn: conn,
+                  database: app.objectDatabase!,
+                  name: name,
+                  schema: app.objectSchema,
+                  position: event.position,
+                );
+              } else if (category == ObjectCategory.user) {
+                showUserContextMenu(
+                  context: context,
+                  app: app,
                   conn: conn,
                   database: app.objectDatabase!,
                   name: name,
@@ -1535,6 +1628,12 @@ Widget _buildObjectItem(
                   connection: app.objectConnection!,
                   database: app.objectDatabase!,
                   category: category,
+                  schema: app.objectSchema,
+                ),
+            ObjectCategory.user => () => app.designUser(
+                  name,
+                  connection: app.objectConnection!,
+                  database: app.objectDatabase!,
                   schema: app.objectSchema,
                 ),
             _ => null,

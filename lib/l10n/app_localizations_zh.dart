@@ -140,6 +140,220 @@ class AppLocalizationsZh extends AppLocalizations {
   String get catBackup => '备份';
 
   @override
+  String get ctxNewRole => '新建角色';
+
+  @override
+  String get userTabGeneral => '常规';
+
+  @override
+  String get userTabAdvanced => '高级';
+
+  @override
+  String get userTabMemberOf => '成员属于';
+
+  @override
+  String get userTabMembers => '成员';
+
+  @override
+  String get userTabServerPrivileges => '服务器权限';
+
+  @override
+  String get userTabPrivileges => '权限';
+
+  @override
+  String get userTabSqlPreview => 'SQL 预览';
+
+  @override
+  String get userFieldUsername => '用户名:';
+
+  @override
+  String get userFieldHost => '主机:';
+
+  @override
+  String get userFieldPlugin => '插件:';
+
+  @override
+  String get userFieldPassword => '密码:';
+
+  @override
+  String get userFieldPasswordConfirm => '确认密码:';
+
+  @override
+  String get userFieldExpirePolicy => '密码过期策略:';
+
+  @override
+  String get userFieldExpireDays => '过期天数:';
+
+  @override
+  String get userFieldComment => '注释:';
+
+  @override
+  String get userFieldPrincipalType => '主体类型:';
+
+  @override
+  String get userFieldConnectionLimit => '连接数限制:';
+
+  @override
+  String get userFieldValidUntil => '口令失效时间:';
+
+  @override
+  String get userFieldNewPassword => '新密码:';
+
+  @override
+  String get userExpireDefault => 'DEFAULT';
+
+  @override
+  String get userExpireExpired => '立即过期';
+
+  @override
+  String get userExpireNever => '永不过期';
+
+  @override
+  String get userExpireInterval => '按天过期';
+
+  @override
+  String get userPgLogin => '可登录(LOGIN)';
+
+  @override
+  String get userPgSuper => '超级用户(SUPERUSER)';
+
+  @override
+  String get userPgCreateDb => '创建数据库(CREATEDB)';
+
+  @override
+  String get userPgCreateRole => '创建角色(CREATEROLE)';
+
+  @override
+  String get userPgInherit => '继承权限(INHERIT)';
+
+  @override
+  String get userPgReplication => '复制(REPLICATION)';
+
+  @override
+  String get userPgBypassRls => '绕过行级安全(BYPASSRLS)';
+
+  @override
+  String get userPrincipalSql => 'SQL 登录名';
+
+  @override
+  String get userPrincipalWindows => 'Windows 用户';
+
+  @override
+  String get userPrincipalWindowsGroup => 'Windows 组';
+
+  @override
+  String get userPrincipalRole => '数据库角色';
+
+  @override
+  String get userIsRole => '这是一个角色(非可登录用户)';
+
+  @override
+  String get userColTarget => '对象';
+
+  @override
+  String get userColPrivilege => '权限';
+
+  @override
+  String get userColGrant => '可转授';
+
+  @override
+  String get userColRole => '角色';
+
+  @override
+  String get userColMember => '成员';
+
+  @override
+  String get userNoPrivileges => '没有已授予的权限。';
+
+  @override
+  String get userNoMembers => '没有成员。';
+
+  @override
+  String get userNoMemberOf => '不属于任何角色。';
+
+  @override
+  String get userNoCandidates => '没有可选的角色。';
+
+  @override
+  String get userAddPrivilege => '添加权限';
+
+  @override
+  String get userRemovePrivilege => '移除';
+
+  @override
+  String get userPrivilegeTargetHint => '库.表(留空 = 服务器级)';
+
+  @override
+  String userSaveOk(String name) {
+    return '已保存角色 $name';
+  }
+
+  @override
+  String userSaveFailedAt(String index) {
+    return '第 $index 条语句执行失败:';
+  }
+
+  @override
+  String userSavedButRefreshFailed(String error) {
+    return '已保存,但刷新对象列表失败:$error';
+  }
+
+  @override
+  String get userNameRequired => '请填写用户名。';
+
+  @override
+  String get userPasswordMismatch => '两次输入的密码不一致。';
+
+  @override
+  String get userPasswordRequired => '请填写密码(新建账号需要设置密码)。';
+
+  @override
+  String userLoadFailed(String name, String error) {
+    return '读取「$name」详情失败:$error';
+  }
+
+  @override
+  String get userNotSupported => '当前数据库类型不支持账号管理。';
+
+  @override
+  String get userAdvancedHint => '本页选项会改写建号语句;不同数据库类型的可用项不同。';
+
+  @override
+  String get userPrivilegeHint => '勾选后保存会重新授予权限;取消勾选会先撤销该对象的全部权限再授予。';
+
+  @override
+  String userDropConfirm(String name) {
+    return '确定要删除角色「$name」吗?\n此操作不可恢复。';
+  }
+
+  @override
+  String get userMembershipHint => '「成员属于」列出本账号加入了哪些角色;「成员」列出哪些账号加入了本角色。';
+
+  @override
+  String get userRoleOnlyHint => '角色成员关系仅在 MySQL 8 及以上版本可用。';
+
+  @override
+  String get userLoading => '正在读取账号信息 …';
+
+  @override
+  String get userRefresh => '刷新';
+
+  @override
+  String get userPrivilegeDatabase => '库名';
+
+  @override
+  String get userPrivilegeTable => '表名';
+
+  @override
+  String get userPrivilegeNames => '权限名(逗号分隔)';
+
+  @override
+  String get userSelectedRoles => '已加入';
+
+  @override
+  String get userCandidateRoles => '可选角色';
+
+  @override
   String get importDoneTitle => '导入完成';
 
   @override
@@ -381,15 +595,6 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get infoShare => '共享';
-
-  @override
-  String get infoShareTooltip => '复制该对象的引用文本到剪贴板';
-
-  @override
-  String get infoShareCopied => '已复制';
-
-  @override
   String get infoPageInfo => '信息';
 
   @override
@@ -600,8 +805,8 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String deleteFailedDetail(String error) {
-    return '删除失败:\n$error';
+  String deleteFailedNames(String names) {
+    return '删除失败:$names\n请检查连接状态或对象是否存在。';
   }
 
   @override
@@ -883,7 +1088,15 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String deleteFailedDetail(String error) {
+    return '删除失败:\n$error';
+  }
+
+  @override
   String get ctxNewTable => '新建表';
+
+  @override
+  String get ctxNewView => '新建视图';
 
   @override
   String get ctxNewFunction => '新建函数';
@@ -1026,19 +1239,55 @@ class AppLocalizationsZh extends AppLocalizations {
   String get btnOk => '确定';
 
   @override
-  String get dtpTime => '时间';
-
-  @override
   String get dtpSelectTime => '选择时间';
 
   @override
-  String get dtpHour => '时';
+  String get dtpToday => '今天';
 
   @override
-  String get dtpMinute => '分';
+  String get dtpMonth1 => '1月';
 
   @override
-  String get dtpSecond => '秒';
+  String get dtpMonth2 => '2月';
+
+  @override
+  String get dtpMonth3 => '3月';
+
+  @override
+  String get dtpMonth4 => '4月';
+
+  @override
+  String get dtpMonth5 => '5月';
+
+  @override
+  String get dtpMonth6 => '6月';
+
+  @override
+  String get dtpMonth7 => '7月';
+
+  @override
+  String get dtpMonth8 => '8月';
+
+  @override
+  String get dtpMonth9 => '9月';
+
+  @override
+  String get dtpMonth10 => '10月';
+
+  @override
+  String get dtpMonth11 => '11月';
+
+  @override
+  String get dtpMonth12 => '12月';
+
+  @override
+  String get dtpMonthTitle => '[year]年[month]月';
+
+  @override
+  String get dtpYearTitle => '[year]年';
+
+  @override
+  String get dtpYearRangeTitle => '[from] - [to]';
 
   @override
   String get dtpWeekdayMon => '周一';
@@ -1365,6 +1614,250 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String gridRowsPerPage(String size) {
     return '$size 条/页';
+  }
+
+  @override
+  String gridRowsPerPageCurrent(String size) {
+    return '$size 条/页 ✓';
+  }
+
+  @override
+  String gridConnectionGone(String connection) {
+    return '连接「$connection」已不存在,请先打开连接。';
+  }
+
+  @override
+  String get gridDeleteRecordTitle => '删除记录';
+
+  @override
+  String gridDeleteRecordPending(String action) {
+    return '删除后点击「$action」或 Ctrl+S 才会写入数据库。';
+  }
+
+  @override
+  String gridDeleteRowDetail(String row, String tail) {
+    return '确定要删除第 $row 行记录吗?\n$tail';
+  }
+
+  @override
+  String gridDeleteRowsDetail(String count, String preview, String tail) {
+    return '确定要删除选中的 $count 行记录吗?($preview)\n$tail';
+  }
+
+  @override
+  String gridUpdateRowErrorAt(String row, String error) {
+    return '更新第 $row 行: $error';
+  }
+
+  @override
+  String get gridSortDirection => '排序方向';
+
+  @override
+  String get gridSortAsc => '升序';
+
+  @override
+  String get gridSortDesc => '降序';
+
+  @override
+  String get gridJoinAnd => '且';
+
+  @override
+  String get gridJoinOr => '或';
+
+  @override
+  String get gridFilterValuePlaceholder => '<?>';
+
+  @override
+  String get gridSortTitle => '排序方式';
+
+  @override
+  String get gridAddSortHint => '点击 + 以添加排序准则';
+
+  @override
+  String get gridAddSortCriterionTitle => '添加排序准则';
+
+  @override
+  String get gridDeleteSortCriterionTitle => '删除排序准则';
+
+  @override
+  String get gridFilterTitle => '筛选';
+
+  @override
+  String get gridAddFilterCriterionTitle => '添加筛选条件';
+
+  @override
+  String get gridMoveCriterionUpTitle => '上移选中条件';
+
+  @override
+  String get gridMoveCriterionDownTitle => '下移选中条件';
+
+  @override
+  String get gridFilterTextHint =>
+      '不含 WHERE 关键字，例如：id > 100 AND name LIKE \'集团%\'';
+
+  @override
+  String get gridApplyFilterSortTitle => '应用筛选 & 排序';
+
+  @override
+  String get gridCriterionEditedTitle => '已编辑准则';
+
+  @override
+  String get gridColumnsTitle => '列';
+
+  @override
+  String get gridColumnsNoInfo => '列';
+
+  @override
+  String get gridSearchColumnsHint => '搜索';
+
+  @override
+  String get gridLoadingColumnsEllipsis => '正在加载列信息 ...';
+
+  @override
+  String get gridReadingColumnsEllipsis => '正在读取列信息 …';
+
+  @override
+  String get gridCellEditorTabText => '文本';
+
+  @override
+  String get gridCellEditorTabHex => '十六进制';
+
+  @override
+  String get gridCellEditorTabImage => '图像';
+
+  @override
+  String get gridCellEditorTabWeb => '网页';
+
+  @override
+  String get gridSelectNone => '未选中单元格';
+
+  @override
+  String gridColumnNumber(String col) {
+    return '列 $col';
+  }
+
+  @override
+  String gridDisplayRow(String row) {
+    return '  ·  第 $row 行';
+  }
+
+  @override
+  String gridCellEditorHeader(String title) {
+    return '单元格编辑器 · $title';
+  }
+
+  @override
+  String get gridCellEditorPanelTitle => '单元格编辑器';
+
+  @override
+  String get gridCellCopyAs => '复制为';
+
+  @override
+  String get gridCellCopyTsv => '记录（制表符分隔）';
+
+  @override
+  String get gridCellCopyCsv => '记录（CSV）';
+
+  @override
+  String get gridCellCopyCsvWithHeader => '记录 + 栏位名（CSV）';
+
+  @override
+  String get gridCellPasteAppend => '粘贴行(追加为新增)';
+
+  @override
+  String get gridCellPasteToCell => '粘贴到单元格';
+
+  @override
+  String get gridCellSaveAs => '保存数据为...';
+
+  @override
+  String get gridCellSetNullTitle => '设置为 NULL';
+
+  @override
+  String gridRowsCopy(String count) {
+    return '复制 $count 行';
+  }
+
+  @override
+  String get gridRowsCopyOne => '复制行';
+
+  @override
+  String gridRowsDelete(String count) {
+    return '删除 $count 行记录';
+  }
+
+  @override
+  String get gridRowsDeleteOne => '删除 记录';
+
+  @override
+  String gridCellSortAscBy(String column) {
+    return '升序（$column）';
+  }
+
+  @override
+  String gridCellSortDescBy(String column) {
+    return '降序（$column）';
+  }
+
+  @override
+  String gridCellHideColumn(String column) {
+    return '隐藏「$column」';
+  }
+
+  @override
+  String get dtpOk => '确定';
+
+  @override
+  String get dtpCancel => '取消';
+
+  @override
+  String get btnApplyTitle => '应用';
+
+  @override
+  String get btnUndoTitle => '撤销';
+
+  @override
+  String get opEquals => '等于';
+
+  @override
+  String get opNotEquals => '不等于';
+
+  @override
+  String get opGreaterThan => '大于';
+
+  @override
+  String get opGreaterOrEqual => '大于等于';
+
+  @override
+  String get opLessThan => '小于';
+
+  @override
+  String get opLessOrEqual => '小于等于';
+
+  @override
+  String get opContains => '包含';
+
+  @override
+  String get opNotContains => '不包含';
+
+  @override
+  String get opStartsWith => '开头是';
+
+  @override
+  String get opEndsWith => '结尾是';
+
+  @override
+  String get opIsNull => '为空';
+
+  @override
+  String get opIsNotNull => '不为空';
+
+  @override
+  String get gridRefresh => '刷新';
+
+  @override
+  String gridDeleteRowErrorAt(String row, String error) {
+    return '删除第 $row 行: $error';
   }
 
   @override

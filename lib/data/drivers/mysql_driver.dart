@@ -9,7 +9,9 @@ import '../db_data.dart';
 import '../db_metadata.dart';
 import '../sql_row_cap.dart';
 import '../table_design.dart';
+import '../user_sql.dart';
 import 'db_driver.dart';
+import 'mysql_user_metadata.dart';
 
 /// 建立一条 MySQL 协议连接:优先 TLS,服务端不支持时回退明文。
 ///
@@ -315,6 +317,54 @@ class MysqlDriver implements DatabaseDriver {
         if (row.colAt(0) != null) row.colAt(0)!,
     ];
   }
+
+  // ── 账号详情 / 权限(「用户 / 角色」设计页) ────────────────
+  // 行解析集中在 MysqlUserMetadata(与 MariaDB 共用);这里只提供"执行 SQL"。
+
+  MysqlUserMetadata get _userMeta =>
+      MysqlUserMetadata(executor: _userRows, isMariaDb: false);
+
+  /// 执行 SQL 并把结果行折成 `列名(小写) → 值`(null → 空串)。
+  ///
+  /// `SELECT *` 的列名大小写随 MySQL 版本 / 系统表而异(`User` vs `user`),
+  /// 统一转小写便于读取端写得简单。
+  Future<List<Map<String, String>>> _userRows(String sql) async {
+    final conn = await _get();
+    final rs = await conn.execute(sql);
+    return [
+      for (final row in rs.rows)
+        {
+          for (final col in rs.cols)
+            col.name.toLowerCase(): row.colByName(col.name) ?? '',
+        },
+    ];
+  }
+
+  @override
+  Future<UserSpec?> readUser(String database, String account) =>
+      _userMeta.read(database, account);
+
+  @override
+  Future<List<List<String>>> readUserPrivileges(
+    String database,
+    String account, {
+    bool serverLevel = false,
+  }) =>
+      serverLevel
+          ? _userMeta.readServerPrivileges(database, account)
+          : _userMeta.readDatabasePrivileges(database, account);
+
+  @override
+  Future<List<String>> listGrantableRoles(String database) =>
+      _userMeta.listRoles(database);
+
+  @override
+  Future<List<String>> readUserRoles(String database, String account) =>
+      _userMeta.readUserRoles(database, account);
+
+  @override
+  Future<List<String>> readRoleMembers(String database, String account) =>
+      _userMeta.readRoleMembers(database, account);
 
   @override
   Future<TablePreview> previewTable(

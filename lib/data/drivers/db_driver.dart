@@ -1,5 +1,6 @@
 import '../db_data.dart';
 import '../table_design.dart';
+import '../user_sql.dart';
 import 'access_driver.dart';
 import 'mariadb_driver.dart';
 import 'mysql_driver.dart';
@@ -418,6 +419,42 @@ abstract class DatabaseDriver {
 
   /// 列出数据库的用户/角色(MySQL: mysql.user;PG: pg_roles;SQL Server: sys.database_principals)
   Future<List<String>> listUsers(String database);
+
+  /// 读取一个用户 / 角色的完整详情(「常规」「高级」页的表单初值)。
+  ///
+  /// [account] 为 [listUsers] 返回的原始标识(MySQL 系是 `user@host`)。
+  /// 不支持的驱动返回 null(界面退化为"仅能新建",见 [UserSql.supportsUsers])。
+  /// 默认实现返回 null:各驱动是 `implements DatabaseDriver`,不会继承此处实现,
+  /// 故新增驱动需显式重写。
+  Future<UserSpec?> readUser(String database, String account) async => null;
+
+  /// 读取一个用户 / 角色的权限(「服务器权限」「权限」页)。
+  ///
+  /// 返回原始行,由 [UserSql.aggregate] 聚合成表格模型:
+  /// - 服务器级行:`(privilege, grantOption)`
+  /// - 库/表级行:`(database, table, column, privilege, grantOption)`
+  ///
+  /// [serverLevel] = true 时取全局权限,否则取库/表级权限。
+  /// 默认返回空列表(非 MySQL 系无此矩阵)。
+  Future<List<List<String>>> readUserPrivileges(
+    String database,
+    String account, {
+    bool serverLevel = false,
+  }) async =>
+      const [];
+
+  /// 读取该用户可以授予 (GRANT) 的角色列表(「成员属于」页;MySQL 8 / PG)。
+  /// 默认返回空列表。
+  Future<List<String>> listGrantableRoles(String database) async => const [];
+
+  /// 读取该用户当前所属的角色(「成员属于」页的已勾选项)。
+  /// 默认返回空列表。
+  Future<List<String>> readUserRoles(String database, String account) async =>
+      const [];
+
+  /// 读取属于该角色的成员(「成员」页;反向关系)。默认返回空列表。
+  Future<List<String>> readRoleMembers(String database, String account) async =>
+      const [];
 
   /// 查询指定表的分页数据(服务端分页):跳过 [offset] 行后取 [limit] 行;
   /// [schema] 非空时按模式限定表名。

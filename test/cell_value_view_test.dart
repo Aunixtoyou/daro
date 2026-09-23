@@ -131,9 +131,9 @@ void main() {
   });
 
   group('CellViewMode 页签', () {
-    test('四个页签的文字与顺序固定', () {
-      expect(CellViewMode.values.map((m) => m.label).toList(),
-          ['文本', '十六进制', '图像', '网页']);
+    test('四个页签的顺序与英文标识固定,文字随语言取自 l10n', () {
+      expect(CellViewMode.values.map((m) => m.name).toList(),
+          ['text', 'hex', 'image', 'web']);
     });
   });
 }

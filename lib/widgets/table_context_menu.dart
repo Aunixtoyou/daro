@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../app/app_state.dart';
 import '../data/db_data.dart';
+import '../data/user_sql.dart';
 import '../l10n/locale_config.dart';
 import 'data_export_wizard.dart';
 import 'data_import_wizard.dart';
@@ -242,6 +243,152 @@ Future<void> _copyRenameTable(
   );
 }
 
+/// 视图 / 实体化视图实例右键菜单:打开 / 设计 / 删除 / 转储SQL。
+/// 连接树与对象面板共用,保证两处交互一致。
+///
+/// 菜单项按**引擎真实能力**裁剪,而不是一律摆出来再禁用:
+/// - 「设计」与「转储SQL」都依赖驱动 [DatabaseDriver.getDefinition] 读出 CREATE
+///   定义。Access 的该方法恒返回 null(ODBC 无对应目录),因此对 Access 不提供
+///   这两项 —— 点开只会是空编辑器、转储只会是空文件。
+/// - 实体化视图同样没有可读定义(驱动只支持 view/function/procedure),故只给
+///   「打开」与「删除」。
+/// - MySQL 的 CREATE OR REPLACE VIEW 不含 SQL SECURITY 子句,设计页保存会把它
+///   重置回默认。因此对 MySQL 系隐藏「设计」,避免一次无意的保存悄悄改掉视图的
+///   权限语义(见下方 [_mysqlLosesSqlSecurity] 说明)。
+void showViewContextMenu({
+  required BuildContext context,
+  required AppState app,
+  required ObjectCategory category,
+  required ConnectionInfo conn,
+  required String database,
+  required String name,
+  String? schema,
+  required Offset position,
+}) {
+  final isOpen = app.connectionManager.isConnected(conn.name);
+  final l = context.l10n;
+  final label = category.labelOf(l);
+  // 实体化视图:驱动读不到定义(text)也重写不了(materializedView 分支直接返回 null)
+  final canReadDefinition = category == ObjectCategory.view &&
+      _supportsReadableView(conn.typeId);
+  final canDesign = canReadDefinition && !_mysqlLosesSqlSecurity(conn.typeId);
+
+  showContextMenu(
+    context,
+    position: position,
+    items: [
+      // 与双击行为一致,不强制要求连接(标签页打开后数据页自行加载)
+      MenuItem(
+        text: l.actionOpen(label),
+        onPressed: () => app.openTable(
+          name,
+          connection: conn.name,
+          database: database,
+          schema: schema,
+        ),
+      ),
+      // 需驱动存活才能落 DDL,未连接时禁用(与表菜单同口径)
+      if (canDesign)
+        MenuItem(
+          text: l.actionDesign(label),
+          enabled: isOpen,
+          onPressed: () => app.designRoutine(
+            name,
+            connection: conn.name,
+            database: database,
+            category: category,
+            schema: schema,
+          ),
+        ),
+      MenuItem(
+        text: l.actionDelete(label),
+        enabled: isOpen,
+        onPressed: () =>
+            _deleteRoutine(context, app, category, conn, database, name, schema),
+      ),
+      if (canReadDefinition) ...[
+        MenuSeparator(),
+        MenuItem(
+          text: l.ctxDumpSql,
+          enabled: isOpen,
+          onPressed: () =>
+              _dumpRoutine(context, app, category, conn, database, name, schema),
+        ),
+      ],
+    ],
+  );
+}
+
+/// 该引擎能否读出视图的 CREATE 定义。
+/// 与 [DatabaseDriver.getDefinition] 的实现对齐:目前只有 Access 恒返回 null。
+bool _supportsReadableView(String typeId) => typeId != 'access';
+
+/// MySQL / MariaDB 的 `SHOW CREATE VIEW` 输出不含 `SQL SECURITY` 子句
+/// (该属性存在 `information_schema.VIEWS.SECURITY_TYPE`,不在 CREATE 文本里),
+/// 而设计页只能从 CREATE 文本还原;保存时拼出的 `CREATE OR REPLACE VIEW` 会
+/// 让视图回落到引擎默认的 DEFINER 语义。这属于「保存一次就悄悄改语义」的静默
+/// 副作用,宁可不给这个入口。MariaDB 同源,一并适用。
+bool _mysqlLosesSqlSecurity(String typeId) =>
+    typeId == 'mysql' || typeId == 'mariadb';
+
+/// 「转储SQL」:选择保存位置,把视图 / 实体化视图的 CREATE 定义落盘
+Future<void> _dumpRoutine(
+  BuildContext context,
+  AppState app,
+  ObjectCategory category,
+  ConnectionInfo conn,
+  String database,
+  String name,
+  String? schema,
+) async {
+  final l = context.l10n;
+  final location = await getSaveLocation(
+    acceptedTypeGroups: [
+      XTypeGroup(label: l.sqlFileTypeLabel, extensions: ['sql'])
+    ],
+    suggestedName: '${name}_structure.sql',
+    confirmButtonText: l.btnSave,
+  );
+  if (location == null || !context.mounted) return;
+
+  final sql = await app.dumpViewSql(conn, database, name,
+      category: category, schema: schema);
+  if (sql == null || !context.mounted) {
+    MessageBox.show(
+      context,
+      title: l.ctxDumpSql,
+      message: l.dumpStructureReadFailed,
+      type: MessageBoxType.error,
+      okText: l.btnGotIt,
+    );
+    return;
+  }
+
+  try {
+    final file = File(location.path);
+    await file.writeAsString(sql);
+  } catch (e) {
+    if (!context.mounted) return;
+    MessageBox.show(
+      context,
+      title: l.ctxDumpSql,
+      message: l.dumpWriteFailed('$e'),
+      type: MessageBoxType.error,
+      okText: l.btnGotIt,
+    );
+    return;
+  }
+  if (!context.mounted) return;
+  MessageBox.show(
+    context,
+    title: l.ctxDumpSql,
+    // 「已导出「x」结构」的一句通吃库 / 模式 / 对象三种转储
+    message: l.dumpDatabaseDone(name, location.path),
+    type: MessageBoxType.info,
+    okText: l.btnGotIt,
+  );
+}
+
 /// 例程(函数 / 过程)实例右键菜单:设计 / 删除。
 /// 连接树与对象面板共用,保证两处交互一致。
 void showRoutineContextMenu({
@@ -316,7 +463,86 @@ Future<void> _deleteRoutine(
     MessageBox.show(
       context,
       title: title,
-      message: l.deleteFailedDetail(failed.join(', ')),
+      message: l.deleteFailedNames(failed.join(', ')),
+      type: MessageBoxType.error,
+      okText: l.btnGotIt,
+    );
+  }
+}
+
+/// 角色(用户)实例右键菜单:设计 / 删除。
+/// 连接树与对象面板共用,保证两处交互一致。
+///
+/// [name] 是 [listUsers] 返回的对象标识:MySQL 系为 `user@host`,
+/// 由 [UserAccount.parse] 拆成两段再送进 DDL(用户名本身可能含 `@`)。
+void showUserContextMenu({
+  required BuildContext context,
+  required AppState app,
+  required ConnectionInfo conn,
+  required String database,
+  required String name,
+  String? schema,
+  required Offset position,
+}) {
+  final l = context.l10n;
+  final label = l.catRole;
+  final isOpen = app.connectionManager.isConnected(conn.name);
+  showContextMenu(
+    context,
+    position: position,
+    items: [
+      // 与双击行为一致:打开设计页(未连接时页面仍可打开,只是读不到详情)
+      MenuItem(
+        text: l.actionDesign(label),
+        onPressed: () => app.designUser(
+          name,
+          connection: conn.name,
+          database: database,
+          schema: schema,
+        ),
+      ),
+      MenuItem(
+        text: l.actionDelete(label),
+        enabled: isOpen,
+        onPressed: () => _deleteUser(context, app, conn, database, name, schema),
+      ),
+    ],
+  );
+}
+
+/// 「删除角色」:确认后 DROP USER / DROP ROLE 并刷新对象列表
+Future<void> _deleteUser(
+  BuildContext context,
+  AppState app,
+  ConnectionInfo conn,
+  String database,
+  String name,
+  String? schema,
+) async {
+  final l = context.l10n;
+  final title = l.actionDelete(l.catRole);
+  final account = UserAccount.parse(name);
+  final result = await MessageBox.show(
+    context,
+    title: title,
+    message: l.userDropConfirm(account.displayName),
+    type: MessageBoxType.warning,
+    buttons: MessageBoxButtons.okCancel,
+    okText: l.btnDelete,
+  );
+  if (result != MessageBoxResult.ok || !context.mounted) return;
+  final outcome = await app.dropUser(
+    account,
+    connection: conn.name,
+    database: database,
+    schema: schema,
+  );
+  if (!context.mounted) return;
+  if (!outcome.ok) {
+    MessageBox.show(
+      context,
+      title: title,
+      message: l.deleteFailedDetail('${outcome.error}'),
       type: MessageBoxType.error,
       okText: l.btnGotIt,
     );

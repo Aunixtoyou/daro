@@ -477,6 +477,21 @@ class ConnectionManager extends ChangeNotifier {
     }
   }
 
+  /// 取得一个已连接、且会话已切到 [database] 的驱动,供"用户 / 角色"设计页
+  /// 读取账号详情与权限使用。
+  ///
+  /// 与 [sessionFor] 的区别:本方法**不抛异常**,连接不可用时返回 null ——
+  /// 设计页在"未连接"状态下仍要能打开(表单可编辑,只是读不到初值),
+  /// 把"读不到详情"与"页面打不开"区分开。
+  Future<DatabaseDriver?> driverForUser(ConnectionInfo conn) async {
+    try {
+      final driver = await _driverFor(conn);
+      return driver;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 取得**已定位好运行上下文**的驱动:切到 [database]、必要时再切到 [schema]。
   /// 供需要复用同一会话批量执行 many 语句的场景(如「运行 SQL 文件」)使用——
   /// [runQuery] 每次调用都会重新定位会话,而 PostgreSQL 家族的 `useDatabase`

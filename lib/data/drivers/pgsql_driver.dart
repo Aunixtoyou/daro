@@ -5,6 +5,7 @@ import '../db_data.dart';
 import '../db_metadata.dart';
 import '../sql_row_cap.dart';
 import '../table_design.dart';
+import '../user_sql.dart';
 import 'db_driver.dart';
 
 /// PostgreSQL 驱动(纯 Dart 实现,基于 postgres 包)。
@@ -72,6 +73,22 @@ class PgsqlDriver implements DatabaseDriver {
 
   /// 单引号包裹字符串字面量(模式名作为 SQL 字符串比较值使用)
   String _lit(String s) => "'${s.replaceAll("'", "''")}'";
+
+  /// 执行查询并把每行折成 `每列 toString()`(null → 空串)。
+  /// 只读元数据用,行数很小,不做流式处理。
+  Future<List<List<String>>> _rows(String sql) async {
+    final result = await _get().execute(sql);
+    return [
+      for (final row in result)
+        [for (final v in row) v?.toString() ?? ''],
+    ];
+  }
+
+  /// PG 的布尔列折成 bool(`t` / `true` / `1`)
+  bool _boolOf(String v) {
+    final s = v.trim().toLowerCase();
+    return s == 't' || s == 'true' || s == '1';
+  }
 
   /// 模式名兜底:未显式切换时用默认模式 public
   String get _schemaOrPublic => _schema ?? 'public';
@@ -251,6 +268,99 @@ class PgsqlDriver implements DatabaseDriver {
     return [
       for (final row in result)
         if (row[0] != null) row[0].toString(),
+    ];
+  }
+
+  // ── 角色详情(「用户 / 角色」设计页) ──────────────────────
+
+  /// 读取角色属性(`pg_roles`)。
+  ///
+  /// 口令本身读不到(PG 只暴露 `rolpassword` 的哈希,且非超级用户看不到),
+  /// 故编辑模式下密码恒为空 = 不改密码;`rolvaliduntil` 回填到「高级」页。
+  @override
+  Future<UserSpec?> readUser(String database, String account) async {
+    final name = account.trim();
+    if (name.isEmpty) return null;
+    final rows = await _rows(
+      'SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolinherit, '
+      'rolreplication, rolbypassrls, rolconnlimit, '
+      "COALESCE(to_char(rolvaliduntil, 'YYYY-MM-DD HH24:MI:SS'), ''), "
+      "COALESCE(shobj_description(oid, 'pg_authid'), '') "
+      'FROM pg_roles WHERE rolname = ${_lit(name)}',
+    );
+    if (rows.isEmpty) return null;
+    final r = rows.first;
+    return UserSpec(
+      originalName: name,
+      username: name,
+      password: '',
+      isRole: !_boolOf(r[0]),
+      comment: r[9],
+      pg: PgRoleAttributes(
+        canLogin: _boolOf(r[0]),
+        superUser: _boolOf(r[1]),
+        createDb: _boolOf(r[2]),
+        createRole: _boolOf(r[3]),
+        inherit: _boolOf(r[4]),
+        replication: _boolOf(r[5]),
+        bypassRls: _boolOf(r[6]),
+        connectionLimit: int.tryParse(r[7]) ?? -1,
+        validUntil: r[8],
+      ),
+    );
+  }
+
+  /// 该角色可加入的角色候选(排除自身)
+  @override
+  Future<List<String>> listGrantableRoles(String database) async {
+    final rows = await _rows('SELECT rolname FROM pg_roles ORDER BY rolname');
+    return [
+      for (final r in rows)
+        if (r.isNotEmpty && r.first.isNotEmpty) r.first,
+    ];
+  }
+
+  /// PostgreSQL 的权限模型是 ACL(`aclitem[]`),与 MySQL 的 `*_priv` 布尔列
+  /// 矩阵完全不同,本页暂不呈现 → 返回空列表,界面隐藏「服务器权限 / 权限」。
+  @override
+  Future<List<List<String>>> readUserPrivileges(
+    String database,
+    String account, {
+    bool serverLevel = false,
+  }) async =>
+      const [];
+
+  /// 该角色当前的成员关系(`pg_auth_members`:本角色 ∈ 哪些组)
+  @override
+  Future<List<String>> readUserRoles(String database, String account) async {
+    final name = account.trim();
+    if (name.isEmpty) return const [];
+    final rows = await _rows(
+      'SELECT g.rolname FROM pg_auth_members m '
+      'JOIN pg_roles r ON r.oid = m.member '
+      'JOIN pg_roles g ON g.oid = m.roleid '
+      'WHERE r.rolname = ${_lit(name)} ORDER BY g.rolname',
+    );
+    return [
+      for (final r in rows)
+        if (r.isNotEmpty && r.first.isNotEmpty) r.first,
+    ];
+  }
+
+  /// 属于该角色的成员(反向)
+  @override
+  Future<List<String>> readRoleMembers(String database, String account) async {
+    final name = account.trim();
+    if (name.isEmpty) return const [];
+    final rows = await _rows(
+      'SELECT m.rolname FROM pg_auth_members am '
+      'JOIN pg_roles r ON r.oid = am.roleid '
+      'JOIN pg_roles m ON m.oid = am.member '
+      'WHERE r.rolname = ${_lit(name)} ORDER BY m.rolname',
+    );
+    return [
+      for (final r in rows)
+        if (r.isNotEmpty && r.first.isNotEmpty) r.first,
     ];
   }
 

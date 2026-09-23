@@ -19,7 +19,8 @@ import 'mcp_fakes.dart';
 /// 组件层的矩形算法、滚动偏移、单击 vs 拖拽由 base-ui 的
 /// `data_grid_region_select_test.dart` 覆盖;这里只验宿主独有的事:
 /// 选中集合按**数据列**存(隐藏列后不漂移)、Ctrl+A 覆盖本页全部可见格、
-/// 区域复制的 Tab / 换行格式、Del 整批置 NULL 且状态栏按覆盖行数报数。
+/// 区域复制的 Tab / 换行格式、Del 整批置 NULL 且状态栏按覆盖行数报数、
+/// 右键菜单在编辑态让位给单元格编辑器的文本菜单。
 ///
 /// 驱动走 `test/mcp_fakes.dart` 的 FakeDriver:只给一页固定数据,
 /// 不校验服务端 SQL(那是驱动层用例的事)。
@@ -276,6 +277,42 @@ void main() {
       expect(find.text('r0-c0'), findsNothing);
       expect(find.byType(DataGridView), findsOneWidget, reason: '不应弹确认框');
       expect(app.tableStatusFor(_tabKey)?.selectedRowCount, 2);
+    });
+  });
+
+  group('右键', () {
+    /// 网格里的那一格:单元格编辑器打开后,右侧「单元格编辑器」面板会显示
+    /// 同一个值,只有网格内的落点才是右键目标
+    Finder _cell(String value) => find.descendant(
+        of: find.byType(DataGridView), matching: find.text(value));
+
+    Future<void> rightClick(WidgetTester tester, String value) async {
+      final gesture = await tester.startGesture(
+        tester.getCenter(_cell(value)),
+        kind: PointerDeviceKind.mouse,
+        buttons: kSecondaryButton,
+      );
+      await gesture.up();
+      await _settle(tester);
+    }
+
+    testWidgets('编辑态右键不再叠一层单元格菜单(交给编辑器的文本菜单)',
+        (tester) async {
+      await _pumpPage(tester, _driver([_row(0), _row(1)]));
+
+      await tester.tap(_cell('r0-c0'), kind: PointerDeviceKind.mouse);
+      await tester.pump();
+      expect(_grid(tester).editingCell, (0, 0));
+
+      await rightClick(tester, 'r0-c0');
+      expect(find.text('设置为空白字符串'), findsNothing);
+    });
+
+    testWidgets('未编辑时右键照旧弹单元格菜单', (tester) async {
+      await _pumpPage(tester, _driver([_row(0), _row(1)]));
+
+      await rightClick(tester, 'r1-c1');
+      expect(find.text('设置为空白字符串'), findsOneWidget);
     });
   });
 }

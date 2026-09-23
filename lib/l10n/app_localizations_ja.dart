@@ -140,6 +140,223 @@ class AppLocalizationsJa extends AppLocalizations {
   String get catBackup => 'バックアップ';
 
   @override
+  String get ctxNewRole => '新規ロール';
+
+  @override
+  String get userTabGeneral => '一般';
+
+  @override
+  String get userTabAdvanced => '詳細';
+
+  @override
+  String get userTabMemberOf => '所属ロール';
+
+  @override
+  String get userTabMembers => 'メンバー';
+
+  @override
+  String get userTabServerPrivileges => 'サーバー権限';
+
+  @override
+  String get userTabPrivileges => '権限';
+
+  @override
+  String get userTabSqlPreview => 'SQL プレビュー';
+
+  @override
+  String get userFieldUsername => 'ユーザー名:';
+
+  @override
+  String get userFieldHost => 'ホスト:';
+
+  @override
+  String get userFieldPlugin => 'プラグイン:';
+
+  @override
+  String get userFieldPassword => 'パスワード:';
+
+  @override
+  String get userFieldPasswordConfirm => 'パスワードの確認:';
+
+  @override
+  String get userFieldExpirePolicy => 'パスワード有効期限:';
+
+  @override
+  String get userFieldExpireDays => '有効日数:';
+
+  @override
+  String get userFieldComment => 'コメント:';
+
+  @override
+  String get userFieldPrincipalType => 'プリンシパル種別:';
+
+  @override
+  String get userFieldConnectionLimit => '接続数制限:';
+
+  @override
+  String get userFieldValidUntil => '有効期限:';
+
+  @override
+  String get userFieldNewPassword => '新しいパスワード:';
+
+  @override
+  String get userExpireDefault => 'DEFAULT';
+
+  @override
+  String get userExpireExpired => '即時失効';
+
+  @override
+  String get userExpireNever => '無期限';
+
+  @override
+  String get userExpireInterval => '日数で失効';
+
+  @override
+  String get userPgLogin => 'ログイン可(LOGIN)';
+
+  @override
+  String get userPgSuper => 'スーパーユーザー(SUPERUSER)';
+
+  @override
+  String get userPgCreateDb => 'データベース作成(CREATEDB)';
+
+  @override
+  String get userPgCreateRole => 'ロール作成(CREATEROLE)';
+
+  @override
+  String get userPgInherit => '権限を継承(INHERIT)';
+
+  @override
+  String get userPgReplication => 'レプリケーション(REPLICATION)';
+
+  @override
+  String get userPgBypassRls => '行レベルセキュリティを回避(BYPASSRLS)';
+
+  @override
+  String get userPrincipalSql => 'SQL ログイン';
+
+  @override
+  String get userPrincipalWindows => 'Windows ユーザー';
+
+  @override
+  String get userPrincipalWindowsGroup => 'Windows グループ';
+
+  @override
+  String get userPrincipalRole => 'データベースロール';
+
+  @override
+  String get userIsRole => 'これはロールです(ログイン可能なユーザーではありません)';
+
+  @override
+  String get userColTarget => '対象';
+
+  @override
+  String get userColPrivilege => '権限';
+
+  @override
+  String get userColGrant => '付与可能';
+
+  @override
+  String get userColRole => 'ロール';
+
+  @override
+  String get userColMember => 'メンバー';
+
+  @override
+  String get userNoPrivileges => '付与された権限はありません。';
+
+  @override
+  String get userNoMembers => 'メンバーはいません。';
+
+  @override
+  String get userNoMemberOf => 'どのロールにも所属していません。';
+
+  @override
+  String get userNoCandidates => '選択できるロールがありません。';
+
+  @override
+  String get userAddPrivilege => '権限を追加';
+
+  @override
+  String get userRemovePrivilege => '削除';
+
+  @override
+  String get userPrivilegeTargetHint => 'データベース.テーブル(空 = サーバーレベル)';
+
+  @override
+  String userSaveOk(String name) {
+    return 'ロール $name を保存しました';
+  }
+
+  @override
+  String userSaveFailedAt(String index) {
+    return '$index 番目のステートメントが失敗しました:';
+  }
+
+  @override
+  String userSavedButRefreshFailed(String error) {
+    return '保存しましたが、オブジェクト一覧の更新に失敗しました:$error';
+  }
+
+  @override
+  String get userNameRequired => 'ユーザー名を入力してください。';
+
+  @override
+  String get userPasswordMismatch => '入力したパスワードが一致しません。';
+
+  @override
+  String get userPasswordRequired => 'パスワードを入力してください(新規アカウントには必要です)。';
+
+  @override
+  String userLoadFailed(String name, String error) {
+    return '「$name」の読み込みに失敗しました:$error';
+  }
+
+  @override
+  String get userNotSupported => 'このデータベース種別はアカウント管理に対応していません。';
+
+  @override
+  String get userAdvancedHint =>
+      'このページの項目はアカウントの DDL を書き換えます。データベース種別により利用できる項目が異なります。';
+
+  @override
+  String get userPrivilegeHint =>
+      'チェックした権限は保存時に付与されます。外すとその対象の権限をすべて取り消してから付与し直します。';
+
+  @override
+  String userDropConfirm(String name) {
+    return 'ロール「$name」を削除しますか?\nこの操作は取り消せません。';
+  }
+
+  @override
+  String get userMembershipHint =>
+      '「所属ロール」はこのアカウントが所属するロール、「メンバー」はこのロールに所属するアカウントを表示します。';
+
+  @override
+  String get userRoleOnlyHint => 'ロールのメンバー関係は MySQL 8 以降でのみ利用できます。';
+
+  @override
+  String get userLoading => 'アカウント情報を読み込んでいます ...';
+
+  @override
+  String get userRefresh => '更新';
+
+  @override
+  String get userPrivilegeDatabase => 'データベース';
+
+  @override
+  String get userPrivilegeTable => 'テーブル';
+
+  @override
+  String get userPrivilegeNames => '権限(カンマ区切り)';
+
+  @override
+  String get userSelectedRoles => '所属ロール';
+
+  @override
+  String get userCandidateRoles => '選択可能なロール';
+
+  @override
   String get importDoneTitle => 'インポート完了';
 
   @override
@@ -382,15 +599,6 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
-  String get infoShare => '共有';
-
-  @override
-  String get infoShareTooltip => 'このオブジェクトの参照テキストをクリップボードにコピー';
-
-  @override
-  String get infoShareCopied => 'コピーしました';
-
-  @override
   String get infoPageInfo => '情報';
 
   @override
@@ -601,8 +809,8 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
-  String deleteFailedDetail(String error) {
-    return '削除できません:\n$error';
+  String deleteFailedNames(String names) {
+    return '削除できません:$names\n接続状態、またはオブジェクトが存在するかを確認してください。';
   }
 
   @override
@@ -884,7 +1092,15 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
+  String deleteFailedDetail(String error) {
+    return '削除できません:\n$error';
+  }
+
+  @override
   String get ctxNewTable => 'テーブルを新規作成';
+
+  @override
+  String get ctxNewView => 'ビューを新規作成';
 
   @override
   String get ctxNewFunction => '関数を新規作成';
@@ -1028,19 +1244,55 @@ class AppLocalizationsJa extends AppLocalizations {
   String get btnOk => 'OK';
 
   @override
-  String get dtpTime => '時刻';
-
-  @override
   String get dtpSelectTime => '時刻を選択';
 
   @override
-  String get dtpHour => '時';
+  String get dtpToday => '今日';
 
   @override
-  String get dtpMinute => '分';
+  String get dtpMonth1 => '1月';
 
   @override
-  String get dtpSecond => '秒';
+  String get dtpMonth2 => '2月';
+
+  @override
+  String get dtpMonth3 => '3月';
+
+  @override
+  String get dtpMonth4 => '4月';
+
+  @override
+  String get dtpMonth5 => '5月';
+
+  @override
+  String get dtpMonth6 => '6月';
+
+  @override
+  String get dtpMonth7 => '7月';
+
+  @override
+  String get dtpMonth8 => '8月';
+
+  @override
+  String get dtpMonth9 => '9月';
+
+  @override
+  String get dtpMonth10 => '10月';
+
+  @override
+  String get dtpMonth11 => '11月';
+
+  @override
+  String get dtpMonth12 => '12月';
+
+  @override
+  String get dtpMonthTitle => '[year]年[month]月';
+
+  @override
+  String get dtpYearTitle => '[year]年';
+
+  @override
+  String get dtpYearRangeTitle => '[from] - [to]';
 
   @override
   String get dtpWeekdayMon => '月';
@@ -1369,6 +1621,250 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String gridRowsPerPage(String size) {
     return '$size 行/ページ';
+  }
+
+  @override
+  String gridRowsPerPageCurrent(String size) {
+    return '$size 行/ページ ✓';
+  }
+
+  @override
+  String gridConnectionGone(String connection) {
+    return '接続 \"$connection\" は存在しません。先に接続を開いてください。';
+  }
+
+  @override
+  String get gridDeleteRecordTitle => 'レコードを削除';
+
+  @override
+  String gridDeleteRecordPending(String action) {
+    return '削除は「$action」または Ctrl+S で初めてデータベースに書き込まれます。';
+  }
+
+  @override
+  String gridDeleteRowDetail(String row, String tail) {
+    return '$row 行目のレコードを削除しますか?\n$tail';
+  }
+
+  @override
+  String gridDeleteRowsDetail(String count, String preview, String tail) {
+    return '選択中の $count 行のレコードを削除しますか?($preview)\n$tail';
+  }
+
+  @override
+  String gridUpdateRowErrorAt(String row, String error) {
+    return '$row 行目の更新: $error';
+  }
+
+  @override
+  String get gridSortDirection => '並び順';
+
+  @override
+  String get gridSortAsc => '昇順';
+
+  @override
+  String get gridSortDesc => '降順';
+
+  @override
+  String get gridJoinAnd => 'かつ';
+
+  @override
+  String get gridJoinOr => 'または';
+
+  @override
+  String get gridFilterValuePlaceholder => '<?>';
+
+  @override
+  String get gridSortTitle => '並べ替え';
+
+  @override
+  String get gridAddSortHint => '+ をクリックして並べ替え条件を追加';
+
+  @override
+  String get gridAddSortCriterionTitle => '並べ替え条件を追加';
+
+  @override
+  String get gridDeleteSortCriterionTitle => '並べ替え条件を削除';
+
+  @override
+  String get gridFilterTitle => 'フィルター';
+
+  @override
+  String get gridAddFilterCriterionTitle => 'フィルター条件を追加';
+
+  @override
+  String get gridMoveCriterionUpTitle => '選択した条件を上へ移動';
+
+  @override
+  String get gridMoveCriterionDownTitle => '選択した条件を下へ移動';
+
+  @override
+  String get gridFilterTextHint =>
+      'WHERE キーワードは含めません。例: id > 100 AND name LIKE \'Acme%\'';
+
+  @override
+  String get gridApplyFilterSortTitle => 'フィルターと並べ替えを適用';
+
+  @override
+  String get gridCriterionEditedTitle => '条件を編集済み';
+
+  @override
+  String get gridColumnsTitle => '列';
+
+  @override
+  String get gridColumnsNoInfo => '列';
+
+  @override
+  String get gridSearchColumnsHint => '検索';
+
+  @override
+  String get gridLoadingColumnsEllipsis => '列情報を読み込み中 ...';
+
+  @override
+  String get gridReadingColumnsEllipsis => '列情報を読み込み中 …';
+
+  @override
+  String get gridCellEditorTabText => 'テキスト';
+
+  @override
+  String get gridCellEditorTabHex => '16 進数';
+
+  @override
+  String get gridCellEditorTabImage => '画像';
+
+  @override
+  String get gridCellEditorTabWeb => 'Web';
+
+  @override
+  String get gridSelectNone => 'セルが選択されていません';
+
+  @override
+  String gridColumnNumber(String col) {
+    return '列 $col';
+  }
+
+  @override
+  String gridDisplayRow(String row) {
+    return '  ·  $row 行目';
+  }
+
+  @override
+  String gridCellEditorHeader(String title) {
+    return 'セルエディター · $title';
+  }
+
+  @override
+  String get gridCellEditorPanelTitle => 'セルエディター';
+
+  @override
+  String get gridCellCopyAs => '形式を指定してコピー';
+
+  @override
+  String get gridCellCopyTsv => 'レコード（タブ区切り）';
+
+  @override
+  String get gridCellCopyCsv => 'レコード（CSV）';
+
+  @override
+  String get gridCellCopyCsvWithHeader => 'レコード + 列名（CSV）';
+
+  @override
+  String get gridCellPasteAppend => '行を貼り付け（新規として追加）';
+
+  @override
+  String get gridCellPasteToCell => 'セルに貼り付け';
+
+  @override
+  String get gridCellSaveAs => 'データを保存...';
+
+  @override
+  String get gridCellSetNullTitle => 'NULL に設定';
+
+  @override
+  String gridRowsCopy(String count) {
+    return '$count 行をコピー';
+  }
+
+  @override
+  String get gridRowsCopyOne => '行をコピー';
+
+  @override
+  String gridRowsDelete(String count) {
+    return '$count 件のレコードを削除';
+  }
+
+  @override
+  String get gridRowsDeleteOne => 'レコードを削除';
+
+  @override
+  String gridCellSortAscBy(String column) {
+    return '昇順（$column）';
+  }
+
+  @override
+  String gridCellSortDescBy(String column) {
+    return '降順（$column）';
+  }
+
+  @override
+  String gridCellHideColumn(String column) {
+    return '「$column」を非表示';
+  }
+
+  @override
+  String get dtpOk => 'OK';
+
+  @override
+  String get dtpCancel => 'キャンセル';
+
+  @override
+  String get btnApplyTitle => '適用';
+
+  @override
+  String get btnUndoTitle => '元に戻す';
+
+  @override
+  String get opEquals => '等しい';
+
+  @override
+  String get opNotEquals => '等しくない';
+
+  @override
+  String get opGreaterThan => 'より大きい';
+
+  @override
+  String get opGreaterOrEqual => '以上';
+
+  @override
+  String get opLessThan => 'より小さい';
+
+  @override
+  String get opLessOrEqual => '以下';
+
+  @override
+  String get opContains => '含む';
+
+  @override
+  String get opNotContains => '含まない';
+
+  @override
+  String get opStartsWith => 'で始まる';
+
+  @override
+  String get opEndsWith => 'で終わる';
+
+  @override
+  String get opIsNull => '空';
+
+  @override
+  String get opIsNotNull => '空でない';
+
+  @override
+  String get gridRefresh => '更新';
+
+  @override
+  String gridDeleteRowErrorAt(String row, String error) {
+    return '行 $row を削除: $error';
   }
 
   @override
