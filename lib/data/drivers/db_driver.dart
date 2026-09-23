@@ -152,6 +152,184 @@ class SequenceDef {
   }
 }
 
+/// 库级详情(右侧详情面板「数据库」页用)。
+///
+/// 只承载**能真实派生**的属性;取不到的一律留空串,由界面显示占位符,
+/// 不编造默认值。各引擎填自己有的那几项 —— MySQL 只给字符集 / 排序规则,
+/// PostgreSQL 给全套。
+class DatabaseDetail {
+  const DatabaseDetail({
+    required this.name,
+    this.charset = '',
+    this.collation = '',
+    this.oid = '',
+    this.owner = '',
+    this.tablespace = '',
+    this.connectionLimit = '',
+    this.comment = '',
+  });
+
+  final String name;
+
+  /// 默认字符集(MySQL `utf8mb4` / PG 编码 `UTF8`:同一槽位,标签按引擎取)
+  final String charset;
+
+  /// 默认排序规则(MySQL `utf8mb4_general_ci` / PG `LC_COLLATE` `en_US.utf8`)
+  final String collation;
+
+  /// 对象 OID(PG 目录主键;其余类型没有这个概念,留空)
+  final String oid;
+
+  /// 所有者角色名
+  final String owner;
+
+  /// 表空间名
+  final String tablespace;
+
+  /// 连接上限的**原始值**:`-1` = 无限制(界面译成「无」),空串 = 无此概念。
+  /// 不在驱动侧折成「无」,否则界面分不清「没有限制」和「读不到」。
+  final String connectionLimit;
+
+  /// 对象注释
+  final String comment;
+}
+
+/// 表级详情(右侧详情面板「表」页用)。
+///
+/// 全部来自系统目录 / 存储引擎统计,**不扫描数据**:行数取的是估算值,
+/// 精确计数由用户点「获取行数」显式触发。取不到的属性为 null,
+/// 界面显示占位符。
+class TableDetail {
+  const TableDetail({
+    required this.name,
+    this.engine = '',
+    this.rowFormat = '',
+    this.collation = '',
+    this.createOptions = '',
+    this.comment = '',
+    this.rowEstimate,
+    this.autoIncrement,
+    this.createTime,
+    this.updateTime,
+    this.checkTime,
+    this.dataLength,
+    this.indexLength,
+    this.maxDataLength,
+    this.dataFree,
+    this.oid = '',
+    this.owner = '',
+    this.tableType = '',
+    this.partitionOf = '',
+    this.inheritsFrom = '',
+    this.tablespace = '',
+    this.fillFactor = '',
+    this.acl = '',
+    this.hasOids,
+  });
+
+  final String name;
+
+  /// 存储引擎(InnoDB / MyISAM / ...)
+  final String engine;
+
+  /// 行格式(Dynamic / Compact / Redundant / ...)
+  final String rowFormat;
+
+  /// 排序规则(表级,可与库级默认不同)
+  final String collation;
+
+  /// 建表时的额外选项(`row_format=DYNAMIC` 等),无则为空串
+  final String createOptions;
+
+  /// 表注释,无则为空串
+  final String comment;
+
+  /// 估算行数:读存储引擎统计,可能滞后于真实值。
+  /// 目录里的哨兵值(PG 未 ANALYZE 时 `reltuples = -1`)由驱动折成 null ——
+  /// 「不知道」不该呈现成一个看起来有效的数字。
+  final int? rowEstimate;
+
+  /// 下一个自增值
+  final int? autoIncrement;
+
+  final DateTime? createTime;
+  final DateTime? updateTime;
+  final DateTime? checkTime;
+
+  /// 数据区大小(字节)
+  final int? dataLength;
+
+  /// 索引区大小(字节)
+  final int? indexLength;
+
+  /// 单行可占用的最大字节数(MyISAM 才有意义)
+  final int? maxDataLength;
+
+  /// 已分配但未使用的空间(字节)
+  final int? dataFree;
+
+  /// 对象 OID(PG 目录主键)
+  final String oid;
+
+  /// 所有者角色名
+  final String owner;
+
+  /// 表类型的**字母码**(PG `pg_class.relkind`:`r` / `p` / `f` / `m` / `v`)。
+  /// 驱动不做翻译:展示文案要跟界面语言走,交给界面。
+  final String tableType;
+
+  /// 分区母表(仅 `relispartition` 为真时有值)
+  final String partitionOf;
+
+  /// 继承父表(纯继承,非分区关系)
+  final String inheritsFrom;
+
+  /// 显式指定的表空间;未指定时留空(继承库的默认表空间,PG 自己也是这么显示的)
+  final String tablespace;
+
+  /// 填充因子(`reloptions` 里的 `fillfactor`,未设置时留空)
+  final String fillFactor;
+
+  /// 权限列表(`relacl`)原文,逐行;为空表示走默认权限(目录里没有显式 ACL)
+  final String acl;
+
+  /// 是否带 OID 列;null = 该引擎没有这个概念(PG 12 起已彻底移除)
+  final bool? hasOids;
+}
+
+/// 依赖关系里的一条对象(详情面板「使用 / 被使用」两页用)。
+///
+/// [kind] 与 [degree] 存的是**规范码**而非译文:`TABLE` / `INDEX` /
+/// `SEQUENCE` / `TYPE` / `FOREIGN KEY` / `PRIMARY KEY` / `NOT NULL` /
+/// `TRIGGER` / …,以及 `NORMAL` / `AUTO` / `INTERNAL`(PG 目录 `deptype` 的
+/// n / a / i)。界面按当前语言决定翻不翻 —— Navicat 的中文界面里这些类型码
+/// 本来就不翻译,照抄即可。
+class DependentObject {
+  const DependentObject({
+    required this.schema,
+    required this.name,
+    required this.kind,
+    required this.degree,
+    this.children = const [],
+  });
+
+  /// 所在模式(角色 / 库级对象没有模式层,留空)
+  final String schema;
+  final String name;
+
+  /// 对象类别码,见类注释
+  final String kind;
+
+  /// 依赖性质码,见类注释
+  final String degree;
+
+  /// 子对象:外键约束名下 PG 自动建的 `RI_ConstraintTrigger_*` 内部触发器
+  final List<DependentObject> children;
+
+  /// 展示用限定名:有模式层时 `模式.名`,否则只给名
+  String get qualifiedName => schema.isEmpty ? name : '$schema.$name';
+}
+
 /// 数据库驱动抽象:统一各数据库类型的元数据与数据访问接口。
 ///
 /// UI 层(连接树 / 表数据页)只依赖本接口,新增数据库类型时
@@ -311,9 +489,44 @@ abstract class DatabaseDriver {
   Future<DesignCandidates> readDesignCandidates(String database) async =>
       DesignCandidates.empty;
 
-  /// 获取视图 / 函数 / 过程的定义(CREATE 语句文本),供「设计视图 / 设计函数 /
-  /// 设计过程」展示与重写。[kind] 为 'view' / 'function' / 'procedure';
-  /// 不支持的驱动(如 SQLite 的函数、Access)返回 null。
+  /// 读取库级详情(默认字符集 / 排序规则),供右侧详情面板展示。
+  ///
+  /// 返回 `null` 表示该类型不提供这类信息,界面回退到基础展示;抛异常 = 读取失败。
+  /// 代价是一条系统目录 SQL,与列表查询同级,可安全地在选中时触发。
+  ///
+  /// 注:各驱动是 `implements DatabaseDriver`,**不会继承**这里的默认实现,
+  /// 新增本方法时每个驱动都要各补一个实现(不支持的返回 null)。
+  Future<DatabaseDetail?> readDatabaseDetail(String database) async => null;
+
+  /// 读取表级详情(引擎 / 行格式 / 大小 / 时间戳 / 估算行数等)。
+  ///
+  /// 语义同 [readDatabaseDetail]:返回 `null` 表示该类型不支持。
+  /// 实现**只读系统目录与引擎统计,绝不扫描数据**(见 [listTableRowEstimates]
+  /// 的同一条约束);精确行数由界面「获取行数」按钮走 [countTable]。
+  Future<TableDetail?> readTableDetail(String database, String table,
+          {String? schema}) async =>
+      null;
+
+  /// 读取某表的依赖清单,供详情面板「使用 / 被使用」两页展示。
+  ///
+  /// [usedBy] 为真 = 依赖本表的对象(本表**被**谁用);为假 = 本表用到的对象。
+  /// 返回 `null` 表示该类型没有可枚举的依赖目录,界面不出这两个页签;
+  /// 空列表是有效结果(这张表确实没有依赖关系)。
+  ///
+  /// 语义与代价同 [readTableDetail]:只读系统目录。PG 的 `pg_depend` 是
+  /// 唯一能给出「外键 / 索引 / 归属序列 / 自动生成的复合类型」这类反向引用的
+  /// 入口,MySQL 侧没有等价目录(只有正向的 `KEY_COLUMN_USAGE`),故不实现。
+  ///
+  /// 注:各驱动是 `implements DatabaseDriver`,**不会继承**这里的默认实现。
+  Future<List<DependentObject>?> readTableDependencies(
+          String database, String table,
+          {String? schema, bool usedBy = true}) async =>
+      null;
+
+  /// 获取视图 / 函数 / 过程 / 表 / 库的定义(CREATE 语句文本),供
+  /// 「设计视图 / 设计函数 / 设计过程」与详情面板的 DDL 页展示与重写。
+  /// [kind] 为 'view' / 'function' / 'procedure' / 'table' / 'database';
+  /// 不支持的组合返回 null。
   /// [schema] 非空时限定该模式下的对象。
   Future<String?> getDefinition(String database, String name, String kind,
       {String? schema});

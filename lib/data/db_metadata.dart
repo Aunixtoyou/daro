@@ -182,3 +182,53 @@ int? lengthFromBytes(int? maxLength, String type) {
       return null;
   }
 }
+
+/// 十进制千分位分组:`131072` → `131,072`。
+///
+/// 详情面板里的原始值一律用逗号分组(与引擎统计的常见展示一致),
+/// 不跟随界面语言:数字分组跟随语言会让 `1.234,56` 与 `1,234.56` 混在
+/// 同一张表里,反而更难核对。
+String formatThousands(int value) {
+  final negative = value < 0;
+  final digits = value.abs().toString();
+  final buf = StringBuffer(negative ? '-' : '');
+  for (var i = 0; i < digits.length; i++) {
+    if (i > 0 && (digits.length - i) % 3 == 0) buf.write(',');
+    buf.write(digits[i]);
+  }
+  return buf.toString();
+}
+
+/// 字节数 → 「人读值 (原始字节数)」,如 `131072` → `128.00 KB (131,072)`。
+///
+/// 以 1024 进制换算(存储引擎按页分配,给的是二进制倍数);
+/// 小于 1 KiB 时保留 `bytes` 单位,与 `0 bytes (0)` 这类空表展示对齐。
+/// [null] 表示目录里取不到该值,返回 null 交界面显示占位符 —— 不能显示 0,
+/// 那会把「无数据」误呈现成「零字节」。
+String? formatByteSize(int? bytes) {
+  if (bytes == null) return null;
+  if (bytes < 1024) {
+    return '$bytes ${bytes == 1 ? 'byte' : 'bytes'} (${formatThousands(bytes)})';
+  }
+  const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+  var v = bytes / 1024;
+  var u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return '${v.toStringAsFixed(2)} ${units[u]} (${formatThousands(bytes)})';
+}
+
+/// 详情面板的时间戳展示:`2026-03-03T14:43:56` → `2026-03-03 14:43:56`。
+///
+/// 按服务器返回的原样文本显示(不做时区换算):目录里的时间是服务端本地
+/// 时间,换成客户端时区反而与 `SHOW CREATE TABLE` 等处的记录对不上。
+/// [null] = 目录未记录该时间(如 InnoDB 不维护 UPDATE_TIME),返回 null。
+String? formatDetailTimestamp(DateTime? value) {
+  if (value == null) return null;
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${value.year.toString().padLeft(4, '0')}-${two(value.month)}-'
+      '${two(value.day)} ${two(value.hour)}:${two(value.minute)}:'
+      '${two(value.second)}';
+}

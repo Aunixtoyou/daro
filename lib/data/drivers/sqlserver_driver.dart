@@ -811,6 +811,24 @@ class SqlServerDriver implements DatabaseDriver {
 
   static String _text(Object? v) => v?.toString() ?? '';
 
+  /// 库 / 表详情:本轮只实现了 MySQL 家族的详情面板,SQL Server 返回 null
+  /// 使界面回退到基础展示(大小 / 行格式需查 sys.dm_db_index_physical_stats,
+  /// 权限与折算规则差异大,不做半套)。
+  @override
+  Future<DatabaseDetail?> readDatabaseDetail(String database) async => null;
+
+  @override
+  Future<TableDetail?> readTableDetail(String database, String table,
+          {String? schema}) async =>
+      null;
+
+  /// 依赖关系(使用 / 被使用)是 PostgreSQL 专属页签,不实现
+  @override
+  Future<List<DependentObject>?> readTableDependencies(
+          String database, String table,
+          {String? schema, bool usedBy = true}) async =>
+      null;
+
   @override
   Future<String?> getDefinition(String database, String name, String kind,
       {String? schema}) async {

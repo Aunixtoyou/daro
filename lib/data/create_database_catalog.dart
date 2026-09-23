@@ -7,15 +7,19 @@ library;
 
 import 'db_create_options.dart';
 
-/// PostgreSQL 扩展(name + 用途说明)
+/// PostgreSQL 扩展(name + 用途说明 + 版本)
 class PgExtensionInfo {
-  const PgExtensionInfo(this.name, [this.comment = '']);
+  const PgExtensionInfo(this.name, [this.comment = '', this.version = '']);
 
   /// 扩展名,直接用于 `CREATE EXTENSION "<name>"`
   final String name;
 
   /// 用途说明(列表右侧展示)
   final String comment;
+
+  /// 版本号:未安装时取 `default_version`(可装版本),已安装时取 `extversion`。
+  /// 兜底候选列表里没有版本信息,为空串。
+  final String version;
 }
 
 /// 新建库对话框的下拉候选集合

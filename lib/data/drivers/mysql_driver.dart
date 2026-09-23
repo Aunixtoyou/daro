@@ -153,6 +153,22 @@ class MysqlDriver implements DatabaseDriver {
       mysqlReadTableDesign(await _get(), database, table, 'mysql');
 
   @override
+  Future<DatabaseDetail?> readDatabaseDetail(String database) async =>
+      mysqlReadDatabaseDetail(await _get(), database);
+
+  @override
+  Future<TableDetail?> readTableDetail(String database, String table,
+          {String? schema}) async =>
+      mysqlReadTableDetail(await _get(), database, table);
+
+  /// 依赖关系(使用 / 被使用)是 PostgreSQL 专属页签,不实现
+  @override
+  Future<List<DependentObject>?> readTableDependencies(
+          String database, String table,
+          {String? schema, bool usedBy = true}) async =>
+      null;
+
+  @override
   Future<List<String>> listDatabases() async {
     final conn = await _get();
     final rs = await conn.execute('SHOW DATABASES');
@@ -461,6 +477,10 @@ class MysqlDriver implements DatabaseDriver {
       'view' => 'SHOW CREATE VIEW ${_quoted(database)}.${_quoted(name)}',
       'procedure' =>
         'SHOW CREATE PROCEDURE ${_quoted(database)}.${_quoted(name)}',
+      // 详情面板的 DDL 页:MySQL 的表定义由引擎给出原文,无需自行重建
+      'table' => 'SHOW CREATE TABLE ${_quoted(database)}.${_quoted(name)}',
+      // 库没有「所在库」这一层,对象名即目标
+      'database' => 'SHOW CREATE DATABASE ${_quoted(name)}',
       _ => 'SHOW CREATE FUNCTION ${_quoted(database)}.${_quoted(name)}',
     };
     final rs = await conn.execute(sql);
@@ -469,6 +489,8 @@ class MysqlDriver implements DatabaseDriver {
     final colName = switch (kind) {
       'view' => 'Create View',
       'procedure' => 'Create Procedure',
+      'table' => 'Create Table',
+      'database' => 'Create Database',
       _ => 'Create Function',
     };
     final cols = rs.cols.toList();
@@ -476,6 +498,69 @@ class MysqlDriver implements DatabaseDriver {
     if (idx < 0) return null;
     return row.colAt(idx);
   }
+}
+
+/// MySQL / MariaDB 共用的库级详情(`information_schema.SCHEMATA`)。
+///
+/// 库不存在时返回 null(而非抛异常):详情面板把它当作「无信息」处理。
+Future<DatabaseDetail?> mysqlReadDatabaseDetail(
+    MySQLConnection conn, String database) async {
+  final rs = await conn.execute(
+    'SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME '
+    'FROM information_schema.SCHEMATA '
+    "WHERE SCHEMA_NAME = '${database.replaceAll("'", "''")}'",
+  );
+  if (rs.rows.isEmpty) return null;
+  final row = rs.rows.first;
+  return DatabaseDetail(
+    name: database,
+    charset: row.colAt(0) ?? '',
+    collation: row.colAt(1) ?? '',
+  );
+}
+
+/// MySQL / MariaDB 共用的表级详情(`information_schema.TABLES` 单行)。
+///
+/// 一条目录查询取齐全部属性:引擎统计由服务端维护,读它不扫描数据,
+/// 因此选中表时即时调用是安全的(代价与列表查询同级)。
+/// [colAt] 一律返回字符串(NULL 返回 null),数字与时间在此就地解析;
+/// 解析失败(如 `0000-00-00 00:00:00` 零值日期)归一为 null,界面显示占位符。
+Future<TableDetail?> mysqlReadTableDetail(
+    MySQLConnection conn, String database, String table) async {
+  String lit(String v) => "'${v.replaceAll("'", "''")}'";
+  final rs = await conn.execute(
+    'SELECT ENGINE, ROW_FORMAT, TABLE_COLLATION, CREATE_OPTIONS, TABLE_COMMENT, '
+    'TABLE_ROWS, AUTO_INCREMENT, CREATE_TIME, UPDATE_TIME, CHECK_TIME, '
+    'DATA_LENGTH, INDEX_LENGTH, MAX_DATA_LENGTH, DATA_FREE '
+    'FROM information_schema.TABLES '
+    "WHERE TABLE_SCHEMA = ${lit(database)} AND TABLE_NAME = ${lit(table)}",
+  );
+  if (rs.rows.isEmpty) return null;
+  final row = rs.rows.first;
+  int? numAt(int i) => parseRowCount(row.colAt(i));
+  DateTime? timeAt(int i) {
+    final v = row.colAt(i)?.trim();
+    if (v == null || v.isEmpty) return null;
+    return DateTime.tryParse(v.replaceFirst(' ', 'T'));
+  }
+
+  return TableDetail(
+    name: table,
+    engine: row.colAt(0) ?? '',
+    rowFormat: row.colAt(1) ?? '',
+    collation: row.colAt(2) ?? '',
+    createOptions: row.colAt(3) ?? '',
+    comment: row.colAt(4) ?? '',
+    rowEstimate: numAt(5),
+    autoIncrement: numAt(6),
+    createTime: timeAt(7),
+    updateTime: timeAt(8),
+    checkTime: timeAt(9),
+    dataLength: numAt(10),
+    indexLength: numAt(11),
+    maxDataLength: numAt(12),
+    dataFree: numAt(13),
+  );
 }
 
 /// MySQL / MariaDB 共用的排序规则候选(`information_schema.COLLATIONS`)。
@@ -561,30 +646,30 @@ Future<DesignTable?> mysqlReadTableDesign(MySQLConnection conn,
   }
 
   // ── 约束列(一条约束多列时按 ORDINAL_POSITION 定序) ────────
-  final keyCols = <String, List<String>>{};
-  final keyRefCols = <String, List<String>>{};
   final kcuRs = await conn.execute(
-    'SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_COLUMN_NAME '
+    'SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, '
+    'REFERENCED_COLUMN_NAME, ORDINAL_POSITION '
     'FROM information_schema.KEY_COLUMN_USAGE '
     "WHERE TABLE_SCHEMA = $db AND TABLE_NAME = $tbl "
     'ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION',
   );
-  for (final row in kcuRs.rows) {
-    final name = row.colAt(0) ?? '';
-    if (name.isEmpty) continue;
-    final col = row.colAt(1) ?? '';
-    final refCol = row.colAt(2) ?? '';
-    if (col.isNotEmpty) (keyCols[name] ??= []).add(col);
-    if (refCol.isNotEmpty) (keyRefCols[name] ??= []).add(refCol);
-  }
-  String colsOf(String name) => (keyCols[name] ?? const <String>[]).join(', ');
-  String refColsOf(String name) =>
-      (keyRefCols[name] ?? const <String>[]).join(', ');
+  final kcu = parseMysqlKeyColumnUsage([
+    for (final row in kcuRs.rows)
+      [
+        row.colAt(0) ?? '',
+        row.colAt(1) ?? '',
+        row.colAt(2) ?? '',
+        row.colAt(3) ?? '',
+        row.colAt(4) ?? '',
+      ],
+  ]);
   for (final name in uniqueNames) {
-    design.uniqueKeys.add(DesignUniqueKey(name: name, columns: colsOf(name)));
+    design.uniqueKeys
+        .add(DesignUniqueKey(name: name, columns: kcu.localColumns(name)));
   }
   // 主键列标记(字段页「键」列的 钥匙 + 序号 靠它)
-  final pkSet = (keyCols[design.pkName] ?? const <String>[]).toSet();
+  final pkSet =
+      (kcu.localCols[design.pkName] ?? const <String>[]).toSet();
   if (pkSet.isNotEmpty) {
     for (final c in design.columns) {
       c.primaryKey = pkSet.contains(c.name);
@@ -631,10 +716,10 @@ Future<DesignTable?> mysqlReadTableDesign(MySQLConnection conn,
       final m = refMeta[name] ?? const ['', 'NO ACTION', 'NO ACTION', ''];
       design.foreignKeys.add(DesignForeignKey(
         name: name,
-        columns: colsOf(name),
+        columns: kcu.fkColumns(name),
         // MySQL / MariaDB 无独立模式层(库即模式),不填 refSchema,引用回当前库
         refTable: m[0],
-        refColumns: refColsOf(name),
+        refColumns: kcu.fkRefColumns(name),
         onDelete: m[1],
         onUpdate: m[2],
         matchAll: hasMatchOption && m[3].toUpperCase() == 'FULL',
@@ -700,4 +785,49 @@ Future<DesignTable?> mysqlReadTableDesign(MySQLConnection conn,
   if (tabRs.rows.isNotEmpty) design.tableComment = tabRs.rows.first.colAt(0) ?? '';
 
   return design;
+}
+
+/// [parseMysqlKeyColumnUsage] 的归组结果。
+class MysqlKeyUsage {
+  const MysqlKeyUsage(this.localCols, this.fkCols, this.fkRefCols);
+
+  /// 主键 / 唯一键:约束名 → 本表列(按 `ORDINAL_POSITION` 定序)
+  final Map<String, List<String>> localCols;
+
+  /// 外键:约束名 → 本表列 / 引用列
+  final Map<String, List<String>> fkCols;
+  final Map<String, List<String>> fkRefCols;
+
+  static String _of(Map<String, List<String>> m, String name) =>
+      (m[name] ?? const <String>[]).join(', ');
+
+  String localColumns(String name) => _of(localCols, name);
+  String fkColumns(String name) => _of(fkCols, name);
+  String fkRefColumns(String name) => _of(fkRefCols, name);
+}
+
+/// 归组 `information_schema.KEY_COLUMN_USAGE` 的行；每行按查询列序传
+/// `[约束名, 本表列, 引用表, 引用列, 列序号]`（NULL 传空串）。纯函数，便于离线回归。
+///
+/// 为什么不按约束名一把归：MySQL 的**索引名与外键约束名是两套命名空间**，
+/// 同名的 UNIQUE 与 FOREIGN KEY 可以合法共存（实测 `tc_etc` 两者都叫 `channel_id`）。
+/// 混在一个 map 里会把两条约束的列并成一串，生成
+/// `UNIQUE (\`channel_id\`, \`channel_id\`)` → 部署报 1060 Duplicate column name。
+/// 外键行以 `REFERENCED_TABLE_NAME` 非空识别；同名同序号只取首行，
+/// 因为 MySQL 会为外键附带引用侧索引的重复行。
+MysqlKeyUsage parseMysqlKeyColumnUsage(Iterable<List<String>> rows) {
+  final local = <String, List<String>>{};
+  final fk = <String, List<String>>{};
+  final fkRef = <String, List<String>>{};
+  final seen = <String>{};
+  for (final r in rows) {
+    final name = r[0];
+    if (name.isEmpty) continue;
+    final isFk = r[2].isNotEmpty;
+    if (!seen.add('${isFk ? 'f' : 'l'}$name ${r[4]}')) continue;
+    final bucket = isFk ? fk : local;
+    if (r[1].isNotEmpty) (bucket[name] ??= []).add(r[1]);
+    if (isFk && r[3].isNotEmpty) (fkRef[name] ??= []).add(r[3]);
+  }
+  return MysqlKeyUsage(local, fk, fkRef);
 }

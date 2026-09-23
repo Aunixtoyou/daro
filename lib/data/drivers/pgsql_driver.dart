@@ -1,5 +1,6 @@
 import 'package:postgres/postgres.dart' hide ConnectionInfo;
 
+import '../database_edit_catalog.dart';
 import '../db_data.dart';
 import '../db_metadata.dart';
 import '../sql_row_cap.dart';
@@ -21,6 +22,10 @@ class PgsqlDriver implements DatabaseDriver {
 
   /// 当前会话的模式(null = 未显式切换,走连接默认 search_path)
   String? _schema;
+
+  /// `server_version_num`,用于目录列名的版本适配(见 database_edit_catalog)。
+  /// 一次连接内不会变,缓存起来免得每个详情都多问一次。
+  int? _serverVersion;
 
   @override
   bool get isConnected => _connection != null && _connection!.isOpen;
@@ -757,8 +762,214 @@ class PgsqlDriver implements DatabaseDriver {
     return design;
   }
 
+  // ── 详情面板:库 / 表属性与依赖关系 ─────────────────────────────────────
+  // 三条查询都只读系统目录,不碰数据页;选中节点时触发一次,由
+  // ConnectionManager 缓存(见其 databaseDetail / tableDetail / tableDependencies)。
+
+  @override
+  Future<DatabaseDetail?> readDatabaseDetail(String database) async {
+    final conn = _get();
+    // 库属性 SQL 与「编辑数据库」对话框共用:列序是那边的解析契约,
+    // 这里只消费解析结果,不另写一份(两份各自适配 PG 18 的列名改名迟早会走偏)
+    final props = parseDatabasePropsRow(
+      await _textRows(conn.execute(
+          pgDatabasePropsSql(database,
+              pg18Plus: ((await _serverVersionNum()) ?? 0) >=
+                  kPgEncodingColumnRenamedVersion))),
+      database,
+    );
+    if (props == null) return null;
+    // OID 不在那条查询里(它不属于表单字段),单独取一次:pg_database 是共享
+    // 目录,一行一列,代价可忽略
+    final oid = await conn.execute(
+      'SELECT oid::text FROM pg_catalog.pg_database '
+      'WHERE datname = ${_lit(database)}',
+    );
+    return DatabaseDetail(
+      name: database,
+      charset: props.encoding,
+      collation: props.lcCollate,
+      oid: oid.isEmpty ? '' : _text(oid.first[0]),
+      owner: props.owner,
+      tablespace: props.tablespace,
+      connectionLimit: '${props.connectionLimit}',
+      comment: props.comment,
+    );
+  }
+
+  @override
+  Future<TableDetail?> readTableDetail(String database, String table,
+      {String? schema}) async {
+    final conn = _get();
+    final result = await conn.execute(
+      'SELECT c.oid::text, pg_catalog.pg_get_userbyid(c.relowner), c.relkind, '
+      'c.reltuples::bigint, c.relispartition, '
+      "(SELECT string_agg(pn.nspname || '.' || pc.relname, ', ' "
+      'ORDER BY ih.inhseqno) '
+      'FROM pg_catalog.pg_inherits ih '
+      'JOIN pg_catalog.pg_class pc ON pc.oid = ih.inhparent '
+      'JOIN pg_catalog.pg_namespace pn ON pn.oid = pc.relnamespace '
+      'WHERE ih.inhrelid = c.oid), '
+      '(SELECT ts.spcname FROM pg_catalog.pg_tablespace ts '
+      'WHERE ts.oid = c.reltablespace), '
+      "(SELECT split_part(o, '=', 2) FROM unnest(c.reloptions) AS o "
+      "WHERE o LIKE 'fillfactor=%' LIMIT 1), "
+      // ACL 逐行拼接用 chr(10):写 E'\n' 的话 Dart 会先把 \n 变成真换行
+      'array_to_string(c.relacl, chr(10)), '
+      "obj_description(c.oid, 'pg_class'), "
+      "'with_oids' = ANY(c.reloptions) "
+      'FROM pg_catalog.pg_class c '
+      'JOIN pg_catalog.pg_namespace nc ON nc.oid = c.relnamespace '
+      'WHERE nc.nspname = ${_lit(schema ?? _schemaOrPublic)} '
+      'AND c.relname = ${_lit(table)}',
+    );
+    if (result.isEmpty) return null;
+    final row = result.first;
+    String at(int i) => _text(row[i]);
+    bool truthy(int i) {
+      final v = at(i);
+      return v == 't' || v == 'true';
+    }
+
+    // 同一个 pg_inherits 结果按 relispartition 分流:分区表的父表是「分区属于」,
+    // 普通继承才是「Inherits From」——两者混显示会误导(Navicat 也分开)
+    final parents = at(5);
+    final isPartition = truthy(4);
+    final est = int.tryParse(at(3));
+    return TableDetail(
+      name: table,
+      oid: at(0),
+      owner: at(1),
+      tableType: at(2),
+      // reltuples = -1 是「从未 ANALYZE」的哨兵,不是「这张表有 -1 行」
+      rowEstimate: (est == null || est < 0) ? null : est,
+      partitionOf: isPartition ? parents : '',
+      inheritsFrom: isPartition ? '' : parents,
+      tablespace: at(6),
+      fillFactor: at(7),
+      acl: at(8),
+      comment: at(9),
+      // PG 12 起 WITH OIDS 被移除,reloptions 里永远不会再出现该项 → false
+      hasOids: truthy(10),
+    );
+  }
+
+  @override
+  Future<List<DependentObject>?> readTableDependencies(
+      String database, String table,
+      {String? schema, bool usedBy = true}) async {
+    final conn = _get();
+    final sch = _lit(schema ?? _schemaOrPublic);
+    final tbl = _lit(table);
+    // 方向只换两组列名:「被使用」列的是引用本表的那些对象(refobjid 指向本表),
+    // 「使用」列的是本表引用的对象(objid 是本表)。解析目录 objs 两向复用。
+    final (srcCls, srcId) =
+        usedBy ? ('d.classid', 'd.objid') : ('d.refclassid', 'd.refobjid');
+    final (selfCls, selfId) =
+        usedBy ? ('d.refclassid', 'd.refobjid') : ('d.classid', 'd.objid');
+    final rows = await conn.execute(
+      'WITH t AS (SELECT c.oid FROM pg_catalog.pg_class c '
+      'JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace '
+      'WHERE n.nspname = $sch AND c.relname = $tbl), '
+      // 本表名下的约束:表对其它表的依赖不直接记在表上,而是记在它的
+      // 外键 / 检查约束上(pg_depend 里 classid = pg_constraint)
+      'cons AS (SELECT k.oid FROM pg_catalog.pg_constraint k, t '
+      'WHERE k.conrelid = t.oid), '
+      'objs AS ($kPgDependObjsSql) '
+      // 同一条依赖会按列重复记(引用到的每一列一行),DISTINCT 折成对象级。
+      // `::text` 不是排版需要:objid 走扩展协议会按二进制 oid 返回,
+      // Dart 侧拿到的是 4 字节 UndecodedBytes,直接解码就抛 FormatException。
+      'SELECT DISTINCT $srcId::text AS id, o.sch, o.name, o.kind, d.deptype '
+      'FROM pg_catalog.pg_depend d '
+      'CROSS JOIN t '
+      'JOIN objs o ON o.cls = $srcCls::oid AND o.id = $srcId '
+      // 依赖的一端是「本表」或「本表的约束」
+      "WHERE (($selfCls = 'pg_catalog.pg_class'::regclass::oid "
+      'AND $selfId = t.oid) '
+      "OR ($selfCls = 'pg_catalog.pg_constraint'::regclass::oid "
+      'AND $selfId IN (SELECT oid FROM cons))) '
+      // 自依赖(表依赖自己的列、自己的外键指回自己)不是依赖关系
+      "AND NOT ($srcCls = 'pg_catalog.pg_class'::regclass::oid "
+      'AND $srcId = t.oid) '
+      // 系统模式下的对象(TOAST 表等)不给用户看
+      "AND (o.sch IS NULL OR o.sch NOT IN "
+      "('pg_catalog', 'information_schema', 'pg_toast')) "
+      'ORDER BY o.sch NULLS FIRST, o.name',
+    );
+
+    final entries = <(DependentObject, String)>[];
+    for (final row in rows) {
+      entries.add((
+        DependentObject(
+          schema: _text(row[1]),
+          name: _text(row[2]),
+          kind: _text(row[3]),
+          degree: _pgDependDegree(_text(row[4])),
+        ),
+        _text(row[0]),
+      ));
+    }
+
+    // 约束的内部触发器:PG 给每个外键偷偷建 4 个 RI_ConstraintTrigger_*,
+    // 它们不出现在 pg_depend 的对象级依赖里,只能按 tgconstraint 挂回父约束下
+    final children = <String, List<DependentObject>>{};
+    final conIds = [
+      for (final (o, id) in entries)
+        if (_pgConstraintKinds.contains(o.kind) && int.tryParse(id) != null) id,
+    ];
+    if (conIds.isNotEmpty) {
+      final trg = await conn.execute(
+        'SELECT tg.tgconstraint::text, tg.tgname, n.nspname '
+        'FROM pg_catalog.pg_trigger tg '
+        'JOIN pg_catalog.pg_class c ON c.oid = tg.tgrelid '
+        'JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace '
+        'WHERE tg.tgisinternal AND tg.tgconstraint IN (${conIds.join(',')}) '
+        'ORDER BY tg.oid',
+      );
+      for (final row in trg) {
+        children
+            .putIfAbsent(_text(row[0]), () => [])
+            .add(DependentObject(
+              schema: _text(row[2]),
+              name: _text(row[1]),
+              kind: 'TRIGGER',
+              degree: 'INTERNAL',
+            ));
+      }
+    }
+
+    return [
+      for (final (o, id) in entries)
+        if ((children[id] ?? const []).isNotEmpty)
+          DependentObject(
+            schema: o.schema,
+            name: o.name,
+            kind: o.kind,
+            degree: o.degree,
+            children: children[id]!,
+          )
+        else
+          o,
+    ];
+  }
+
+  /// 结果集 → 纯字符串矩阵:让 `database_edit_catalog` 里那套按 `List<List<String>>`
+  /// 写好的解析器能被驱动与 `runQuery` 两条路径共用。
+  Future<List<List<String>>> _textRows(Future<Result> query) async {
+    final result = await query;
+    return [
+      for (final row in result) [for (final v in row) _text(v)],
+    ];
+  }
+
+  /// `server_version_num`(缓存一次);读不到返回 null,调用方按旧版列名兜底。
+  Future<int?> _serverVersionNum() async {
+    if (_serverVersion != null) return _serverVersion;
+    final rows = await _textRows(_get().execute(kPgServerVersionSql));
+    return _serverVersion = parseServerVersion(rows);
+  }
+
   /// 设计器下拉候选:排序规则 / 运算符类别 / 表空间均直读系统目录。
-  ///
   /// 三者都是实例级对象(不按库过滤);名称去重后按字典序返回,候选可达
   /// 上千行(ICU 排序规则),ComboBox 弹层为 `ListView.builder`,不致于卡顿。
   @override
@@ -833,6 +1044,41 @@ class PgsqlDriver implements DatabaseDriver {
     final ref = schema == null || schema.isEmpty
         ? _quoted(name)
         : '${_quoted(schema)}.${_quoted(name)}';
+    if (kind == 'table') {
+      // PG 没有 `SHOW CREATE TABLE`,只能由目录数据重建。走设计器那套模型
+      // (readTableDesign + DdlBuilder)而不是另写一份拼装器:结构同步、
+      // 表设计器与详情面板从此输出同一份 DDL。
+      final design = await readTableDesign(database, name, schema: schema);
+      if (design == null) return null;
+      return DdlBuilder.buildPreview(design, _conn.typeId);
+    }
+    if (kind == 'database') {
+      final props = parseDatabasePropsRow(
+        await _textRows(conn.execute(pgDatabasePropsSql(name,
+            pg18Plus: ((await _serverVersionNum()) ?? 0) >=
+                kPgEncodingColumnRenamedVersion))),
+        name,
+      );
+      if (props == null) return null;
+      // 编码 / 排序规则建库后不可改,但「按现状导出一份能重建同构库」的
+      // DDL 仍要写出来(Navicat 的 DDL 页就是这么给的)
+      final clauses = <String>[
+        if (props.owner.isNotEmpty) 'OWNER = ${_quoted(props.owner)}',
+        if (props.encoding.isNotEmpty) 'ENCODING = ${_lit(props.encoding)}',
+        if (props.lcCollate.isNotEmpty) 'LC_COLLATE = ${_lit(props.lcCollate)}',
+        if (props.lcCtype.isNotEmpty) 'LC_CTYPE = ${_lit(props.lcCtype)}',
+        if (props.tablespace.isNotEmpty && props.tablespace != 'pg_default')
+          'TABLESPACE = ${_quoted(props.tablespace)}',
+        if (props.connectionLimit != -1)
+          'CONNECTION LIMIT = ${props.connectionLimit}',
+      ];
+      return [
+        'CREATE DATABASE ${_quoted(name)}'
+            '${clauses.isEmpty ? '' : '\nWITH ' + clauses.join('\n     ')};',
+        if (props.comment.isNotEmpty)
+          "COMMENT ON DATABASE ${_quoted(name)} IS ${_lit(props.comment)};",
+      ].join('\n\n');
+    }
     if (kind == 'view') {
       final result = await conn.execute(
         "SELECT 'CREATE OR REPLACE VIEW ${_quoted(name)} AS ' "
@@ -851,3 +1097,101 @@ class PgsqlDriver implements DatabaseDriver {
     }
   }
 }
+
+/// `pg_depend` 的对象解析表:把 `(classid, objid)` 二元组翻译成「模式 / 名称 / 类型」。
+///
+/// pg_depend 只记 OID,不含任何可读名,且引用方可能是十几张目录表中的任意一张,
+/// 所以依赖页必须有一次「全目录 UNION」。这里覆盖 Navicat 依赖页会列出的类型:
+/// 表 / 索引 / 序列 / 视图 / 物化视图 / 外部表 / 分区表 / 约束 / 类型 / 函数 /
+/// 排序规则 / 转换 / 默认值 / 模式 / 角色。
+///
+/// 两个容易踩的点:
+/// - 角色依赖在 pg_depend 里记的 classid 是 **pg_authid**(`pg_roles` 只是它的视图,
+///   没有独立 OID),所以 `cls` 用 pg_authid 而数据从 `pg_roles` 取;
+///   且 `pg_authid` 在 PG 16+ 对非超级用户**不可读**,直接查它会整页报权限错。
+/// - `relkind` / `contype` 是 `"char"`,与 regclass 的 oid 比较无碍,但 CASE 要按
+///   字母码写死,不能依赖驱动的解码结果。
+///
+/// 不含末尾分号:调用方以 `objs AS ($kPgDependObjsSql)` 嵌进 CTE。
+const String kPgDependObjsSql = '''
+SELECT 'pg_catalog.pg_class'::regclass::oid AS cls, c.oid AS id,
+       n.nspname AS sch, c.relname AS name,
+       CASE c.relkind
+         WHEN 'i' THEN 'INDEX'
+         WHEN 'I' THEN 'PARTITIONED INDEX'
+         WHEN 'S' THEN 'SEQUENCE'
+         WHEN 'v' THEN 'VIEW'
+         WHEN 'm' THEN 'MATERIALIZED VIEW'
+         WHEN 'f' THEN 'FOREIGN TABLE'
+         WHEN 'p' THEN 'PARTITIONED TABLE'
+         WHEN 't' THEN 'TOAST TABLE'
+         ELSE 'TABLE' END AS kind
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+UNION ALL
+SELECT 'pg_catalog.pg_constraint'::regclass::oid, con.oid,
+       n.nspname, con.conname,
+       CASE con.contype
+         WHEN 'p' THEN 'PRIMARY KEY'
+         WHEN 'u' THEN 'UNIQUE'
+         WHEN 'f' THEN 'FOREIGN KEY'
+         WHEN 'c' THEN 'CHECK'
+         WHEN 'x' THEN 'EXCLUSION'
+         WHEN 't' THEN 'NOT NULL'
+         ELSE 'CONSTRAINT' END
+FROM pg_catalog.pg_constraint con
+LEFT JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
+LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+UNION ALL
+SELECT 'pg_catalog.pg_type'::regclass::oid, t.oid, n.nspname, t.typname, 'TYPE'
+FROM pg_catalog.pg_type t
+JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+UNION ALL
+SELECT 'pg_catalog.pg_proc'::regclass::oid, p.oid, n.nspname, p.proname, 'FUNCTION'
+FROM pg_catalog.pg_proc p
+JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+UNION ALL
+SELECT 'pg_catalog.pg_collation'::regclass::oid, cl.oid, n.nspname, cl.collname,
+       'COLLATION'
+FROM pg_catalog.pg_collation cl
+JOIN pg_catalog.pg_namespace n ON n.oid = cl.collnamespace
+UNION ALL
+SELECT 'pg_catalog.pg_conversion'::regclass::oid, cv.oid, n.nspname, cv.conname,
+       'CONVERSION'
+FROM pg_catalog.pg_conversion cv
+JOIN pg_catalog.pg_namespace n ON n.oid = cv.connamespace
+UNION ALL
+SELECT 'pg_catalog.pg_attrdef'::regclass::oid, ad.oid, n.nspname,
+       c.relname || '_default', 'DEFAULT'
+FROM pg_catalog.pg_attrdef ad
+JOIN pg_catalog.pg_class c ON c.oid = ad.adrelid
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+UNION ALL
+SELECT 'pg_catalog.pg_namespace'::regclass::oid, n.oid, NULL, n.nspname, 'SCHEMA'
+FROM pg_catalog.pg_namespace n
+UNION ALL
+SELECT 'pg_catalog.pg_authid'::regclass::oid, r.oid, NULL,
+       r.rolname, 'ROLE'
+FROM pg_catalog.pg_roles r''';
+
+/// `pg_depend.deptype` 字母码 → 界面用的依赖性质标签(与 Navicat 用词一致)。
+///
+/// 传入前要先过驱动的 `_text()` 解码:`deptype` 是 `"char"`,
+/// 直接 `toString()` 得到的是 `Instance of 'UndecodedBytes'`,分支会全落空。
+String _pgDependDegree(String code) => switch (code) {
+      'i' => 'INTERNAL',
+      'a' => 'AUTO',
+      'e' || 'x' => 'EXTENSION',
+      _ => 'NORMAL',
+    };
+
+/// 会带内部触发器子项的约束类型(PG 给每个外键偷偷建 4 个
+/// `RI_ConstraintTrigger_*`,`pg_depend` 不记它们,只能按 `tgconstraint` 挂回父约束)
+const Set<String> _pgConstraintKinds = {
+  'FOREIGN KEY',
+  'PRIMARY KEY',
+  'UNIQUE',
+  'CHECK',
+  'NOT NULL',
+  'EXCLUSION',
+};

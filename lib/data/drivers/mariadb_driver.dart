@@ -5,7 +5,12 @@ import '../sql_row_cap.dart';
 import '../table_design.dart';
 import 'db_driver.dart';
 import 'mysql_driver.dart'
-    show mysqlCollationNames, mysqlReadTableDesign, openMysqlConnection;
+    show
+        mysqlCollationNames,
+        mysqlReadDatabaseDetail,
+        mysqlReadTableDesign,
+        mysqlReadTableDetail,
+        openMysqlConnection;
 
 /// MariaDB 驱动(纯 Dart 实现,基于 mysql_client)。
 ///
@@ -62,6 +67,23 @@ class MariadbDriver implements DatabaseDriver {
   Future<DesignTable?> readTableDesign(String database, String table,
           {String? schema}) async =>
       mysqlReadTableDesign(await _get(), database, table, 'mariadb');
+
+  /// 库 / 表详情:与 MySQL 共用同一套 `information_schema` 取数逻辑
+  @override
+  Future<DatabaseDetail?> readDatabaseDetail(String database) async =>
+      mysqlReadDatabaseDetail(await _get(), database);
+
+  @override
+  Future<TableDetail?> readTableDetail(String database, String table,
+          {String? schema}) async =>
+      mysqlReadTableDetail(await _get(), database, table);
+
+  /// 依赖关系(使用 / 被使用)是 PostgreSQL 专属页签,不实现
+  @override
+  Future<List<DependentObject>?> readTableDependencies(
+          String database, String table,
+          {String? schema, bool usedBy = true}) async =>
+      null;
 
   /// 设计器下拉候选:与 MySQL 同源(只有排序规则目录)。
   @override
@@ -372,6 +394,10 @@ class MariadbDriver implements DatabaseDriver {
       'view' => 'SHOW CREATE VIEW ${_quoted(database)}.${_quoted(name)}',
       'procedure' =>
         'SHOW CREATE PROCEDURE ${_quoted(database)}.${_quoted(name)}',
+      // 详情面板的 DDL 页:表定义由引擎给出原文,无需自行重建
+      'table' => 'SHOW CREATE TABLE ${_quoted(database)}.${_quoted(name)}',
+      // 库没有「所在库」这一层,对象名即目标
+      'database' => 'SHOW CREATE DATABASE ${_quoted(name)}',
       _ => 'SHOW CREATE FUNCTION ${_quoted(database)}.${_quoted(name)}',
     };
     final rs = await conn.execute(sql);
@@ -380,6 +406,8 @@ class MariadbDriver implements DatabaseDriver {
     final colName = switch (kind) {
       'view' => 'Create View',
       'procedure' => 'Create Procedure',
+      'table' => 'Create Table',
+      'database' => 'Create Database',
       _ => 'Create Function',
     };
     final cols = rs.cols.toList();

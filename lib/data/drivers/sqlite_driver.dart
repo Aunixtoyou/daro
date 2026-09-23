@@ -284,6 +284,23 @@ class SqliteDriver implements DatabaseDriver {
   Future<DesignCandidates> readDesignCandidates(String database) async =>
       DesignCandidates.empty;
 
+  /// 库 / 表详情:SQLite 文件即库,无字符集 / 引擎 / 分区大小这类目录统计,
+  /// 返回 null 使详情面板回退到基础展示。
+  @override
+  Future<DatabaseDetail?> readDatabaseDetail(String database) async => null;
+
+  @override
+  Future<TableDetail?> readTableDetail(String database, String table,
+          {String? schema}) async =>
+      null;
+
+  /// 依赖关系(使用 / 被使用)是 PostgreSQL 专属页签,不实现
+  @override
+  Future<List<DependentObject>?> readTableDependencies(
+          String database, String table,
+          {String? schema, bool usedBy = true}) async =>
+      null;
+
   @override
   Future<String?> getDefinition(String database, String name, String kind,
       {String? schema}) async {

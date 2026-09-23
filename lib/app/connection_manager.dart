@@ -107,6 +107,17 @@ class ConnectionManager extends ChangeNotifier {
   /// "连接名|数据库" 或 "连接名|数据库|模式" → 表列表加载状态
   final _tableStates = <String, TableListState>{};
 
+  /// "连接名|数据库" → 库级详情(字符集 / 排序规则)。
+  /// 详情面板选中即查,缓存使来回点击同一节点不重复发目录查询。
+  final _dbDetails = <String, DatabaseDetail>{};
+
+  /// "连接名|数据库|模式|表名" → 表级详情(引擎 / 大小 / 时间戳 / 估算行数)。
+  /// 键里的模式一律展开成字符串(`''` 表示库级),避免 null 与空串形成两份缓存。
+  final _tableDetails = <String, TableDetail>{};
+
+  /// "连接名|数据库|模式|表名|方向" → 表依赖(「使用 / 被使用」两页各一份)。
+  final _tableDeps = <String, List<DependentObject>>{};
+
   DatabaseListState databaseStateOf(String connection) =>
       _databaseStates[connection] ??= DatabaseListState();
 
@@ -599,6 +610,99 @@ class ConnectionManager extends ChangeNotifier {
     }
   }
 
+  /// 读取库级详情(右侧详情面板用)。
+  ///
+  /// 命中缓存直接返回,[refresh] 为 true 时强制重取(面板的重新加载走它)。
+  /// 返回 `null` = 该类型不提供这类信息,界面回退到基础展示;
+  /// 读取失败向上抛异常:面板就地显示错误,而不是把「无权限」误呈现成「无属性」。
+  Future<DatabaseDetail?> databaseDetail(ConnectionInfo conn, String database,
+      {bool refresh = false}) async {
+    final k = '${conn.name}|$database';
+    if (!refresh) {
+      final hit = _dbDetails[k];
+      if (hit != null) return hit;
+    }
+    final driver = await _driverFor(conn);
+    DatabaseDetail? detail;
+    try {
+      await driver.useDatabase(database);
+      detail = await driver.readDatabaseDetail(database);
+    } catch (e) {
+      // 可能是连接被服务端断开:丢弃驱动,重连后重试一次
+      await _drivers.remove(conn.name)?.close();
+      final fresh = await _driverFor(conn);
+      await fresh.useDatabase(database);
+      detail = await fresh.readDatabaseDetail(database);
+    }
+    if (detail != null) _dbDetails[k] = detail;
+    return detail;
+  }
+
+  /// 读取表级详情(右侧详情面板用)。语义同 [databaseDetail]。
+  ///
+  /// 只读系统目录与引擎统计,**不扫描数据**;精确行数由面板「获取行数」
+  /// 按钮显式调用 [countTable]。
+  Future<TableDetail?> tableDetail(ConnectionInfo conn, String database,
+      String table,
+      {String? schema, bool refresh = false}) async {
+    final k = '${conn.name}|$database|${schema ?? ''}|$table';
+    if (!refresh) {
+      final hit = _tableDetails[k];
+      if (hit != null) return hit;
+    }
+    final driver = await _driverFor(conn);
+    TableDetail? detail;
+    try {
+      await driver.useDatabase(database);
+      detail = await driver.readTableDetail(database, table, schema: schema);
+    } catch (e) {
+      await _drivers.remove(conn.name)?.close();
+      final fresh = await _driverFor(conn);
+      await fresh.useDatabase(database);
+      detail = await fresh.readTableDetail(database, table, schema: schema);
+    }
+    if (detail != null) _tableDetails[k] = detail;
+    return detail;
+  }
+
+  /// 读取表依赖(详情面板「使用 / 被使用」两页)。语义同 [tableDetail]。
+  ///
+  /// [usedBy] 为 true 列「被谁引用」,false 列「本表引用了谁」——两向各自缓存,
+  /// 同一个键不会互相覆盖。返回 `null` = 该类型无依赖页(只有 PostgreSQL 实现)。
+  Future<List<DependentObject>?> tableDependencies(ConnectionInfo conn,
+      String database, String table,
+      {String? schema, bool usedBy = true, bool refresh = false}) async {
+    final k =
+        '${conn.name}|$database|${schema ?? ''}|$table|${usedBy ? 'u' : 's'}';
+    if (!refresh) {
+      final hit = _tableDeps[k];
+      if (hit != null) return hit;
+    }
+    final driver = await _driverFor(conn);
+    List<DependentObject>? deps;
+    try {
+      await driver.useDatabase(database);
+      deps = await driver
+          .readTableDependencies(database, table, schema: schema, usedBy: usedBy);
+    } catch (e) {
+      await _drivers.remove(conn.name)?.close();
+      final fresh = await _driverFor(conn);
+      await fresh.useDatabase(database);
+      deps = await fresh
+          .readTableDependencies(database, table, schema: schema, usedBy: usedBy);
+    }
+    if (deps != null) _tableDeps[k] = deps;
+    return deps;
+  }
+
+  /// 丢弃某连接下指定库的库级 / 表级详情缓存(结构变更后使其重新取数)
+  void _dropDetailCache(String connection, String database) {
+    _dbDetails.remove('$connection|$database');
+    _tableDetails.removeWhere(
+        (key, _) => key.startsWith('$connection|$database|'));
+    _tableDeps.removeWhere((key, _) => key.startsWith('$connection|$database|'));
+  }
+
   /// 清空某连接下指定库的模式 / 对象元数据缓存(删除数据库后调用,
   /// 避免旧库的对象状态残留;驱动连接保持不变)
   void clearDatabaseState(String connection, String database) {
@@ -606,6 +710,7 @@ class ConnectionManager extends ChangeNotifier {
     _schemaStates.removeWhere((key, _) => key == prefix);
     _tableStates.removeWhere(
         (key, _) => key == prefix || key.startsWith('$prefix|'));
+    _dropDetailCache(connection, database);
     notifyListeners();
   }
 
@@ -615,6 +720,7 @@ class ConnectionManager extends ChangeNotifier {
     final prefix = '$connection|$database|$schema';
     _tableStates.removeWhere(
         (key, _) => key == prefix || key.startsWith('$prefix|'));
+    _dropDetailCache(connection, database);
     notifyListeners();
   }
 
@@ -675,6 +781,9 @@ class ConnectionManager extends ChangeNotifier {
   /// 列表已在显示时走**静默重载**:旧内容保留到新列表就绪后一次性替换,避免闪白。
   Future<void> refreshDatabase(ConnectionInfo conn, String database,
       {String? schema}) async {
+    // 结构变更(新建/删除/ALTER)后详情面板的引擎、大小、时间戳都可能已变化,
+    // 丢弃缓存使下次展示重新取数
+    _dropDetailCache(conn.name, database);
     final state = tableStateOf(conn.name, database, schema: schema);
     if (state.status != LoadStatus.loaded) {
       state
@@ -727,6 +836,9 @@ class ConnectionManager extends ChangeNotifier {
     _databaseStates.remove(connection);
     _schemaStates.removeWhere((key, _) => key.startsWith('$connection|'));
     _tableStates.removeWhere((key, _) => key.startsWith('$connection|'));
+    _dbDetails.removeWhere((key, _) => key.startsWith('$connection|'));
+    _tableDetails.removeWhere((key, _) => key.startsWith('$connection|'));
+    _tableDeps.removeWhere((key, _) => key.startsWith('$connection|'));
     notifyListeners();
   }
 
