@@ -18,12 +18,13 @@ import '../theme/app_theme.dart';
 import 'result_export_dialog.dart';
 
 /// 结果网格行高(与表数据页一致)
-const double _rowHeight = 26.0;
+const double _rowHeight = 22.0;
 
 /// 结果网格数据单元格的字号与左右内边距
 /// (自适应列宽要按同一套数值测量,否则量出来的宽度和实际渲染对不上)
+/// 内边距取 6 而非 base-ui 默认的 12:密集网格下 12 会白吃掉窄列的近半宽度。
 const double _cellFontSize = 12.5;
-const double _cellPaddingX = 8.0;
+const double _cellPaddingX = 6.0;
 
 /// 行号列宽
 const double _numberColWidth = 44.0;
@@ -93,7 +94,8 @@ class QueryPage extends StatefulWidget {
 }
 
 class _QueryPageState extends State<QueryPage> {
-  final CodeLineEditingController _controller = CodeLineEditingController.fromText('');
+  final CodeLineEditingController _controller =
+      CodeLineEditingController.fromText('');
   final FocusNode _focusNode = FocusNode();
 
   /// SQL 补全构建器(schema 感知,跟随运行上下文刷新数据源)
@@ -492,7 +494,10 @@ class _QueryPageState extends State<QueryPage> {
         if (!mounted || generation != _runGeneration) break;
         setState(() {
           _outcomes.add(
-            _StatementOutcome(sql: stmt, result: result, elapsedMs: stmtSw.elapsedMilliseconds),
+            _StatementOutcome(
+                sql: stmt,
+                result: result,
+                elapsedMs: stmtSw.elapsedMilliseconds),
           );
           // 执行过程中自动切到最新结果 tab
           _panelTabIndex = _outcomes.length;
@@ -502,7 +507,10 @@ class _QueryPageState extends State<QueryPage> {
         // 语句出错:记录错误并停止后续语句(同 pgAdmin)
         setState(() {
           _outcomes.add(
-            _StatementOutcome(sql: stmt, error: e.toString(), elapsedMs: stmtSw.elapsedMilliseconds),
+            _StatementOutcome(
+                sql: stmt,
+                error: e.toString(),
+                elapsedMs: stmtSw.elapsedMilliseconds),
           );
           _panelTabIndex = _outcomes.length;
           _running = false;
@@ -521,8 +529,7 @@ class _QueryPageState extends State<QueryPage> {
   @override
   Widget build(BuildContext context) {
     final t = Tokens.of(context);
-    final panelVisible =
-        _running || _outcomes.isNotEmpty || _message != null;
+    final panelVisible = _running || _outcomes.isNotEmpty || _message != null;
     return Container(
       color: t.background,
       child: Column(
@@ -645,8 +652,8 @@ class _QueryPageState extends State<QueryPage> {
               maxHeight: 320,
               onOpenChanged: _onSchemaMenuOpen,
               trigger: ToolbarButton(
-                iconWidget:
-                    Icon(Icons.account_tree_outlined, size: 14, color: c.iconPrimary),
+                iconWidget: Icon(Icons.account_tree_outlined,
+                    size: 14, color: c.iconPrimary),
                 text: _schema ?? '默认模式',
                 showCaret: true,
                 outlined: true,
@@ -786,7 +793,8 @@ class _QueryPageState extends State<QueryPage> {
             leading: SizedBox(
               width: 16,
               height: 16,
-              child: Center(child: Icon(Icons.storage, size: 14, color: c.iconSuccess)),
+              child: Center(
+                  child: Icon(Icons.storage, size: 14, color: c.iconSuccess)),
             ),
             title: db,
             selected: db == _database,
@@ -936,8 +944,7 @@ class _QueryPageState extends State<QueryPage> {
           controller: editingController,
           notifier: notifier,
           textStyle: TextStyle(fontSize: 12.5, color: t.disabledForeground),
-          focusedTextStyle:
-              TextStyle(fontSize: 12.5, color: t.mutedForeground),
+          focusedTextStyle: TextStyle(fontSize: 12.5, color: t.mutedForeground),
           minNumberCount: 4,
         ),
       ),
@@ -1211,13 +1218,13 @@ class _QueryPageState extends State<QueryPage> {
     setState(() => _loadingMoreIndex = index);
     try {
       final more = await context.read<AppState>().connectionManager.runQuery(
-        conn,
-        outcome.sql,
-        database: _database,
-        schema: _schema,
-        limit: _resultLimit,
-        offset: cur.rows.length,
-      );
+            conn,
+            outcome.sql,
+            database: _database,
+            schema: _schema,
+            limit: _resultLimit,
+            offset: cur.rows.length,
+          );
       if (!mounted || generation != _runGeneration) return;
       outcome.result = QueryResult(
         columns: cur.columns,
@@ -1323,6 +1330,10 @@ class _ResultGridState extends State<_ResultGrid> {
 
   /// 用户拖过列头边框:本次结果集内尊重用户设的列宽,不再自动适配
   bool _manualColumnWidths = false;
+
+  /// 各列是否「值全是数字」:结果集不携带列类型元数据,只能按值判定,
+  /// 用于数值列右对齐。与 [_contentWidths] 同一时机算一次。
+  List<bool>? _numericCols;
 
   /// 结果网格多选单元格集合
   Set<(int, int)> _selectedCells = {};
@@ -1439,9 +1450,8 @@ class _ResultGridState extends State<_ResultGrid> {
   /// 右键单元格菜单(与表数据页同一交互口径)
   void _showCellMenu(int row, int col, Offset position) {
     final rows = _displayRows;
-    final cell = (row < rows.length && col < rows[row].length)
-        ? rows[row][col]
-        : '';
+    final cell =
+        (row < rows.length && col < rows[row].length) ? rows[row][col] : '';
     showContextMenu(
       context,
       position: position,
@@ -1515,66 +1525,80 @@ class _ResultGridState extends State<_ResultGrid> {
         final widths = _columnWidths!;
         final totalWidth =
             _numberColWidth + widths.fold<double>(0, (a, b) => a + b);
-        return ScrollBar(
-          controller: _hScrollController,
-          orientation: ScrollBarOrientation.horizontal,
-          thumbVisibility: true,
-          child: SingleChildScrollView(
-            controller: _hScrollController,
-            scrollDirection: Axis.horizontal,
-            child: SizedBox(
-              width: totalWidth,
-              child: ScrollBar(
-                controller: _vScrollController,
-                child: DataGridView(
-                  columns: [
-                    for (final column in columns)
-                      DataGridViewColumn(title: column),
-                  ],
-                  columnWidths: widths,
-                  onColumnResize: (index, newWidth) {
-                    setState(() {
-                      // 用户手动定过列宽:本次结果集内不再自动适配
-                      _manualColumnWidths = true;
-                      widths[index] = newWidth;
-                    });
-                  },
-                  sortColumn: _sortCol,
-                  sortAscending: _sortAsc,
-                  onHeaderSort: _sortBy,
-                  selectedCells: _selectedCells,
-                  anchorCell: _anchorCell,
-                  onCellContext: _showCellMenu,
-                  onCellsSelected: (cells) {
-                    setState(() {
-                      _selectedCells = cells;
-                      // 更新锚点:单选或 Ctrl+click 时取最后点击的单元格
-                      if (cells.length == 1) {
-                        _anchorCell = cells.first;
-                      }
-                    });
-                    // 选中后焦点移入结果面板,使 Ctrl+C/Ctrl+A 生效;
-                    // 点击 SQL 编辑器时焦点自然切走,快捷键回归编辑器
-                    _focusNode.requestFocus();
-                  },
-                  rowCount: rows.length,
-                  cellBuilder: (row, col) => Text(
-                    rows[row][col],
-                    style: const TextStyle(fontSize: _cellFontSize),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
+        // 纵向条必须挂在横向滚动区**之外**(与表数据页 _buildDataGrid 同理):
+        // 挂在内部时它画在内容右缘(=所有列宽之和),宽表一横向滚动整条就滑出视口。
+        // scrollbars:false 关掉桌面端为每个 Scrollable 自动补的隐式条,只留这两条。
+        return ScrollConfiguration(
+          behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+          child: ScrollBar(
+            controller: _vScrollController,
+            thumbVisibility: true,
+            child: ScrollBar(
+              controller: _hScrollController,
+              orientation: ScrollBarOrientation.horizontal,
+              thumbVisibility: true,
+              child: SingleChildScrollView(
+                controller: _hScrollController,
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: totalWidth,
+                  child: DataGridView(
+                    columns: [
+                      for (var i = 0; i < columns.length; i++)
+                        DataGridViewColumn(
+                          title: columns[i],
+                          alignment: _numericCols != null &&
+                                  i < _numericCols!.length &&
+                                  _numericCols![i]
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                        ),
+                    ],
+                    columnWidths: widths,
+                    onColumnResize: (index, newWidth) {
+                      setState(() {
+                        // 用户手动定过列宽:本次结果集内不再自动适配
+                        _manualColumnWidths = true;
+                        widths[index] = newWidth;
+                      });
+                    },
+                    sortColumn: _sortCol,
+                    sortAscending: _sortAsc,
+                    onHeaderSort: _sortBy,
+                    selectedCells: _selectedCells,
+                    anchorCell: _anchorCell,
+                    onCellContext: _showCellMenu,
+                    onCellsSelected: (cells) {
+                      setState(() {
+                        _selectedCells = cells;
+                        // 更新锚点:单选或 Ctrl+click 时取最后点击的单元格
+                        if (cells.length == 1) {
+                          _anchorCell = cells.first;
+                        }
+                      });
+                      // 选中后焦点移入结果面板,使 Ctrl+C/Ctrl+A 生效;
+                      // 点击 SQL 编辑器时焦点自然切走,快捷键回归编辑器
+                      _focusNode.requestFocus();
+                    },
+                    rowCount: rows.length,
+                    cellBuilder: (row, col) => Text(
+                      rows[row][col],
+                      style: const TextStyle(fontSize: _cellFontSize),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                    rowHeight: _rowHeight,
+                    showRowNumbers: true,
+                    rowNumberWidth: _numberColWidth,
+                    headerColor: t.secondary,
+                    gridLineColor: t.gridLine,
+                    cellPaddingX: _cellPaddingX,
+                    rowHoverColor: Color.alphaBlend(
+                      t.foreground.withValues(alpha: 0.06),
+                      t.background,
+                    ),
+                    verticalScrollController: _vScrollController,
                   ),
-                  rowHeight: _rowHeight,
-                  showRowNumbers: true,
-                  rowNumberWidth: _numberColWidth,
-                  headerColor: t.secondary,
-                  gridLineColor: t.gridLine,
-                  cellPaddingX: _cellPaddingX,
-                  rowHoverColor: Color.alphaBlend(
-                    t.foreground.withValues(alpha: 0.06),
-                    t.background,
-                  ),
-                  verticalScrollController: _vScrollController,
                 ),
               ),
             ),
@@ -1599,6 +1623,7 @@ class _ResultGridState extends State<_ResultGrid> {
     var content = _contentWidths;
     if (content == null || content.length != columns.length) {
       content = _contentWidths = _measureColumnWidths(context, columns, rows);
+      _numericCols = _detectNumericColumns(columns.length, rows);
     }
     // 用户手动拖过列宽:只保证长度对齐,不再覆盖用户的选择
     if (_manualColumnWidths) {
@@ -1656,6 +1681,30 @@ class _ResultGridState extends State<_ResultGrid> {
     );
   }
 
+  /// 数值列判定(按值):某列所有非空值都能按数字解析才右对齐。
+  /// 空串(驱动把 NULL 渲染成空)不参与判定,且要求至少出现一个数字值,
+  /// 否则整列皆空 / 全空的列会被误判成数值列。
+  static List<bool> _detectNumericColumns(
+      int columnCount, List<List<String>> rows) {
+    final result = List<bool>.filled(columnCount, false);
+    for (var c = 0; c < columnCount; c++) {
+      var numeric = true;
+      var seen = false;
+      for (final r in rows) {
+        if (c >= r.length) continue;
+        final v = r[c].trim();
+        if (v.isEmpty) continue;
+        if (num.tryParse(v) == null) {
+          numeric = false;
+          break;
+        }
+        seen = true;
+      }
+      result[c] = numeric && seen;
+    }
+    return result;
+  }
+
   static bool _sameWidths(List<double> a, List<double> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
@@ -1668,7 +1717,6 @@ class _ResultGridState extends State<_ResultGrid> {
 // ────────────────────────────────────────────────────────────
 // SQL 美化(关键字表见 data/sql_completions.dart 的 kSqlKeywords)
 // ────────────────────────────────────────────────────────────
-
 
 /// 这些关键字前换行(LEFT/RIGHT 等放行前,即使不跟 JOIN 也断行,简化处理)
 const _breakBefore = {
@@ -1877,8 +1925,7 @@ class _SqlPromptPanelState extends State<_SqlPromptPanel> {
     final c = AppColors.of(context);
     final value = widget.notifier.value;
     final prompts = value.prompts;
-    final visible =
-        prompts.length.clamp(1, _SqlPromptPanel.maxVisibleItems);
+    final visible = prompts.length.clamp(1, _SqlPromptPanel.maxVisibleItems);
     return Container(
       width: _SqlPromptPanel.panelWidth,
       height: _SqlPromptPanel.itemHeight * visible + 2,
@@ -1898,8 +1945,8 @@ class _SqlPromptPanelState extends State<_SqlPromptPanel> {
         controller: _scroll,
         itemExtent: _SqlPromptPanel.itemHeight,
         itemCount: prompts.length,
-        itemBuilder: (context, index) => _buildItem(
-            t, c, value, index, prompts[index] as SqlPrompt),
+        itemBuilder: (context, index) =>
+            _buildItem(t, c, value, index, prompts[index] as SqlPrompt),
       ),
     );
   }

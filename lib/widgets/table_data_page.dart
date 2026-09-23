@@ -6,12 +6,19 @@ import '../app/app_state.dart';
 import '../data/cell_value_view.dart';
 import '../data/db_data.dart';
 import '../data/table_view.dart';
+import '../l10n/locale_config.dart';
 import '../theme/app_theme.dart';
 import 'data_export_wizard.dart';
 
 /// 表格行高 / 列宽(文件级常量,供页面与数据行共用)
-const double _rowHeight = 28.0;
+/// 行高取 22 而非 base-ui 控件默认的 28:数据行只需容纳一行 12.5px 文字,
+/// 28 会让整屏少看 20% 的行;编辑态由 InlineEditor 按同一高度压缩 Input。
+const double _rowHeight = 22.0;
 const double _colWidth = 150.0;
+
+/// 单元格左右留白:默认的 [DesktopTokens.controlPaddingX](12) 是给按钮用的,
+/// 密集网格里会白吃掉 150px 列宽的 1/6。
+const double _cellPaddingX = 6.0;
 
 /// 最左列(空白选中列)宽度:窄列,点击选中整行后显示指向右侧的箭头
 const double _numberColWidth = 22.0;
@@ -77,6 +84,76 @@ enum _ToolPanel {
 
   final String label;
 }
+
+/// 列类型文本 → 表头副标题前的小字形:日期时间族是时钟图标,数值族 '#',
+/// 文本族 'abc',其余不画。
+///
+/// 类型名来自各驱动元数据,格式繁多(`varchar(20)`、`bigint unsigned`、
+/// `decimal(10,2)`…),按词根匹配;`\b` 保证 int 不会误中 point。
+/// 日期时间族必须**先判**:否则 pg 的 `interval` 会被数值族词根 `int` 抢先命中。
+/// `@visibleForTesting` 仅为回归钉住这套归类规则。
+@visibleForTesting
+({String? glyph, IconData? icon}) columnTypeMarker(String? type) {
+  if (type == null || type.isEmpty) return (glyph: null, icon: null);
+  final t = type.toLowerCase();
+  if (_datetimeTypeRe.hasMatch(t)) return (glyph: null, icon: Icons.schedule);
+  if (_numericTypeRe.hasMatch(t)) return (glyph: '#', icon: null);
+  if (_textTypeRe.hasMatch(t)) return (glyph: 'abc', icon: null);
+  return (glyph: null, icon: null);
+}
+
+final _numericTypeRe = RegExp(
+    r'\b(int|integer|bigint|smallint|tinyint|mediumint|serial|decimal|'
+    r'numeric|float|double|real|money|smallmoney|number|fixed|bool)\w*\b');
+final _textTypeRe = RegExp(
+    r'\b(char|varchar|nchar|nvarchar|character|text|tinytext|mediumtext|'
+    r'longtext|ntext|citext|clob|enum|set|string|uuid)\w*\b');
+final _datetimeTypeRe = RegExp(
+    r'\b(date|datetime|smalldatetime|time|timestamp|abstime|reltime|'
+    r'interval|year)\w*\b');
+
+/// 数值列判定：数字右对齐便于按位比较，文本左对齐。
+/// 直接复用 [#] 标记的归类结果，避免表头标了数值而单元格对齐另有标准
+/// （`interval` 会被数值词根 `int` 抢先命中，只有 [columnTypeMarker] 的判序躲得过）。
+@visibleForTesting
+bool columnIsNumeric(String? type) => columnTypeMarker(type).glyph == '#';
+
+/// 日期时间列 → 行内编辑器的选择器模式；不适用选择器的类型返回 `null`。
+///
+/// 细分规则（`year` / `interval` / 旧 pg 的 `abstime`、`reltime` 都不是可点选的
+/// 时刻，一律不给选择器）：
+/// - 同时含日期与时间词根（`datetime` / `timestamp` / `smalldatetime` /
+///   Access 的 `Date/Time`）→ 日期时间
+/// - 裸 `date` → 仅日期；裸 `time` / `timetz` → 仅时间
+/// 先判排除项再判组合，`time(6)` 与 `timestamp` 靠 `\b` 区分。
+@visibleForTesting
+DateTimePickerMode? columnDateTimeMode(String? type) {
+  if (type == null || type.isEmpty) return null;
+  final t = type.toLowerCase();
+  if (_noPickerTypeRe.hasMatch(t)) return null;
+  if (_dateTimeCompoundRe.hasMatch(t)) return DateTimePickerMode.dateTime;
+  if (_dateOnlyTypeRe.hasMatch(t)) return DateTimePickerMode.date;
+  if (_timeOnlyTypeRe.hasMatch(t)) return DateTimePickerMode.time;
+  return null;
+}
+
+final _noPickerTypeRe = RegExp(r'\b(year|interval|abstime|reltime)\w*\b');
+final _dateTimeCompoundRe = RegExp(r'datetime|timestamp|date\s*/\s*time');
+final _dateOnlyTypeRe = RegExp(r'^\s*date\b');
+final _timeOnlyTypeRe = RegExp(r'^\s*(time|timetz)\b');
+
+/// 日期时间选择弹窗的中文文案（base-ui 默认英文，宿主自带一份）。
+/// 本文件其余文案同样还是中文字面量，待 l10n 迁移时一并收进 ARB。
+const _dateTimePickerLabels = DateTimePickerLabels(
+  ok: '确定',
+  cancel: '取消',
+  time: '时间',
+  selectTime: '选择时间',
+  hour: '时',
+  minute: '分',
+  second: '秒',
+  weekdayLabels: ['周一', '周二', '周三', '周四', '周五', '周六', '周日'],
+);
 
 /// 一页的表数据:拉取时的原始行(组装 UPDATE/DELETE 的 WHERE 依据)+
 /// 可编辑副本(承载本地增删改)+ 行标识(>=0 为全局行号,<0 为本地新增行)
@@ -173,6 +250,15 @@ class _TableDataPageState extends State<TableDataPage> {
   /// Shift 连选锚点(最后一次单击 / Ctrl 加选的行号)
   int? _rowAnchor;
 
+  /// 单元格多选集合(框选 / Ctrl 加选 / Shift 矩形 / Ctrl+A 全选的结果)。
+  /// 存**数据列**坐标(与 `_selectedCol`、`_editing` 同一坐标系),
+  /// 隐藏 / 恢复列时不会漂移到别的列上。非空即单元格模式,与多行选中互斥。
+  final Set<(int, int)> _selectedCells = {};
+
+  /// 框选 / Shift 矩形连选的锚点格(数据列坐标)。
+  /// 活动单元格 = 锚点:区域扩大时它不变,故 `_selected` / `_selectedCol` 跟随它
+  (int, int)? _cellAnchor;
+
   /// 访问过的页缓存(页号 → 页数据):翻页往返秒开且保留本地修改;
   /// 排序 / 筛选 / 页大小变更 / 刷新时整体失效
   final Map<int, _PageState> _pageCache = {};
@@ -250,6 +336,10 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 本地新增行的行号计数器(递减分配负数行号)
   int _nextNewId = -1;
 
+  /// 待滚进可视区的行(当前页内行号):新增行落在页末,由渲染出该行的
+  /// 那一帧排 post-frame 回调滚过去;null = 无待办
+  int? _revealRow;
+
   /// 保存进行中
   bool _saving = false;
 
@@ -307,10 +397,17 @@ class _TableDataPageState extends State<TableDataPage> {
       if (_editing != null) return false;
       if (!_focusInPage) return false;
       if (event.logicalKey == LogicalKeyboardKey.keyC) {
-        _copySelectedRows();
+        _copySelection();
       } else {
         _pasteRowsFromClipboard();
       }
+      return true;
+    }
+    // Ctrl+A:全选本页单元格(编辑器里的 Ctrl+A 归文本框自己)
+    if (ctrl && event.logicalKey == LogicalKeyboardKey.keyA) {
+      if (_editing != null) return false;
+      if (!_focusInPage) return false;
+      _selectAllCells();
       return true;
     }
     // Del:整行选中(未选列)→ 确认后删除行;单元格选中 → 清空为 NULL
@@ -333,11 +430,15 @@ class _TableDataPageState extends State<TableDataPage> {
     return false;
   }
 
-  /// Del 键:整行选中 → 删除行(带确认);多行选中 → 一次确认整批删除;
-  /// 单元格选中 → 清空该格为 NULL
+  /// Del 键:多选单元格区域 → 区域内每格置 NULL;多行选中 → 一次确认整批删除;
+  /// 整行选中 → 删除该行(带确认);单元格选中 → 清空该格为 NULL
   void _deleteKey() {
     final pageData = _pageData;
     if (pageData == null) return;
+    if (_selectedCells.length > 1) {
+      _clearCellsToNull(_selectedCells);
+      return;
+    }
     if (_selectedRows.length > 1) {
       _deleteRows(_selectedRows.toList()..sort());
       return;
@@ -387,10 +488,7 @@ class _TableDataPageState extends State<TableDataPage> {
         _columnSearch = '';
         _cellEditorCell = null;
         _cellController.clear();
-        _selected = null;
-        _selectedCol = null;
-        _selectedRows.clear();
-        _rowAnchor = null;
+        _resetSelection();
       });
       _load();
     }
@@ -539,10 +637,7 @@ class _TableDataPageState extends State<TableDataPage> {
         _nextNewId = -1;
         _dirty = false;
         _editing = null;
-        _selected = null;
-        _selectedCol = null;
-        _selectedRows.clear();
-        _rowAnchor = null;
+        _resetSelection();
         _loading = false;
         _pageData = _PageState(
           originals: [for (final r in preview.rows) List<String>.of(r)],
@@ -581,23 +676,17 @@ class _TableDataPageState extends State<TableDataPage> {
     setState(() => _columnTypes = types);
   }
 
-  /// 类型文本 → 表头副标题前的小字形:数值族 '#',文本族 'abc',其余不画。
-  /// 类型名来自各驱动元数据,格式繁多(`varchar(20)`、`bigint unsigned`、
-  /// `decimal(10,2)`…),按词根匹配;`\b` 保证 int 不会误中 point / datetime。
-  static String? _typeGlyph(String? type) {
-    if (type == null || type.isEmpty) return null;
-    final t = type.toLowerCase();
-    if (_numericTypeRe.hasMatch(t)) return '#';
-    if (_textTypeRe.hasMatch(t)) return 'abc';
-    return null;
+  static DataGridViewColumn _headerColumn(String title, String? type) {
+    final marker = columnTypeMarker(type);
+    return DataGridViewColumn(
+      title: title,
+      subtitle: type,
+      subtitleGlyph: marker.glyph,
+      subtitleIcon: marker.icon,
+      alignment:
+          columnIsNumeric(type) ? Alignment.centerRight : Alignment.centerLeft,
+    );
   }
-
-  static final _numericTypeRe = RegExp(
-      r'\b(int|integer|bigint|smallint|tinyint|mediumint|serial|decimal|'
-      r'numeric|float|double|real|money|smallmoney|number|fixed|bool)\w*\b');
-  static final _textTypeRe = RegExp(
-      r'\b(char|varchar|nchar|nvarchar|character|text|tinytext|mediumtext|'
-      r'longtext|ntext|citext|clob|enum|set|string|uuid)\w*\b');
 
   /// 拉取第 [page] 页数据并设为当前页。
   /// 返回该页实际行数(0 表示越界空页,未改动 _pageData;负值表示失败)。
@@ -680,7 +769,8 @@ class _TableDataPageState extends State<TableDataPage> {
   }
 
   /// 上报分页 / 记录位置到 AppState,状态栏显示"第 xx 条记录（共 xx 条）于第 x 页"
-  /// 多行选中时改显示「已选 N 行」(见 TablePageStatus.selectedRowCount)
+  /// 选中多行 / 多选单元格区域时改显示「已选 N 行」(见 TablePageStatus.selectedRowCount,
+  /// 区域按覆盖到的行数计)
   void _reportStatus() {
     final total = _totalRows;
     final (start, end) = _pageRange;
@@ -695,7 +785,9 @@ class _TableDataPageState extends State<TableDataPage> {
             currentRecord: record,
             page: _page + 1,
             pageSize: _pageSize,
-            selectedRowCount: _selectedRows.length,
+            selectedRowCount: _selectedRows.length > 1
+                ? _selectedRows.length
+                : {for (final (r, _) in _selectedCells) r}.length,
           ),
         );
   }
@@ -716,10 +808,7 @@ class _TableDataPageState extends State<TableDataPage> {
       setState(() {
         _page = page;
         _pageData = cached;
-        _selected = null;
-        _selectedCol = null;
-        _selectedRows.clear();
-        _rowAnchor = null;
+        _resetSelection();
         _statusMessage = null;
       });
       _syncCellEditor();
@@ -728,10 +817,7 @@ class _TableDataPageState extends State<TableDataPage> {
     }
     setState(() {
       _page = page;
-      _selected = null;
-      _selectedCol = null;
-      _selectedRows.clear();
-      _rowAnchor = null;
+      _resetSelection();
     });
     _syncCellEditor();
     final fetched = await _fetchPage(page);
@@ -828,14 +914,38 @@ class _TableDataPageState extends State<TableDataPage> {
       _nextNewId--;
       _dirty = true;
       _editing = null;
-      _selected = pageData.rows.length - 1;
-      _selectedCol = null;
-      _selectedRows
-        ..clear()
-        ..add(_selected!);
-      _rowAnchor = _selected;
+      _selectRowAt(pageData.rows.length - 1);
+      // 滚动范围要等渲染出这一行的那一帧才更新,故只登记意图、由该帧的
+      // build 排 post-frame 回调去滚(见 _buildDataGrid)
+      _revealRow = pageData.rows.length - 1;
     });
     _reportStatus();
+  }
+
+  /// 把指定行滚进纵向可视区(新增行落在页末,视口往往还停在顶部)。行号是当前
+  /// 页内下标,网格行高固定且 ListView 无内边距,故直接按像素算。
+  ///
+  /// 行数与视口高度都要晚一帧才反映到 ScrollPosition(「添加记录」会把底部
+  /// 确认条顶出来,网格矮 28px),故固定追两帧逐帧校正;已到位时是空操作。
+  void _scrollRowIntoView(int row, [int attempt = 0]) {
+    if (!mounted || !_vScrollController.hasClients) return;
+    final position = _vScrollController.position;
+    final top = row * _rowHeight;
+    final bottom = top + _rowHeight;
+    final viewTop = position.pixels;
+    final viewBottom = viewTop + position.viewportDimension;
+    final target = bottom > viewBottom
+        ? bottom - position.viewportDimension
+        : top < viewTop
+            ? top
+            : null;
+    if (target != null) {
+      _vScrollController.jumpTo(target.clamp(0.0, position.maxScrollExtent));
+    }
+    if (attempt < 2) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _scrollRowIntoView(row, attempt + 1));
+    }
   }
 
   /// 删除:移除当前选中记录(_selected 为当前页内行号)
@@ -870,10 +980,7 @@ class _TableDataPageState extends State<TableDataPage> {
       pageData.rows.removeAt(row);
       pageData.rowIds.removeAt(row);
       pageData.originals.removeAt(row);
-      _selected = null;
-      _selectedCol = null;
-      _selectedRows.clear();
-      _rowAnchor = null;
+      _resetSelection();
     });
     _syncCellEditor();
     _reportStatus();
@@ -915,18 +1022,19 @@ class _TableDataPageState extends State<TableDataPage> {
       }
       _dirty = true;
       _editing = null;
-      _selected = null;
-      _selectedCol = null;
-      _selectedRows.clear();
-      _rowAnchor = null;
+      _resetSelection();
     });
     _syncCellEditor();
     _reportStatus();
   }
 
-  /// 单击单元格:进入就地编辑(同时选中该单元格);row 为当前页内行号,
-  /// col 为网格列下标(隐藏列后与数据列不同,入口处换算)
+  /// 单击单元格(抬起且未拖拽):进入就地编辑(选中已由按下完成);
+  /// row 为当前页内行号,col 为网格列下标(隐藏列后与数据列不同,入口处换算)。
+  /// 按住 Ctrl / Shift 的点击只改选区,不起编辑器 —— 否则抬起补发的这一下
+  /// 会把刚加选 / 连选出来的多格重新收成单格
   void _startEdit(int row, int col) {
+    final kb = HardwareKeyboard.instance;
+    if (kb.isControlPressed || kb.isShiftPressed) return;
     final pageData = _pageData;
     if (pageData == null || row >= pageData.rows.length) return;
     final dataCol = _dataColOf(col);
@@ -936,6 +1044,10 @@ class _TableDataPageState extends State<TableDataPage> {
       _editing = (row, dataCol);
       _selected = row;
       _selectedCol = dataCol;
+      _cellAnchor = (row, dataCol);
+      _selectedCells
+        ..clear()
+        ..add((row, dataCol));
       _selectedRows.clear();
       _rowAnchor = row;
     });
@@ -1106,10 +1218,7 @@ class _TableDataPageState extends State<TableDataPage> {
       _nextNewId = -1;
       _dirty = false;
       _editing = null;
-      _selected = null;
-      _selectedCol = null;
-      _selectedRows.clear();
-      _rowAnchor = null;
+      _resetSelection();
     });
     _syncCellEditor();
     await _fetchPage(_page);
@@ -1127,6 +1236,8 @@ class _TableDataPageState extends State<TableDataPage> {
     final shift = kb.isShiftPressed;
     setState(() {
       _selectedCol = null;
+      _selectedCells.clear();
+      _cellAnchor = null;
       _editing = null;
       if (shift && _rowAnchor != null) {
         final a = _rowAnchor!;
@@ -1142,34 +1253,120 @@ class _TableDataPageState extends State<TableDataPage> {
         _rowAnchor = index;
         _selected = index;
       } else {
-        _selectedRows
-          ..clear()
-          ..add(index);
-        _rowAnchor = index;
-        _selected = index;
+        _selectRowAt(index);
       }
     });
     _syncCellEditor();
     _reportStatus();
   }
 
-  /// 选中单个单元格(点击单元格);col 为网格列下标
-  void _selectCell(int row, int col) {
+  /// 清空全部选中态(整行 / 多行 / 单元格)。调用方自行 setState
+  void _resetSelection() {
+    _selected = null;
+    _selectedCol = null;
+    _selectedRows.clear();
+    _rowAnchor = null;
+    _selectedCells.clear();
+    _cellAnchor = null;
+  }
+
+  /// 只选中某一行(新增行落点 / 右键「复制行」的落点):
+  /// 单元格多选态与当前编辑器一并作废
+  void _selectRowAt(int row) {
+    _selected = row;
+    _selectedCol = null;
+    _editing = null;
+    _selectedCells.clear();
+    _cellAnchor = null;
+    _selectedRows
+      ..clear()
+      ..add(row);
+    _rowAnchor = row;
+  }
+
+  /// 选中单元格集合:按下即触发,框选 / Ctrl 加选 / Shift 矩形连选都走这里。
+  /// cells 为**网格列**下标(隐藏列不会出现在其中),换算成数据列后存下。
+  /// 活动格 = 锚点:单击落到该格,连选 / 框选期间不动(与 Excel 一致)。
+  void _selectCells(Set<(int, int)> gridCells) {
+    final cells = {for (final (r, c) in gridCells) (r, _dataColOf(c))};
+    // Ctrl 取消到空集:单元格选中彻底清掉,不留一个"看不见的活动格"
+    if (cells.isEmpty) {
+      if (_selectedCells.isEmpty && _selected == null) return;
+      setState(() {
+        _selectedCells.clear();
+        _cellAnchor = null;
+        _selected = null;
+        _selectedCol = null;
+        _editing = null;
+      });
+      _syncCellEditor();
+      _reportStatus();
+      return;
+    }
+    final single = cells.length == 1 ? cells.first : null;
     // 点击正在编辑的单元格:仅定位光标,不抢焦点——
     // 抢焦点会让编辑器失焦提交,导致第二次点击退出编辑模式
-    final dataCol = _dataColOf(col);
     final editing = _editing;
-    final isEditingCell =
-        editing != null && editing.$1 == row && editing.$2 == dataCol;
+    final isEditingCell = single != null &&
+        editing != null &&
+        editing.$1 == single.$1 &&
+        editing.$2 == single.$2;
     if (!isEditingCell) _pageFocusNode.requestFocus();
-    if (_selected == row &&
-        _selectedCol == dataCol &&
-        _selectedRows.isEmpty) return;
+    // 锚点:Shift 连选沿用旧锚点(组件已按它算好矩形);单击取该格;
+    // Ctrl 加选取本次新增 / 取消的那格;框选扩出的多格不算"点击格",锚点留在起点
+    final anchor = HardwareKeyboard.instance.isShiftPressed
+        ? (_cellAnchor ?? single ?? cells.first)
+        : single ?? _changedCell(cells) ?? _cellAnchor ?? cells.first;
+    if (single != null &&
+        _selected == single.$1 &&
+        _selectedCol == single.$2 &&
+        _selectedRows.isEmpty &&
+        _selectedCells.length == 1) return;
     setState(() {
-      _selected = row;
-      _selectedCol = dataCol;
+      _selectedCells
+        ..clear()
+        ..addAll(cells);
+      _cellAnchor = anchor;
+      _selected = anchor.$1;
+      _selectedCol = anchor.$2;
       _selectedRows.clear();
-      _rowAnchor = row;
+      _rowAnchor = anchor.$1;
+      // 就地编辑器与框选互斥:留着它,拖出的选区会和抢焦点的输入框打架
+      if (cells.length > 1) _editing = null;
+    });
+    _syncCellEditor();
+    _reportStatus();
+  }
+
+  /// Ctrl 加选 / 去选时,从新旧集合之差里取出用户刚点的那一格;
+  /// 变化超过一格(框选)或说不清时返回 null
+  (int, int)? _changedCell(Set<(int, int)> next) {
+    final added = next.difference(_selectedCells);
+    if (added.length == 1) return added.first;
+    final removed = _selectedCells.difference(next);
+    if (removed.length == 1) return removed.first;
+    return null;
+  }
+
+  /// Ctrl+A:全选本页所有可见单元格(隐藏列不参与,与「所见即所选」一致)
+  void _selectAllCells() {
+    final pageData = _pageData;
+    final cols = _visibleCols;
+    if (pageData == null || pageData.rows.isEmpty || cols.isEmpty) return;
+    final first = (0, cols.first);
+    setState(() {
+      _editing = null;
+      _selectedRows.clear();
+      _rowAnchor = null;
+      _selectedCells
+        ..clear()
+        ..addAll({
+          for (var r = 0; r < pageData.rows.length; r++)
+            for (final c in cols) (r, c),
+        });
+      _cellAnchor = first;
+      _selected = first.$1;
+      _selectedCol = first.$2;
     });
     _syncCellEditor();
     _reportStatus();
@@ -1357,10 +1554,7 @@ class _TableDataPageState extends State<TableDataPage> {
     if (!await _confirmDiscardDirty()) return;
     setState(() {
       mutate();
-      _selected = null;
-      _selectedCol = null;
-      _selectedRows.clear();
-      _rowAnchor = null;
+      _resetSelection();
     });
     await _load();
   }
@@ -2227,7 +2421,7 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 文本视图:可编辑的多行编辑器
   Widget _cellBodyText(AppPalette t) {
     if (_cellEditorCell == null) {
-      return Center(child: _panelHint(t, '请先选中一个单元格'));
+      return Center(child: _panelHint(t, context.l10n.cellEditorPickCell));
     }
     return Padding(
       padding: const EdgeInsets.all(4),
@@ -2254,7 +2448,7 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 十六进制视图:只读转储
   Widget _cellBodyHex(AppPalette t) {
     if (_cellEditorCell == null) {
-      return Center(child: _panelHint(t, '请先选中一个单元格'));
+      return Center(child: _panelHint(t, context.l10n.cellEditorPickCell));
     }
     final dump = hexDump(_cellEditorValue);
     if (dump.isEmpty) {
@@ -2266,7 +2460,7 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 图像视图:识别 base64 编码的图片
   Widget _cellBodyImage(AppPalette t) {
     if (_cellEditorCell == null) {
-      return Center(child: _panelHint(t, '请先选中一个单元格'));
+      return Center(child: _panelHint(t, context.l10n.cellEditorPickCell));
     }
     final bytes = decodeBase64Image(_cellEditorValue);
     if (bytes == null) {
@@ -2289,7 +2483,7 @@ class _TableDataPageState extends State<TableDataPage> {
   /// 网页视图:识别 HTML 源码(只读展示源码,不做浏览器渲染)
   Widget _cellBodyWeb(AppPalette t) {
     if (_cellEditorCell == null) {
-      return Center(child: _panelHint(t, '请先选中一个单元格'));
+      return Center(child: _panelHint(t, context.l10n.cellEditorPickCell));
     }
     final value = _cellEditorValue;
     if (!looksLikeHtml(value)) {
@@ -2417,7 +2611,22 @@ class _TableDataPageState extends State<TableDataPage> {
     // 右键行是否落在多行选中范围内:决定「复制/删除」按几行显示
     final inMulti = _selectedRows.length > 1 && _selectedRows.contains(row);
     final nSel = inMulti ? _selectedRows.length : 1;
+    // 右键落在多选单元格区域内 → 顶部给整批动作(与 Excel 右键拖出的区域一致)
+    final inRegion =
+        _selectedCells.length > 1 && _selectedCells.contains((row, col));
+    final nCells = _selectedCells.length;
+    final l = context.l10n;
     return [
+      if (inRegion) ...[
+        MenuItem(
+            text: l.cellMenuSetNull('$nCells'),
+            onPressed: () => _clearCellsToNull(_selectedCells)),
+        MenuItem(
+            text: l.cellMenuCopy('$nCells'),
+            shortcut: 'Ctrl+C',
+            onPressed: _copySelectedCells),
+        const MenuSeparator(),
+      ],
       MenuItem(
           text: '设置为空白字符串', onPressed: () => _setCell(row, col, '')),
       MenuItem(
@@ -2433,25 +2642,7 @@ class _TableDataPageState extends State<TableDataPage> {
           onPressed: () {
             // 右键命中行若不在多行选中集合内,先把它设为唯一选中,
             // 保证「右键哪行就复制哪行」的直觉语义
-            if (!inMulti && _selectedRows.length > 1) {
-              setState(() {
-                _selectedRows
-                  ..clear()
-                  ..add(row);
-                _selected = row;
-                _selectedCol = null;
-                _rowAnchor = row;
-              });
-            } else if (!inMulti && _selected != row) {
-              setState(() {
-                _selected = row;
-                _selectedCol = null;
-                _selectedRows
-                  ..clear()
-                  ..add(row);
-                _rowAnchor = row;
-              });
-            }
+            if (!inMulti) setState(() => _selectRowAt(row));
             _copySelectedRows();
           }),
       MenuItem(text: '复制为', children: [
@@ -2636,6 +2827,7 @@ class _TableDataPageState extends State<TableDataPage> {
     if (pageData == null) return;
     final idx = _copyRowIndices();
     if (idx.isEmpty) return;
+    final l = context.l10n;
     final visible = _visibleCols;
     final lines = <String>[
       for (final r in idx)
@@ -2644,7 +2836,67 @@ class _TableDataPageState extends State<TableDataPage> {
     await Clipboard.setData(ClipboardData(text: lines.join('\n')));
     if (!mounted) return;
     setState(() =>
-        _statusMessage = '已复制 ${idx.length} 行到剪贴板');
+        _statusMessage = l.rowsCopiedToClipboard('${idx.length}'));
+  }
+
+  /// Ctrl+C 分派:选中多格(框选 / Ctrl 加选 / 全选)→ 复制该区域;
+  /// 否则按行复制(整行选中或多行选中)
+  void _copySelection() {
+    if (_selectedCells.length > 1) {
+      _copySelectedCells();
+      return;
+    }
+    _copySelectedRows();
+  }
+
+  /// 复制多选单元格:按行分组、同行按列升序,单元格 Tab 分隔、行 换行 分隔 ——
+  /// 与整行复制同格式,粘到 Excel 直接是规整表格。
+  Future<void> _copySelectedCells() async {
+    final pageData = _pageData;
+    if (pageData == null || _selectedCells.isEmpty) return;
+    final byRow = <int, List<int>>{};
+    for (final (r, c) in _selectedCells) {
+      if (r < 0 || r >= pageData.rows.length) continue;
+      if (c < 0 || c >= pageData.rows[r].length) continue;
+      byRow.putIfAbsent(r, () => []).add(c);
+    }
+    if (byRow.isEmpty) return;
+    final l = context.l10n;
+    final rowsOut = byRow.keys.toList()..sort();
+    final lines = <String>[
+      for (final r in rowsOut)
+        [
+          for (final c in byRow[r]!..sort()) //
+            _clipCell(pageData.rows[r][c])
+        ].join('\t'),
+    ];
+    await Clipboard.setData(ClipboardData(text: lines.join('\n')));
+    if (!mounted) return;
+    setState(() => _statusMessage =
+        l.cellsCopiedToClipboard('${_selectedCells.length}'));
+  }
+
+  /// 把给定单元格一律置为 NULL(本地副本,仍需「确认修改」落库)。
+  /// 整批一次 setState:全选时区域可达数千格,逐格 `_setCell` 会刷爆重建
+  void _clearCellsToNull(Set<(int, int)> cells) {
+    final pageData = _pageData;
+    if (pageData == null || cells.isEmpty) return;
+    final l = context.l10n;
+    var changed = 0;
+    setState(() {
+      for (final (r, c) in cells) {
+        if (r < 0 || r >= pageData.rows.length) continue;
+        if (c < 0 || c >= pageData.rows[r].length) continue;
+        if (pageData.rows[r][c] == 'NULL') continue;
+        pageData.rows[r][c] = 'NULL';
+        changed++;
+      }
+      if (changed == 0) return;
+      _dirty = true;
+      _editing = null;
+      _statusMessage = l.cellsClearedToNull('$changed', l.btnCommitChanges);
+    });
+    _syncCellEditor();
   }
 
   /// Ctrl+V / 右键「粘贴行」:剪贴板按行解析,每行按 Tab 拆单元格,
@@ -2691,6 +2943,8 @@ class _TableDataPageState extends State<TableDataPage> {
       _dirty = true;
       _editing = null;
       _selectedCol = null;
+      _selectedCells.clear();
+      _cellAnchor = null;
       _selectedRows
         ..clear()
         ..addAll(inserted);
@@ -2822,51 +3076,48 @@ class _TableDataPageState extends State<TableDataPage> {
       child: Row(
         children: [
           for (final panel in _ToolPanel.values)
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: Toggle(
-                selected: _openPanels.contains(panel),
-                variant: ToggleVariant.outline,
-                size: ToggleSize.small,
-                onChanged: (_) => _toggleToolPanel(panel),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CustomPaint(
-                      size: const Size(16, 16),
-                      painter: _toolPanelIconPainter(
-                          panel, ink: bodyTextColor(context), accent: t.accent),
+            Toggle(
+              selected: _openPanels.contains(panel),
+              variant: ToggleVariant.ghost,
+              size: ToggleSize.small,
+              onChanged: (_) => _toggleToolPanel(panel),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CustomPaint(
+                    size: const Size(16, 16),
+                    painter: _toolPanelIconPainter(
+                        panel, ink: bodyTextColor(context), accent: t.accent),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    panel.label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.1,
+                      decoration: TextDecoration.none,
+                      fontWeight: FontWeight.w400,
+                      color: bodyTextColor(context),
+                      fontFamilyFallback: chineseFontFamilyFallback,
                     ),
-                    const SizedBox(width: 5),
-                    Text(
-                      panel.label,
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.1,
-                        decoration: TextDecoration.none,
-                        fontWeight: FontWeight.w400,
-                        color: bodyTextColor(context),
-                        fontFamilyFallback: chineseFontFamilyFallback,
-                      ),
+                  ),
+                  // 筛选 & 排序有未应用的改动时点一个提示点
+                  if (panel == _ToolPanel.filter)
+                    ValueListenableBuilder<int>(
+                      valueListenable: _draftRevision,
+                      builder: (context, _, __) => _draftDirty
+                          ? Container(
+                              margin: const EdgeInsets.only(left: 5),
+                              width: 6,
+                              height: 6,
+                              decoration: const BoxDecoration(
+                                color: Color(0xffe8a33d),
+                                shape: BoxShape.circle,
+                              ),
+                            )
+                          : const SizedBox.shrink(),
                     ),
-                    // 筛选 & 排序有未应用的改动时点一个提示点
-                    if (panel == _ToolPanel.filter)
-                      ValueListenableBuilder<int>(
-                        valueListenable: _draftRevision,
-                        builder: (context, _, __) => _draftDirty
-                            ? Container(
-                                margin: const EdgeInsets.only(left: 5),
-                                width: 6,
-                                height: 6,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xffe8a33d),
-                                  shape: BoxShape.circle,
-                                ),
-                              )
-                            : const SizedBox.shrink(),
-                      ),
-                  ],
-                ),
+                ],
               ),
             ),
           // 提示文字吃掉剩余宽度:窗口窄时省略而不是撑破整行
@@ -3020,6 +3271,14 @@ class _TableDataPageState extends State<TableDataPage> {
     final pageData = _pageData!;
     final rows = pageData.rows;
     final visibleRows = end - start;
+    // 待显形行:本次 build 才把 rowCount 更新到位,滚动排在这帧之后
+    if (_revealRow case final reveal?) {
+      _revealRow = null;
+      if (reveal < visibleRows) {
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _scrollRowIntoView(reveal));
+      }
+    }
     // 可见列(数据列下标):列面板隐藏的列不参与渲染
     final cols = _visibleCols;
     // 列宽按**数据列**保存:隐藏 / 恢复某列时其它列宽度不跳变
@@ -3029,17 +3288,16 @@ class _TableDataPageState extends State<TableDataPage> {
       _columnWidths = widths;
     }
     final gridWidths = [for (final i in cols) widths[i]];
-    final selectedCol = _gridColOf(_selectedCol);
+    // 数据列 → 网格列:全选时选中集合有上千格,逐格线性 indexOf 会拖慢重建
+    final gridIndexOf = {for (var i = 0; i < cols.length; i++) cols[i]: i};
+    final anchor = _cellAnchor;
+    final anchorGridCol = anchor == null ? null : gridIndexOf[anchor.$2];
     final editingCol = _gridColOf(_editing?.$2);
     // 网格行高内即当前页内行号;列下标一律走 cols 换算
     final grid = DataGridView(
       columns: [
         for (final i in cols)
-          DataGridViewColumn(
-            title: columns[i],
-            subtitle: _columnTypes?[columns[i]],
-            subtitleGlyph: _typeGlyph(_columnTypes?[columns[i]]),
-          ),
+          _headerColumn(columns[i], _columnTypes?[columns[i]]),
       ],
       columnWidths: gridWidths,
       onColumnResize: (index, newWidth) {
@@ -3067,13 +3325,18 @@ class _TableDataPageState extends State<TableDataPage> {
       selectedRows: _selectedRows.isEmpty
           ? null
           : {for (final r in _selectedRows) if (r < visibleRows) r},
-      selectedCell: _selected != null &&
-              selectedCol != null &&
-              _selected! < visibleRows
-          ? (_selected!, selectedCol)
-          : null,
+      // 选中集合存数据列坐标,渲染前换算成网格列(隐藏列自动落不进表里)
+      selectedCells: _selectedCells.isEmpty
+          ? null
+          : {
+              for (final (r, c) in _selectedCells)
+                if (gridIndexOf[c] case final gc?) (r, gc),
+            },
+      anchorCell:
+          anchor == null || anchorGridCol == null ? null : (anchor.$1, anchorGridCol),
       selectedTextColor: t.accentForeground,
       rowHeight: _rowHeight,
+      cellPaddingX: _cellPaddingX,
       headerColor: t.secondary,
       headerFontSize: 12,
       gridLineColor: t.gridLine,
@@ -3085,7 +3348,9 @@ class _TableDataPageState extends State<TableDataPage> {
       verticalScrollController: _vScrollController,
       // 网格行号即当前页内行号
       onRowSelected: _selectRow,
-      onCellSelected: _selectCell,
+      // 传入 onCellsSelected 即开启框选模式:按下只选中(含框选 / Ctrl / Shift),
+      // 抬起且未拖拽才由 onCellTap 进入就地编辑
+      onCellsSelected: _selectCells,
       onCellTap: _startEdit,
       onCellContext: _onCellContext,
       editingCell: _editing != null &&
@@ -3101,12 +3366,23 @@ class _TableDataPageState extends State<TableDataPage> {
         // 正在编辑的单元格:就地编辑器(Enter / 失焦提交,Esc 取消)
         if (_editing?.$1 == row && _editing!.$2 == col) {
           return InlineEditor(
+            // 单元格元素会被 ListView 回收复用,而初值只在建 State 时读一次:
+            // 不带 key 的话从别的格子复用过来的编辑器会带着上一格的文本
+            key: ValueKey('cell-edit:$row:$col'),
             initialValue: rows[row][col],
             onChanged: (value) => _setCell(row, col, value),
             onCommit: (value) => _finishEdit(row, col, value),
             onCancel: _cancelEdit,
             height: _rowHeight,
-            contentPadding: EdgeInsets.zero,
+            // 编辑态文字与显示态同一水平留白、同一对齐方向,enter 编辑不跳位
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: _cellPaddingX),
+            textAlign: columnIsNumeric(_columnTypes?[columns[col]])
+                ? TextAlign.end
+                : TextAlign.start,
+            // 日期时间族:字段右缘挂日历/时钟按钮,选值写回文本(仍可手打)
+            datePickerMode: columnDateTimeMode(_columnTypes?[columns[col]]),
+            datePickerLabels: _dateTimePickerLabels,
           );
         }
         return Text(
@@ -3127,19 +3403,26 @@ class _TableDataPageState extends State<TableDataPage> {
     // 视口等于全页,整页单元格全部物化为真实 widget(500 行 × 30 列 ≈ 15 万
     // render object),是设置分页大小后内存暴涨的根因。列宽可由用户拖拽调整,
     // 超宽由水平滚动承接,超长由网格自身纵向滚动承接。
-    return ScrollBar(
-      controller: _hScrollController,
-      orientation: ScrollBarOrientation.horizontal,
-      thumbVisibility: true,
-      child: SingleChildScrollView(
-        controller: _hScrollController,
-        scrollDirection: Axis.horizontal,
-        child: SizedBox(
-          width: _numberColWidth +
-              gridWidths.fold<double>(0, (a, b) => a + b),
-          child: ScrollBar(
-            controller: _vScrollController,
-            child: grid,
+    // 纵向条必须挂在横向滚动区**之外**:挂在内部时它画在内容右缘
+    // (= 所有列宽之和),宽表一横向滚动整条就滑出视口,表现为「没有纵向滚动条」。
+    // scrollbars:false 关掉桌面端为每个 Scrollable 自动补的隐式条,只留这两条。
+    return ScrollConfiguration(
+      behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+      child: ScrollBar(
+        controller: _vScrollController,
+        thumbVisibility: true,
+        child: ScrollBar(
+          controller: _hScrollController,
+          orientation: ScrollBarOrientation.horizontal,
+          thumbVisibility: true,
+          child: SingleChildScrollView(
+            controller: _hScrollController,
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: _numberColWidth +
+                  gridWidths.fold<double>(0, (a, b) => a + b),
+              child: grid,
+            ),
           ),
         ),
       ),

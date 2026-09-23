@@ -796,8 +796,11 @@ class _DataExportWizardState extends State<DataExportWizard> {
               // 默认 12px 单元格内边距会把勾选 / 图标两列挤没,这里收紧
               cellPaddingX: 6,
               columns: const [
-                DataGridViewColumn(title: '', width: 36, flex: 0),
-                DataGridViewColumn(title: '', width: 28, flex: 0),
+                // 勾选 / 图标两列内容居中(单元格的列内对齐由 column.alignment 决定)
+                DataGridViewColumn(
+                    title: '', width: 36, flex: 0, alignment: Alignment.center),
+                DataGridViewColumn(
+                    title: '', width: 28, flex: 0, alignment: Alignment.center),
                 DataGridViewColumn(title: '源', flex: 2),
                 DataGridViewColumn(title: '导出到', flex: 3),
               ],
