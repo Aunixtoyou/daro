@@ -1,15 +1,30 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- 连接:公头与母座沿 45° 轴线对插,中间留缝(=「待连接」),各拖一截蓝色线缆。
+       壳体竖向渐变 + 顶部高光带 + 同色系细描边;母座口加深,公头前端两根插脚。 -->
   <defs>
-    <linearGradient id="steelA" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#c9d2db"/><stop offset="1" stop-color="#8a97a4"/>
+    <linearGradient id="bodyF2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b3c0cc"/><stop offset="1" stop-color="#7c8b99"/>
+    </linearGradient>
+    <linearGradient id="wireF2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6ea3d8"/><stop offset="1" stop-color="#4578ae"/>
     </linearGradient>
   </defs>
-  <g transform="rotate(-45 12 12)">
-    <path d="M2.6 12h5" stroke="#4a90c8" stroke-width="4.4" stroke-linecap="round"/>
-    <rect x="6.9" y="8.1" width="2.6" height="7.8" rx="1.3" fill="#4a90c8"/>
-    <rect x="8.6" y="5.2" width="8.6" height="13.6" rx="3.2" fill="url(#steelA)"/>
-    <rect x="10" y="6.5" width="5.8" height="3.1" rx="1.55" fill="#ffffff" opacity=".32"/>
-    <rect x="16.4" y="7.3" width="5" height="3" rx="1.5" fill="#5d6b78"/>
-    <rect x="16.4" y="13.7" width="5" height="3" rx="1.5" fill="#5d6b78"/>
+  <!-- 绕中心等比缩放:实测 scale=1 时光学包围盒 17.9 单位,1.09 → ≈19.5,与 database / conn_group 同量级 -->
+  <g transform="translate(12 12) scale(1.09) translate(-12 -12)">
+    <g transform="rotate(-45 12 12)">
+      <path d="M1.5 12h5.7" stroke="url(#wireF2)" stroke-width="2.9" stroke-linecap="round"/>
+      <path d="M16.8 12h5.7" stroke="url(#wireF2)" stroke-width="2.9" stroke-linecap="round"/>
+      <g fill="#5f6d7a">
+        <rect x="10.2" y="9.5" width="2.9" height="1.9" rx=".95"/>
+        <rect x="10.2" y="12.6" width="2.9" height="1.9" rx=".95"/>
+      </g>
+      <path d="M10.2 8.8H7a3.2 3.2 0 0 0 0 6.4h3.2Z" fill="url(#bodyF2)"/>
+      <path d="M14 8.8h3.2a3.2 3.2 0 0 1 0 6.4H14Z" fill="url(#bodyF2)"/>
+      <path d="M14 8.8h1.5v6.4H14Z" fill="#55636f"/>
+      <rect x="5.4" y="9.5" width="4.4" height="1.5" rx=".75" fill="#ffffff" opacity=".3"/>
+      <rect x="15.4" y="9.5" width="4.2" height="1.5" rx=".75" fill="#ffffff" opacity=".38"/>
+      <path d="M10.2 8.8H7a3.2 3.2 0 0 0 0 6.4h3.2Z" fill="none" stroke="#4d5a66" stroke-width=".85" opacity=".7"/>
+      <path d="M14 8.8h3.2a3.2 3.2 0 0 1 0 6.4H14Z" fill="none" stroke="#4d5a66" stroke-width=".85" opacity=".7"/>
+    </g>
   </g>
 </svg>
