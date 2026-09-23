@@ -1117,15 +1117,29 @@ class DdlBuilder {
     // 无名项统一走 `_indexName`(它对空字段做了兼容,不重复实现)
     final name = _indexName(idx, d);
     final buf = StringBuffer('CREATE ');
-    if (idx.unique) buf.write('UNIQUE ');
+    final method = idx.method.trim();
+    final lowerMethod = method.toLowerCase();
+    // MySQL 的 FULLTEXT / SPATIAL 是**索引类型关键字**,必须紧跟 CREATE 之后;
+    // 尾部 USING 只接受 BTREE / HASH,写成 `... USING fulltext` 会 1064。
+    final typeKeyword =
+        isMysqlLike(typeId) && (lowerMethod == 'fulltext' || lowerMethod == 'spatial')
+            ? lowerMethod
+            : null;
+    if (typeKeyword != null) {
+      // MySQL 语法里 UNIQUE 与 FULLTEXT/SPATIAL 互斥,取类型关键字
+      buf.write('${typeKeyword.toUpperCase()} ');
+    } else if (idx.unique) {
+      buf.write('UNIQUE ');
+    }
     buf.write('INDEX ');
     if (idx.concurrent && isPgLike(typeId)) buf.write('CONCURRENTLY ');
     buf.write('${ident(typeId, name)} ON ${_qualifiedTable(d, typeId)}');
     // MySQL 的 `USING method` 位于字段列表之后,PG / SQL Server 位于之前
-    final method = idx.method.trim();
     if (method.isNotEmpty && !isMysqlLike(typeId)) buf.write(' USING $method');
     buf.write(' (${_indexColumnsSql(idx, cols, typeId)})');
-    if (method.isNotEmpty && isMysqlLike(typeId)) buf.write(' USING $method');
+    if (typeKeyword == null && method.isNotEmpty && isMysqlLike(typeId)) {
+      buf.write(' USING $method');
+    }
     final ff = idx.fillFactor.trim();
     if (ff.isNotEmpty) {
       if (isPgLike(typeId)) buf.write(' WITH (fillfactor = $ff)');

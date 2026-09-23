@@ -107,6 +107,31 @@ void main() {
       // MySQL 不生成 COMMENT ON
       expect(sql, isNot(contains('COMMENT ON')));
     });
+
+    test('FULLTEXT / SPATIAL 是索引类型关键字,不落成尾部 USING', () {
+      final d = DesignTable()
+        ..name = 'enter_car'
+        ..columns.addAll([
+          DesignColumn(name: 'plate', type: 'VARCHAR', length: '64'),
+          DesignColumn(name: 'geo', type: 'GEOMETRY'),
+          DesignColumn(name: 'start_time', type: 'DATETIME'),
+          DesignColumn(name: 'flags', type: 'INT'),
+        ])
+        ..indexes.addAll([
+          DesignIndex(name: 'ft_plate', columns: 'plate', method: 'fulltext'),
+          DesignIndex(name: 'sp_geo', columns: 'geo', method: 'SPATIAL'),
+          DesignIndex(name: 'ix_time', columns: 'start_time', method: 'btree'),
+          DesignIndex(name: 'ix_flags', columns: 'flags', method: 'hash'),
+        ]);
+
+      final sql = DdlBuilder.buildStatements(d, 'mysql').join('\n');
+      expect(sql, contains('CREATE FULLTEXT INDEX `ft_plate` ON `enter_car` (`plate`);'));
+      expect(sql, contains('CREATE SPATIAL INDEX `sp_geo` ON `enter_car` (`geo`);'));
+      expect(sql, isNot(contains('USING fulltext')));
+      expect(sql, isNot(contains('USING SPATIAL')));
+      expect(sql, contains('CREATE INDEX `ix_time` ON `enter_car` (`start_time`) USING btree;'));
+      expect(sql, contains('CREATE INDEX `ix_flags` ON `enter_car` (`flags`) USING hash;'));
+    });
   });
 
   group('DdlBuilder IDENTITY(虚拟类型)', () {
