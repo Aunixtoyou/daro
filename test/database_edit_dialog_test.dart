@@ -42,6 +42,11 @@ class _CatalogDriver implements DatabaseDriver {
   @override
   Future<void> useDatabase(String database) async => switched.add(database);
 
+  // sessionFor 对 PG 家族一律调 useSchema,不实现就落到 noSuchMethod,
+  // 三条目录查询全被 try/catch 吞掉(表现为快照永远是兜底值)
+  @override
+  Future<void> useSchema(String? schema) async {}
+
   @override
   Future<QueryResult> executeQuery(String sql,
       {int limit = 1000, int offset = 0}) async {
@@ -53,6 +58,8 @@ class _CatalogDriver implements DatabaseDriver {
 
   /// 按 SQL 特征分发;顺序敏感(属性查询里也含 pg_tablespace / pg_roles)
   List<List<String>>? _respond(String sql) {
+    // 写语句(差异提交过去的 COMMENT / ALTER / CREATE-DROP EXTENSION)没有结果集
+    if (!sql.trimLeft().toUpperCase().startsWith('SELECT')) return const [];
     if (sql.contains('server_version_num')) return [['180003']];
     if (sql.contains('FROM pg_catalog.pg_database d')) {
       if (failProps) throw StateError('permission denied on pg_database');
@@ -149,6 +156,11 @@ Future<_CatalogDriver> _open(
   return driver;
 }
 
+/// 转移 / 确定按钮的禁用态看 onPressed:find.text 命中的是 Button 里的 Text,
+/// 直接 `widget<Button>(find.text(...))` 会强转失败
+Button _button(WidgetTester tester, String label) =>
+    tester.widget<Button>(find.widgetWithText(Button, label));
+
 /// 点标签页(标签条上的项与正文里的同名文本可能并存,取第一个即标签条)
 Future<void> _showTab(WidgetTester tester, String label) async {
   await tester.tap(find.text(label).first);
@@ -191,12 +203,12 @@ void main() {
     expect(find.text('pg_trgm'), findsOneWidget);
     expect(find.text('hstore'), findsOneWidget);
     // 未选中时两个转移按钮都禁用
-    expect(tester.widget<Button>(find.text('>')).onPressed, isNull);
-    expect(tester.widget<Button>(find.text('<')).onPressed, isNull);
+    expect(_button(tester, '>').onPressed, isNull);
+    expect(_button(tester, '<').onPressed, isNull);
 
     await tester.tap(find.text('pg_trgm'));
     await tester.pumpAndSettle();
-    expect(tester.widget<Button>(find.text('>')).onPressed, isNotNull);
+    expect(_button(tester, '>').onPressed, isNotNull);
     await tester.tap(find.text('>'));
     await tester.pumpAndSettle();
 
@@ -230,8 +242,10 @@ void main() {
     await _open(tester);
     await _showTab(tester, '扩展');
 
+    // 两次点击之间要推进时钟:pump() 不带时长会让两拍落在同一时刻,
+    // DoubleTap 识别器不把第二次当双击(与真机上「手指抬起再按下」不同)
     await tester.tap(find.text('btree_gin'));
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
     await tester.tap(find.text('btree_gin'));
     await tester.pumpAndSettle();
 
@@ -252,12 +266,12 @@ void main() {
     final switchesBefore = driver.switched.length;
 
     // 刚打开时没有任何差异 → 确定禁用
-    expect(tester.widget<Button>(find.text('确定')).onPressed, isNull);
+    expect(_button(tester, '确定').onPressed, isNull);
 
     await _showTab(tester, '注释');
     await tester.enterText(find.byType(Textarea), '订单库');
     await tester.pumpAndSettle();
-    expect(tester.widget<Button>(find.text('确定')).onPressed, isNotNull);
+    expect(_button(tester, '确定').onPressed, isNotNull);
 
     await _showTab(tester, '扩展');
     await tester.tap(find.text('pg_trgm'));
@@ -281,12 +295,14 @@ void main() {
     final driver = await _open(tester, failProps: true);
     expect(driver.switched, [_db, _db], reason: '扩展清单仍应读到');
 
+    // 原因提示落在「常规」页(基准不可信就是这一页的表单问题),切走就不在树里了
+    expect(find.textContaining('未能读取该库的当前属性'), findsOneWidget);
+    expect(_button(tester, '确定').onPressed, isNull);
+
     await _showTab(tester, '注释');
     await tester.enterText(find.byType(Textarea), '订单库');
     await tester.pumpAndSettle();
-
-    expect(find.textContaining('未能读取该库的当前属性'), findsOneWidget);
-    expect(tester.widget<Button>(find.text('确定')).onPressed, isNull);
+    expect(_button(tester, '确定').onPressed, isNull);
     expect(tester.takeException(), isNull);
   });
 

@@ -34,6 +34,12 @@ class _BlockingDriver implements DatabaseDriver {
   @override
   Future<void> useDatabase(String database) async {}
 
+  // 选中库节点会即时拉一次库级详情。驱动接口里返回 `Future<X?>` 的方法
+  // 不能靠 noSuchMethod 兜底:它返回的 null 不是 Future,详情读失败会让
+  // ConnectionManager 丢弃并重建**真实**驱动(去连 10.0.0.1),加载永远挂住。
+  @override
+  Future<DatabaseDetail?> readDatabaseDetail(String database) async => null;
+
   @override
   Future<List<String>> listSchemas(String database) async => const [];
 
