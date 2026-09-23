@@ -113,6 +113,11 @@ Future<void> main() async {
     final src = await _names(conn!, _sourceDb);
     final tgt = await _names(conn, _targetDb);
 
+    // 并行度可覆盖:同一台机器上换着跑就能直接对比串行 / 并行的实测耗时
+    final workers = int.tryParse(
+            Platform.environment['DARO_SYNC_WORKERS'] ?? '') ??
+        kDefaultCompareWorkers;
+    final sw = Stopwatch()..start();
     final plan = await compareSchemaSync(
       source: SyncEndpoint(
           connection: conn, database: _sourceDb, schema: _schema),
@@ -120,7 +125,9 @@ Future<void> main() async {
           connection: conn, database: _targetDb, schema: _schema),
       // 函数开关现在同时涵盖过程(Navicat 版式里没有单独的「过程」项)
       options: SyncOptions()..functions = false,
+      compareWorkers: workers,
     );
+    sw.stop();
 
     expect(plan.errors, isEmpty, reason: '${plan.errors}');
     expect(plan.canceled, isFalse);
@@ -207,7 +214,8 @@ Future<void> main() async {
         'create=${plan.countOf(SyncAction.create)} '
         'drop=${plan.countOf(SyncAction.drop)} '
         'alter=${plan.countOf(SyncAction.alter)} '
-        'none=${plan.countOf(SyncAction.none)}');
+        'none=${plan.countOf(SyncAction.none)} '
+        '耗时=${sw.elapsedMilliseconds}ms(并发 $workers 路)');
   }, timeout: const Timeout(Duration(minutes: 4)), skip: skip.isEmpty ? false : skip);
 
   /// 反查保真度:源库每张表都过一遍。

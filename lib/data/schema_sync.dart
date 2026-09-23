@@ -10,7 +10,14 @@
 /// [ConnectionManager] 里连接树共享的长连接:源与目标常是同一连接下的两个库
 /// (dev → test),共享会话会被反复 `useDatabase` 改上下文,PG 家族还会因此
 /// 断开重连,既拖慢比对也会打乱树与查询页的运行上下文。
+///
+/// 比对是纯读、按对象切分的,故**按对象并行**([kDefaultCompareWorkers]):
+/// 单条物理连接无法并发查询,并行度只能靠多开几个会话对(见 [_PairPool]),
+/// 每个对象内部源 / 目标两侧也同时读。
 library;
+
+import 'dart:async';
+import 'dart:math' as math;
 
 import '../app/connection_manager.dart';
 import 'db_data.dart';
@@ -366,6 +373,14 @@ typedef SyncDriverFactory = DatabaseDriver? Function(ConnectionInfo conn);
 
 DatabaseDriver? _defaultDriverFactory(ConnectionInfo conn) => createDriver(conn);
 
+/// 比对并发度:同时使用的「源 + 目标」会话对数。
+///
+/// 单条物理连接无法并发查询(与 `mcp/mcp_pool.dart` 同一结论),要并行只能多开会话。
+/// 4 对 = 8 条连接:足够把瓶颈从「网络往返 × 对象数」转到服务端本身,对线上库
+/// 默认的 max_connections(100)也留有余量。被服务器按连接数拒掉时自动降回一路
+/// (见 [_PairPool.borrow]),不会整体失败。
+const int kDefaultCompareWorkers = 4;
+
 /// 该连接能否参与结构同步;不能时返回原因(界面直接展示,不静默跳过)。
 String? structureSyncUnsupported(ConnectionInfo conn) {
   if (!conn.isLive) return '连接「${conn.name}」不是真实连接,无法读取结构';
@@ -380,10 +395,12 @@ String? structureSyncUnsupported(ConnectionInfo conn) {
 
 /// 比对源 / 目标两侧。
 ///
-/// [onProgress] 在每开始处理一个对象时回调(阶段名 + 已完成 / 总数),界面据此
-/// 显示进度;总数为 0 表示该类别无对象。
-/// [isCancelled] 每处理一个对象前查询一次;返回 true 时立即停止,
+/// [onProgress] 在**每完成一个对象**时回调(阶段名 + 已完成 / 总数),界面据此
+/// 显示进度;总数为 0 表示该类别无对象。并发下回调顺序按完成先后,故计数单调
+/// 递增但不代表处理顺序。
+/// [isCancelled] 每个对象开工前查询一次;返回 true 时不再领新任务,
 /// 产出的 [SyncPlan.canceled] 为 true(半成品结果,界面应丢弃)。
+/// [compareWorkers] 并发会话对数,见 [kDefaultCompareWorkers]。
 Future<SyncPlan> compareSchemaSync({
   required SyncEndpoint source,
   required SyncEndpoint target,
@@ -391,6 +408,7 @@ Future<SyncPlan> compareSchemaSync({
   SyncDriverFactory? driverFactory,
   void Function(String stage, int done, int total)? onProgress,
   bool Function()? isCancelled,
+  int compareWorkers = kDefaultCompareWorkers,
 }) async {
   final opt = options ?? SyncOptions();
   final factory = driverFactory ?? _defaultDriverFactory;
@@ -408,50 +426,88 @@ Future<SyncPlan> compareSchemaSync({
     ]);
   }
   final typeId = source.connection.typeId;
-
-  final srcDriver = factory(source.connection);
-  final tgtDriver = factory(target.connection);
-  if (srcDriver == null || tgtDriver == null) {
+  // 只探一次类型能否驱动(实例本身由会话池按需创建),好把错误说成一句人话
+  if (factory(source.connection) == null || factory(target.connection) == null) {
     return SyncPlan(errors: ['暂不支持 ${typeId} 类型的结构同步']);
   }
 
-  final src = _Side(driver: srcDriver, endpoint: source);
-  final tgt = _Side(driver: tgtDriver, endpoint: target);
+  final pool = _PairPool(
+    factory: factory,
+    source: source,
+    target: target,
+    workers: compareWorkers,
+  );
   try {
-    await src.open();
-    await tgt.open();
+    // 第一路会话先开好:开不出来就是地址 / 密码 / 权限问题,整体失败,
+    // 不产出半成品差异表(与改前一致)。
+    await pool.warmUp();
 
     for (final kind in SyncObjectKind.values) {
       if (!opt.enabledOf(kind)) continue;
       if (isCancelled?.call() == true) {
         return SyncPlan(objects: objects, errors: errors, canceled: true);
       }
-      final List<String> srcNames, tgtNames;
+      final List<String> srcNames;
+      final List<String> tgtNames;
+      final listPair = await pool.borrow();
       try {
-        srcNames = await kind.lister(src.driver, source.database, schema: source.schema);
-        tgtNames = await kind.lister(tgt.driver, target.database, schema: target.schema);
+        // 两侧列表互不相干:并行取,省一次网络往返
+        final listed = await Future.wait([
+          kind.lister(listPair.source.driver, source.database,
+              schema: source.schema),
+          kind.lister(listPair.target.driver, target.database,
+              schema: target.schema),
+        ]);
+        srcNames = listed[0];
+        tgtNames = listed[1];
       } catch (e) {
         errors.add('读取${kind.label}列表失败:$e');
         continue;
+      } finally {
+        pool.giveBack(listPair);
       }
       final names = _pairByName(srcNames, tgtNames);
       final total = names.length;
+      if (total == 0) continue;
+
+      // 结果按索引落位:并发完成顺序不定,而差异表要稳定按类别 + 名字排列
+      final results = List<SyncObject?>.filled(total, null);
+      var next = 0;
       var done = 0;
-      for (final pair in names) {
-        if (isCancelled?.call() == true) {
-          return SyncPlan(objects: objects, errors: errors, canceled: true);
+      var canceled = false;
+      Future<void> runWorker() async {
+        final pair = await pool.borrow();
+        try {
+          while (true) {
+            if (isCancelled?.call() == true) {
+              canceled = true;
+              return;
+            }
+            final i = next++;
+            if (i >= total) return;
+            results[i] = await _diffOne(
+              kind: kind,
+              typeId: typeId,
+              options: opt,
+              source: pair.source,
+              target: pair.target,
+              sourceName: names[i].$1,
+              targetName: names[i].$2,
+            );
+            done++;
+            onProgress?.call('比对${kind.label}', done, total);
+          }
+        } finally {
+          pool.giveBack(pair);
         }
-        done++;
-        onProgress?.call('比对${kind.label}', done, total);
-        objects.add(await _diffOne(
-          kind: kind,
-          typeId: typeId,
-          options: opt,
-          source: src,
-          target: tgt,
-          sourceName: pair.$1,
-          targetName: pair.$2,
-        ));
+      }
+
+      await Future.wait([
+        for (var w = 0; w < math.min(pool.workers, total); w++) runWorker(),
+      ]);
+      objects.addAll([for (final r in results) if (r != null) r]);
+      if (canceled) {
+        return SyncPlan(objects: objects, errors: errors, canceled: true);
       }
     }
     onProgress?.call('比对完成', 1, 1);
@@ -459,8 +515,7 @@ Future<SyncPlan> compareSchemaSync({
     // 打不开会话(地址 / 密码 / 权限问题):整体失败,不产出半成品差异表
     errors.add(e.toString());
   } finally {
-    await src.driver.close();
-    await tgt.driver.close();
+    await pool.dispose();
   }
   return SyncPlan(objects: objects, errors: errors);
 }
@@ -625,6 +680,117 @@ class _Side {
   }
 }
 
+/// 一路并行比对所需的会话对:源、目标各一条专用连接。
+class _Pair {
+  _Pair({required this.source, required this.target});
+
+  final _Side source;
+  final _Side target;
+
+  /// 两侧并行建立会话:两条连接本就互不相干,串行等于白等一次握手。
+  Future<void> open() async {
+    await Future.wait([source.open(), target.open()]);
+  }
+
+  Future<void> dispose() async {
+    for (final driver in [source.driver, target.driver]) {
+      try {
+        await driver.close();
+      } catch (_) {
+        // 收尾失败不往上抛:盖住真正的比对错误就本末倒置了
+      }
+    }
+  }
+}
+
+/// 按对象并行比对用的会话池。
+///
+/// 单条连接无法并发查询,所以并行度 = 会话对数。池**按需扩容**:第 2 路只在真有
+/// 活要干时才开,比对一两个对象时不会平白多占服务器连接。
+class _PairPool {
+  _PairPool({
+    required this.factory,
+    required this.source,
+    required this.target,
+    required this.workers,
+  });
+
+  final SyncDriverFactory factory;
+  final SyncEndpoint source;
+  final SyncEndpoint target;
+
+  /// 当前可并行几路。新开会话被服务器拒掉时会下调(降为一台已有的复用)。
+  int workers;
+
+  final _idle = <_Pair>[];
+  final _waiters = <Completer<_Pair>>[];
+  final _all = <_Pair>[];
+
+  /// 开好第一路会话。失败向上抛出:会话都建不起来(地址 / 密码 / 权限),
+  /// 比对整体失败,不产出半成品差异表。
+  Future<void> warmUp() async {
+    _idle.add(await _open());
+  }
+
+  /// 借一路会话:空闲的直接给;没到上限就现开;否则排队等归还。
+  Future<_Pair> borrow() async {
+    if (_idle.isNotEmpty) return _idle.removeLast();
+    if (_all.length < workers) {
+      try {
+        return await _open();
+      } catch (_) {
+        if (_all.isEmpty) rethrow;
+        // 一路已能开成,再开却失败 = 顶到了服务器的连接数上限:
+        // 降到现有路数并停止新开,让等待者复用已有会话(不抛错才不会有人饿死)
+        workers = _all.length;
+      }
+    }
+    final waiter = Completer<_Pair>();
+    _waiters.add(waiter);
+    return waiter.future;
+  }
+
+  void giveBack(_Pair pair) {
+    if (_waiters.isNotEmpty) {
+      _waiters.removeAt(0).complete(pair);
+    } else {
+      _idle.add(pair);
+    }
+  }
+
+  Future<void> dispose() async {
+    for (final pair in _all) {
+      await pair.dispose();
+    }
+    _all.clear();
+    _idle.clear();
+  }
+
+  /// 把连接的默认库改成要比对的库再交给工厂:PG 家族的 `useDatabase` 是断开
+  /// 重连,先连默认库再切过去等于每路会话多付一次握手。
+  ConnectionInfo _located(SyncEndpoint side) =>
+      side.database.isEmpty || side.connection.database == side.database
+          ? side.connection
+          : side.connection.copyWith(database: side.database);
+
+  Future<_Pair> _open() async {
+    final pair = _Pair(
+      source: _Side(driver: factory(_located(source))!, endpoint: source),
+      target: _Side(driver: factory(_located(target))!, endpoint: target),
+    );
+    _all.add(pair);
+    // 上面的登记在 await 之前:否则多个 worker 会同时判定「还没到上限」而超开
+    try {
+      await pair.open();
+    } catch (_) {
+      _all.remove(pair);
+      await pair.dispose();
+      rethrow;
+    }
+    return pair;
+  }
+}
+
 /// 按名字配对(忽略大小写):返回 (源名, 目标名),缺失一侧为 null。
 ///
 /// 两侧各自按名排序后合并,输出顺序稳定,便于界面直接渲染。
@@ -766,16 +932,22 @@ Future<void> _diffTable({
   required String? sourceName,
   required String? targetName,
 }) async {
-  final srcDesign = sourceName == null
-      ? null
-      : await source.driver.readTableDesign(
-          source.endpoint.database, sourceName,
-          schema: source.endpoint.schema);
-  final tgtDesign = targetName == null
-      ? null
-      : await target.driver.readTableDesign(
-          target.endpoint.database, targetName,
-          schema: target.endpoint.schema);
+  // 两侧反查走各自独立的连接,并行发出:每侧内部虽有 4~5 条目录查询,
+  // 源与目标之间没有依赖,串行等于把往返延迟乘二。
+  final designs = await Future.wait([
+    sourceName == null
+        ? Future.value(null)
+        : source.driver.readTableDesign(
+            source.endpoint.database, sourceName,
+            schema: source.endpoint.schema),
+    targetName == null
+        ? Future.value(null)
+        : target.driver.readTableDesign(
+            target.endpoint.database, targetName,
+            schema: target.endpoint.schema),
+  ]);
+  final srcDesign = designs[0];
+  final tgtDesign = designs[1];
   final srcText = srcDesign == null ? '' : DdlBuilder.buildCreateTable(srcDesign, typeId);
   final tgtText = tgtDesign == null ? '' : DdlBuilder.buildCreateTable(tgtDesign, typeId);
   object
@@ -872,16 +1044,20 @@ Future<void> _diffRoutine({
   required String? targetName,
 }) async {
   final kind_ = kind.definitionKind!;
-  final srcDef = sourceName == null
-      ? null
-      : await source.driver.getDefinition(
-          source.endpoint.database, sourceName, kind_,
-          schema: source.endpoint.schema);
-  final tgtDef = targetName == null
-      ? null
-      : await target.driver.getDefinition(
-          target.endpoint.database, targetName, kind_,
-          schema: target.endpoint.schema);
+  final defs = await Future.wait([
+    sourceName == null
+        ? Future.value(null)
+        : source.driver.getDefinition(
+            source.endpoint.database, sourceName, kind_,
+            schema: source.endpoint.schema),
+    targetName == null
+        ? Future.value(null)
+        : target.driver.getDefinition(
+            target.endpoint.database, targetName, kind_,
+            schema: target.endpoint.schema),
+  ]);
+  final srcDef = defs[0];
+  final tgtDef = defs[1];
   final srcText = _rewriteDefinition(srcDef, source, target);
   final tgtText = _rewriteDefinition(tgtDef, target, target);
   object
@@ -946,16 +1122,20 @@ Future<void> _diffSequence({
   required String? sourceName,
   required String? targetName,
 }) async {
-  final srcDef = sourceName == null
-      ? null
-      : await source.driver.readSequence(
-          source.endpoint.database, sourceName,
-          schema: source.endpoint.schema);
-  final tgtDef = targetName == null
-      ? null
-      : await target.driver.readSequence(
-          target.endpoint.database, targetName,
-          schema: target.endpoint.schema);
+  final defs = await Future.wait([
+    sourceName == null
+        ? Future.value(null)
+        : source.driver.readSequence(
+            source.endpoint.database, sourceName,
+            schema: source.endpoint.schema),
+    targetName == null
+        ? Future.value(null)
+        : target.driver.readSequence(
+            target.endpoint.database, targetName,
+            schema: target.endpoint.schema),
+  ]);
+  final srcDef = defs[0];
+  final tgtDef = defs[1];
   object
     ..sourceDdl = srcDef?.createSql ?? ''
     ..targetDdl = tgtDef?.createSql ?? '';
